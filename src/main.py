@@ -158,7 +158,7 @@ class KoeApp(QObject):
         self.key_listener.start()
 
         # Close initialization window now that we're ready
-        if hasattr(self, 'init_window'):
+        if hasattr(self, 'init_window') and self.init_window:
             self.init_window.close()
 
     def create_tray_icon(self):
