@@ -153,6 +153,7 @@ nul
 # Temporary/debug files
 meeting_debug.log
 summarization_errors.log
+capture_debug.log
 
 # Sync folders
 .stfolder/
