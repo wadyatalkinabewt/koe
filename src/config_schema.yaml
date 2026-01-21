@@ -22,12 +22,7 @@ meeting_options:
 
 # Configuration options for the Whisper models
 model_options:
-  use_api:
-    value: false
-    type: bool
-    description: "Toggle to choose whether to use the OpenAI API or a local Whisper model for transcription."
-
-  # Common configuration options for both API and local models
+  # Common configuration options
   common:
     language:
       value: null
@@ -40,22 +35,7 @@ model_options:
     initial_prompt:
       value: null
       type: str
-      description: "A string used as an initial prompt to condition the transcription. More info: https://platform.openai.com/docs/guides/speech-to-text/prompting"
-
-  # Configuration options for the OpenAI API
-  api:
-    model:
-      value: whisper-1
-      type: str
-      description: "The model to use for transcription. Currently only 'whisper-1' is available."
-    base_url:
-      value: https://api.openai.com/v1
-      type: str
-      description: "The base URL for the API. Can be changed to use a local API endpoint."
-    api_key:
-      value: null
-      type: str
-      description: "Your API key for the OpenAI API. Required for non-local API usage."
+      description: "A string used as an initial prompt to condition the transcription."
 
   # Configuration options for the faster-whisper model
   local:
