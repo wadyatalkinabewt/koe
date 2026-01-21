@@ -16,7 +16,6 @@ recording_options:
   filter_snippets_to_my_voice: false
 
 model_options:
-  use_api: false
   common:
     language: null         # Auto-detect, or set to "en", "es", etc.
     initial_prompt: "Use proper punctuation including periods, commas, and question marks."

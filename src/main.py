@@ -131,11 +131,10 @@ class KoeApp(QObject):
         self.key_listener.add_callback("on_activate", self.on_activation)
         self.key_listener.add_callback("on_deactivate", self.on_deactivation)
 
-        model_options = ConfigManager.get_config_section("model_options")
         if self.preloaded_model is not None:
             self.local_model = self.preloaded_model
-        elif model_options.get("use_api") or check_server_available():
-            # Using API or server, no local model needed
+        elif check_server_available():
+            # Using server, no local model needed
             self.local_model = None
         else:
             self.local_model = create_local_model()
