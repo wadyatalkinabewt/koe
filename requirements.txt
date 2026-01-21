@@ -92,3 +92,7 @@ scipy==1.11.4
 # GPU/ML packages - install separately for CUDA compatibility:
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 # pip install pyannote.audio
+
+# CUDA libraries (faster-whisper needs cuDNN v8.x, not v9.x)
+nvidia-cudnn-cu12==8.9.7.29
+nvidia-cublas-cu12
