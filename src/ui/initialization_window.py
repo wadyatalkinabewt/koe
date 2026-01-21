@@ -21,9 +21,6 @@ class InitializationWindow(QMainWindow):
     def __init__(self):
         """Initialize the initialization window."""
         super().__init__()
-        self.blink_timer = QTimer()
-        self.blink_timer.timeout.connect(self.toggle_blink)
-        self.blink_state = True
         self.show_time = None
         self.initUI()
 
@@ -39,7 +36,7 @@ class InitializationWindow(QMainWindow):
         self.main_layout.setContentsMargins(16, 10, 16, 10)
         self.main_layout.setSpacing(0)
 
-        # Status label with blinking cursor
+        # Status label
         self.status_label = QLabel('> Initializing_')
         self.status_label.setFont(QFont('Cascadia Code', 12, QFont.Bold))
         self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
@@ -65,14 +62,6 @@ class InitializationWindow(QMainWindow):
         painter.setPen(QPen(self.BORDER_COLOR, 1))
         painter.drawPath(path)
 
-    def toggle_blink(self):
-        """Toggle the cursor visibility."""
-        self.blink_state = not self.blink_state
-        if self.blink_state:
-            self.status_label.setText('> Initializing_')
-        else:
-            self.status_label.setText('> Initializing')
-
     def show(self):
         """Position the window in the bottom center of the screen and show it."""
         screen = QApplication.primaryScreen()
@@ -88,10 +77,9 @@ class InitializationWindow(QMainWindow):
         self.move(x, y)
         super().show()
         self.show_time = time.time()
-        self.blink_timer.start(500)  # Blink every 500ms
 
     def close(self):
-        """Stop the blink timer and close the window after minimum display time."""
+        """Close the window after minimum display time."""
         if self.show_time:
             elapsed = time.time() - self.show_time
             remaining = self.MIN_DISPLAY_TIME - elapsed
@@ -103,7 +91,6 @@ class InitializationWindow(QMainWindow):
 
     def _do_close(self):
         """Actually close the window."""
-        self.blink_timer.stop()
         super().close()
 
 
