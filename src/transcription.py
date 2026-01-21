@@ -9,6 +9,19 @@ import soundfile as sf
 from utils import ConfigManager
 from transcription_client import TranscriptionClient, is_server_running
 
+# Debug logging to file
+_DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
+_DEBUG_LOG.parent.mkdir(exist_ok=True)
+
+def _debug(msg: str):
+    """Write debug message to file with timestamp."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] [transcription] {msg}\n")
+    except:
+        pass
+
 # Server client (lazy initialized)
 _server_client = None
 _server_mode = None  # None = not checked, True = use server, False = use local
@@ -29,15 +42,19 @@ def _get_snippets_dir() -> Path:
 
 def save_rolling_transcription(text):
     """Save snippet to rolling markdown files (keeps last 5). Newest is 1, oldest is 5."""
+    _debug("save_rolling_transcription() STARTED")
     if not text or not text.strip():
+        _debug("  Empty text, skipping")
         return
 
     try:
         snippets_dir = _get_snippets_dir()
+        _debug(f"  snippets_dir: {snippets_dir}")
 
         # Delete oldest (5) if it exists
         oldest = snippets_dir / f"snippet_{MAX_SNIPPETS}.md"
         if oldest.exists():
+            _debug(f"  Deleting oldest: {oldest}")
             oldest.unlink()
 
         # Shift existing files up (4→5, 3→4, 2→3, 1→2)
@@ -45,15 +62,19 @@ def save_rolling_transcription(text):
             old_file = snippets_dir / f"snippet_{i}.md"
             new_file = snippets_dir / f"snippet_{i+1}.md"
             if old_file.exists():
+                _debug(f"  Renaming {old_file.name} -> {new_file.name}")
                 old_file.rename(new_file)
 
         # Save new snippet as 1 (newest)
         new_file = snippets_dir / "snippet_1.md"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         content = f"# Snippet\n\n**Time:** {timestamp}\n\n---\n\n{text.strip()}\n"
+        _debug(f"  Writing to {new_file}")
         new_file.write_text(content, encoding='utf-8')
+        _debug("save_rolling_transcription() FINISHED")
 
     except Exception as e:
+        _debug(f"  EXCEPTION: {e}")
         ConfigManager.console_print(f"Failed to save snippet: {e}")
 
 def create_local_model():
@@ -265,17 +286,25 @@ def transcribe_server(audio_data, retry_count=0):
 
 def transcribe(audio_data, local_model=None):
     """Transcribe audio using server, API, or local model."""
+    _debug("transcribe() STARTED")
     if audio_data is None:
+        _debug("  audio_data is None, returning empty")
         return ''
 
     # Priority: 1) API if configured, 2) Server if running, 3) Local model
     if ConfigManager.get_config_value('model_options', 'use_api'):
+        _debug("  Using API transcription")
         transcription = transcribe_api(audio_data)
     elif check_server_available():
+        _debug("  Using server transcription")
         transcription = transcribe_server(audio_data)
     else:
+        _debug("  Using local transcription")
         transcription = transcribe_local(audio_data, local_model)
 
+    _debug(f"  Raw transcription length: {len(transcription)}")
     result = post_process_transcription(transcription)
+    _debug(f"  Post-processed result length: {len(result)}")
     save_rolling_transcription(result)
+    _debug("transcribe() FINISHED")
     return result

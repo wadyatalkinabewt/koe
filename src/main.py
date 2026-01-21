@@ -396,52 +396,80 @@ class KoeApp(QObject):
         return False
 
     def on_transcription_complete(self, result):
+        from pathlib import Path
+        from datetime import datetime
+
+        # Debug logging to file
+        debug_log = Path(__file__).parent.parent / "logs" / "debug.log"
+        def _debug(msg):
+            try:
+                with open(debug_log, "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+            except:
+                pass
+
+        _debug("on_transcription_complete() STARTED")
         self.recording_start_time = None  # Reset recording start time
         self.processing_result = True  # Block new recordings during processing
 
         try:
+            _debug(f"  result length: {len(result)}")
             ConfigManager.console_print(f'=== on_transcription_complete called with result length: {len(result)} ===')
 
             # Copy to clipboard only (no typing into text fields)
             if result and result.strip():
+                _debug("  Copying to clipboard...")
                 ConfigManager.console_print('Copying to clipboard...')
                 success = self._copy_to_clipboard(result)
+                _debug(f"  Clipboard copy success: {success}")
                 if success:
                     ConfigManager.console_print(f'Copied to clipboard: {result[:50]}...')
                 else:
                     ConfigManager.console_print('WARNING: Failed to copy to clipboard')
             else:
+                _debug("  Skipping clipboard (empty)")
                 ConfigManager.console_print('Skipping clipboard (empty result)')
 
             # Play beep sound
+            _debug("  Checking beep setting...")
             if ConfigManager.get_config_value("misc", "noise_on_completion"):
                 try:
+                    _debug("  Playing beep...")
                     ConfigManager.console_print('Playing beep...')
-                    from pathlib import Path
                     beep_path = Path(__file__).parent.parent / "assets" / "beep.wav"
                     AudioPlayer(str(beep_path)).play(block=True)
+                    _debug("  Beep played")
                     ConfigManager.console_print('Beep played')
                 except Exception as e:
+                    _debug(f"  Beep failed: {e}")
                     ConfigManager.console_print(f'Failed to play beep: {e}')
 
             # Close status window immediately (beep is sufficient feedback)
+            _debug("  Checking status window...")
             if not ConfigManager.get_config_value("misc", "hide_status_window"):
+                _debug("  Closing status window...")
                 ConfigManager.console_print('Closing status window...')
                 self.status_window.close()
+                _debug("  Status window closed")
                 ConfigManager.console_print('Status window closed')
 
+            _debug("  Restarting key listener...")
             if ConfigManager.get_config_value("recording_options", "recording_mode") == "continuous":
                 self.start_result_thread()
             else:
                 self.key_listener.start()
+            _debug("  Key listener restarted")
 
         except Exception as e:
+            _debug(f"  EXCEPTION: {e}")
             ConfigManager.console_print(f'EXCEPTION in on_transcription_complete: {e}')
             import traceback
+            _debug(f"  Traceback: {traceback.format_exc()}")
             traceback.print_exc()
         finally:
             # Always clear the flag, even if something fails
             self.processing_result = False
+            _debug("on_transcription_complete() FINISHED")
             ConfigManager.console_print('=== on_transcription_complete finished ===\n')
 
     def run(self):

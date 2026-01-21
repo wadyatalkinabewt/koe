@@ -8,9 +8,24 @@ import webrtcvad
 from PyQt5.QtCore import QThread, QMutex, pyqtSignal
 from collections import deque
 from threading import Event
+from pathlib import Path
+from datetime import datetime
 
 from transcription import transcribe
 from utils import ConfigManager
+
+# Debug logging to file
+_DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
+_DEBUG_LOG.parent.mkdir(exist_ok=True)
+
+def _debug(msg: str):
+    """Write debug message to file with timestamp."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {msg}\n")
+    except:
+        pass
 
 
 class ResultThread(QThread):
@@ -61,47 +76,63 @@ class ResultThread(QThread):
 
     def run(self):
         """Main execution method for the thread."""
+        _debug("ResultThread.run() STARTED")
         try:
             if not self.is_running:
+                _debug("  Early exit: is_running=False")
                 return
 
             self.mutex.lock()
             self.is_recording = True
             self.mutex.unlock()
 
+            _debug("  Emitting 'recording' status")
             self.statusSignal.emit('recording')
             ConfigManager.console_print('Recording...')
+            _debug("  Starting _record_audio()")
             audio_data = self._record_audio()
+            _debug(f"  _record_audio() returned: {type(audio_data)}, size={audio_data.size if audio_data is not None else 'None'}")
 
             if not self.is_running:
+                _debug("  Early exit after recording: is_running=False")
                 return
 
             if audio_data is None:
+                _debug("  Recording too short, emitting empty result")
                 # Recording too short - emit empty result and close
                 self.resultSignal.emit('')
                 return
 
+            _debug("  Emitting 'transcribing' status")
             self.statusSignal.emit('transcribing')
             ConfigManager.console_print('Transcribing...')
 
             # Time the transcription process
+            _debug("  Starting transcription...")
             start_time = time.time()
             result = transcribe(audio_data, self.local_model)
             end_time = time.time()
 
             transcription_time = end_time - start_time
+            _debug(f"  Transcription done in {transcription_time:.2f}s, result length={len(result)}")
             ConfigManager.console_print(f'Transcription completed in {transcription_time:.2f} seconds. Post-processed line: {result}')
 
             # Always emit result after transcription completes, even if cancelled
             # (Snippet was already saved, user deserves the clipboard copy and beep)
+            _debug("  Emitting result signal")
             self.resultSignal.emit(result)
+            _debug("  Result signal emitted successfully")
 
         except Exception as e:
+            _debug(f"  EXCEPTION: {e}")
+            _debug(f"  Traceback: {traceback.format_exc()}")
             traceback.print_exc()
             self.statusSignal.emit('error')
             self.resultSignal.emit('')
         finally:
+            _debug("  Calling stop_recording()")
             self.stop_recording()
+            _debug("ResultThread.run() FINISHED")
 
     def _record_audio(self):
         """
