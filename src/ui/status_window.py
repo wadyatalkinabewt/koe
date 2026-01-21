@@ -193,8 +193,8 @@ class StatusWindow(QMainWindow):
             self.show()
         elif status == 'transcribing':
             self.timer.stop()
-            self.blink_timer.stop()
-            self.indicator.setText("◉")
+            # Keep blinking during transcription
+            self.indicator.setText("●")
             self.indicator.setStyleSheet(f"color: {self.TEXT_COLOR};")
             self.status_label.setText('> Transcribing_')
             self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
