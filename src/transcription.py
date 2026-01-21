@@ -131,30 +131,6 @@ def transcribe_local(audio_data, local_model=None):
                                       hallucination_silence_threshold=0.5,)
     return ''.join([segment.text for segment in list(response[0])])
 
-def transcribe_api(audio_data):
-    """Transcribe an audio file using the OpenAI API."""
-    from openai import OpenAI
-
-    model_options = ConfigManager.get_config_section('model_options')
-    client = OpenAI(
-        api_key=os.getenv('OPENAI_API_KEY') or None,
-        base_url=model_options['api']['base_url'] or 'https://api.openai.com/v1'
-    )
-
-    byte_io = io.BytesIO()
-    sample_rate = ConfigManager.get_config_section('recording_options').get('sample_rate') or 16000
-    sf.write(byte_io, audio_data, sample_rate, format='wav')
-    byte_io.seek(0)
-
-    response = client.audio.transcriptions.create(
-        model=model_options['api']['model'],
-        file=('audio.wav', byte_io, 'audio/wav'),
-        language=model_options['common']['language'],
-        prompt=model_options['common']['initial_prompt'],
-        temperature=model_options['common']['temperature'],
-    )
-    return response.text
-
 def remove_filler_words(text):
     """Remove common filler words and clean up the result."""
     # Filler words to remove (case insensitive)
@@ -285,17 +261,14 @@ def transcribe_server(audio_data, retry_count=0):
 
 
 def transcribe(audio_data, local_model=None):
-    """Transcribe audio using server, API, or local model."""
+    """Transcribe audio using server or local model."""
     _debug("transcribe() STARTED")
     if audio_data is None:
         _debug("  audio_data is None, returning empty")
         return ''
 
-    # Priority: 1) API if configured, 2) Server if running, 3) Local model
-    if ConfigManager.get_config_value('model_options', 'use_api'):
-        _debug("  Using API transcription")
-        transcription = transcribe_api(audio_data)
-    elif check_server_available():
+    # Priority: 1) Server if running, 2) Local model
+    if check_server_available():
         _debug("  Using server transcription")
         transcription = transcribe_server(audio_data)
     else:

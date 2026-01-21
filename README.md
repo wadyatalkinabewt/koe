@@ -189,7 +189,6 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
 │                                              │                 │         │
 │                                              │  - Local model  │         │
 │                                              │  - Server API   │         │
-│                                              │  - OpenAI API   │         │
 │                                              └────────┬────────┘         │
 │                                                       │                  │
 │                                                       ▼                  │
@@ -857,7 +856,6 @@ List enrolled speakers available for matching.
 | `uvicorn` | - | ASGI server |
 | `requests` | 2.31.0 | HTTP client |
 | `anthropic` | 0.76.0 | Claude API client |
-| `openai` | 1.28.0 | OpenAI API client (optional) |
 
 #### System Integration
 
