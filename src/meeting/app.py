@@ -1793,12 +1793,17 @@ class MeetingTranscriberApp(QObject):
         """Process an audio chunk through transcription."""
         timestamp = chunk.timestamp - self._meeting_start_time
 
+        # Get language from config (force English to prevent hallucinations)
+        model_options = ConfigManager.get_config_section('model_options')
+        language = model_options['common'].get('language') or 'en'  # Default to English
+        initial_prompt = model_options['common'].get('initial_prompt')
+
         # Transcribe mic audio (user) - only if it has actual speech
         if chunk.mic_audio is not None and len(chunk.mic_audio) > 0:
             if check_audio_has_speech(chunk.mic_audio, threshold=300):
                 self._chunks_processed += 1
                 # Status stays as "Recording..." - no need to spam with chunk numbers
-                text, success = self.client.transcribe(chunk.mic_audio, sample_rate=16000)
+                text, success = self.client.transcribe(chunk.mic_audio, sample_rate=16000, language=language, initial_prompt=initial_prompt)
                 if success:
                     text = post_process_text(text)
                     if text:
@@ -1834,7 +1839,7 @@ class MeetingTranscriberApp(QObject):
                 else:
                     # Fallback: just label as "Other"
                     _debug_log("[Loopback] Using fallback 'Other' path - NO DIARIZATION AVAILABLE")
-                    text, success = self.client.transcribe(loopback, sample_rate=target_rate)
+                    text, success = self.client.transcribe(loopback, sample_rate=target_rate, language=language, initial_prompt=initial_prompt)
                     if success:
                         text = post_process_text(text)
                         if text:
@@ -1845,15 +1850,20 @@ class MeetingTranscriberApp(QObject):
         # Get max_speakers from UI dropdown
         max_speakers = self.max_speakers_combo.currentData()
 
+        # Get language from config (force English to prevent hallucinations)
+        model_options = ConfigManager.get_config_section('model_options')
+        language = model_options['common'].get('language') or 'en'  # Default to English
+        initial_prompt = model_options['common'].get('initial_prompt')
+
         # Run diarization to get speaker segments
-        _debug_log(f"[Diarize] Running on {len(audio)} samples ({len(audio)/sample_rate:.1f}s), max_speakers={max_speakers}")
+        _debug_log(f"[Diarize] Running on {len(audio)} samples ({len(audio)/sample_rate:.1f}s), max_speakers={max_speakers}, language={language}")
         segments = self._diarizer.diarize(audio, sample_rate=sample_rate, max_speakers=max_speakers)
         _debug_log(f"[Diarize] Returned {len(segments)} segments")
 
         if not segments:
             # Fallback if diarization fails
             _debug_log("[Diarize] No segments found, falling back to 'Other'")
-            text, success = self.client.transcribe(audio, sample_rate=sample_rate)
+            text, success = self.client.transcribe(audio, sample_rate=sample_rate, language=language, initial_prompt=initial_prompt)
             if success:
                 text = post_process_text(text)
                 if text:
@@ -1876,7 +1886,7 @@ class MeetingTranscriberApp(QObject):
                 continue
 
             # Transcribe segment
-            text, success = self.client.transcribe(segment_audio, sample_rate=sample_rate)
+            text, success = self.client.transcribe(segment_audio, sample_rate=sample_rate, language=language, initial_prompt=initial_prompt)
             if success:
                 text = post_process_text(text)
                 if text:
@@ -1889,12 +1899,19 @@ class MeetingTranscriberApp(QObject):
         # Get max_speakers from UI dropdown
         max_speakers = self.max_speakers_combo.currentData()
 
-        _debug_log(f"[ServerDiarize] Running on {len(audio)} samples ({len(audio)/sample_rate:.1f}s), max_speakers={max_speakers}")
+        # Get language from config (force English to prevent hallucinations)
+        model_options = ConfigManager.get_config_section('model_options')
+        language = model_options['common'].get('language') or 'en'  # Default to English
+        initial_prompt = model_options['common'].get('initial_prompt')
+
+        _debug_log(f"[ServerDiarize] Running on {len(audio)} samples ({len(audio)/sample_rate:.1f}s), max_speakers={max_speakers}, language={language}")
 
         # Call server's combined diarization + transcription endpoint
         segments, success = self.client.transcribe_meeting(
             audio,
             sample_rate=sample_rate,
+            language=language,
+            initial_prompt=initial_prompt,
             max_speakers=max_speakers,
             user_name=None  # Don't set user_name for loopback (handled separately)
         )
@@ -1902,7 +1919,7 @@ class MeetingTranscriberApp(QObject):
         if not success or not segments:
             # Fallback to simple transcription
             _debug_log("[ServerDiarize] Failed or no segments, falling back to 'Other'")
-            text, success = self.client.transcribe(audio, sample_rate=sample_rate)
+            text, success = self.client.transcribe(audio, sample_rate=sample_rate, language=language, initial_prompt=initial_prompt)
             if success:
                 text = post_process_text(text)
                 if text:

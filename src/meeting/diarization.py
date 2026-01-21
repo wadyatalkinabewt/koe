@@ -67,6 +67,7 @@ class SpeakerDiarizer:
         self._session_speakers: Dict[str, np.ndarray] = {}  # "Speaker 1" -> embedding
         self._session_speaker_counter = 0
         self._session_embedding_counts: Dict[str, int] = {}  # Track how many embeddings contributed
+        self._enrolled_seen_this_session: set = set()  # Track which enrolled speakers have been seen
 
         # Adaptive enrollment settings
         self._adaptive_threshold = 0.6  # Only update if similarity > this (high confidence)
@@ -248,6 +249,7 @@ class SpeakerDiarizer:
                 matched_enrolled = self._match_embedding_to_known(emb)
                 if matched_enrolled:
                     chunk_to_session[chunk_label] = matched_enrolled
+                    self._enrolled_seen_this_session.add(matched_enrolled)  # Track for max_speakers
                     _dlog(f"[Diarization] {chunk_label} -> enrolled: {matched_enrolled}")
                     continue
 
@@ -259,13 +261,14 @@ class SpeakerDiarizer:
                     # Update session embedding with running average for better matching
                     self._update_session_embedding(matched_session, emb)
                 else:
-                    # Enforce max_speakers: if we've hit the limit, force-merge with closest
-                    if len(self._session_speakers) >= max_speakers:
+                    # Enforce max_speakers: count BOTH enrolled and unknown speakers
+                    total_speakers = len(self._enrolled_seen_this_session) + len(self._session_speakers)
+                    if total_speakers >= max_speakers:
                         closest = self._find_closest_session_speaker(emb)
                         if closest:
                             chunk_to_session[chunk_label] = closest
                             self._update_session_embedding(closest, emb)
-                            _dlog(f"[Diarization] {chunk_label} -> MERGED (max_speakers={max_speakers}): {closest}")
+                            _dlog(f"[Diarization] {chunk_label} -> MERGED (total={total_speakers}, max={max_speakers}): {closest}")
                             continue  # Skip creating new speaker
 
                     # New speaker - add to session
@@ -288,10 +291,11 @@ class SpeakerDiarizer:
 
                     # If we've hit max_speakers and have existing session speakers,
                     # assign to first session speaker instead of creating new
-                    if len(self._session_speakers) >= max_speakers and self._session_speakers:
+                    total_speakers = len(self._enrolled_seen_this_session) + len(self._session_speakers)
+                    if total_speakers >= max_speakers and self._session_speakers:
                         consistent_label = next(iter(self._session_speakers.keys()))
                         chunk_to_session[speaker] = consistent_label
-                        _dlog(f"[Diarization] {speaker} -> fallback MERGED (max_speakers={max_speakers}): {consistent_label}")
+                        _dlog(f"[Diarization] {speaker} -> fallback MERGED (total={total_speakers}, max={max_speakers}): {consistent_label}")
                     else:
                         self._session_speaker_counter += 1
                         consistent_label = f"Speaker {self._session_speaker_counter}"
@@ -467,6 +471,7 @@ class SpeakerDiarizer:
         self._session_embedding_counts.clear()
         self._session_speaker_counter = 0
         self._enrolled_updated.clear()
+        self._enrolled_seen_this_session.clear()  # Clear enrolled speaker tracking
         _dlog("[Diarization] Session reset - speaker tracking cleared")
 
     def _save_updated_embeddings(self):
