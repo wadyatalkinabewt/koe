@@ -1,0 +1,25 @@
+# Koe Remote Client - Minimal Dependencies
+# No PyTorch, no faster-whisper, no pyannote = lightweight install (~50MB)
+# Use this when connecting to a remote Koe server
+
+# Audio capture and processing
+sounddevice
+pyaudiowpatch
+webrtcvad-wheels
+numpy
+soundfile
+
+# UI
+PyQt5
+
+# Hotkey detection and clipboard
+pynput
+pyperclip
+
+# HTTP client and config
+requests
+pyyaml
+python-dotenv
+
+# Audio playback for notification sound
+audioplayer

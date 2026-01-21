@@ -1,0 +1,1104 @@
+# Koe
+
+**Koe** (声 *"koh-eh"* - Japanese for "voice") is a local, privacy-focused speech-to-text application for Windows with GPU-accelerated transcription and intelligent speaker identification.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [System Requirements](#system-requirements)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage Guide](#usage-guide)
+- [API Reference](#api-reference)
+- [Dependencies](#dependencies)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [License](#license)
+
+---
+
+## Overview
+
+Koe provides two primary modes of operation:
+
+| Mode | Purpose | Use Case |
+|------|---------|----------|
+| **Snippet** | Hotkey-triggered transcription | Quick voice notes, dictation, clipboard transcription |
+| **Scribe** | Continuous meeting transcription | Meeting notes with speaker identification and AI summaries |
+
+### Key Capabilities
+
+- **Local Processing**: All speech recognition runs locally on your GPU - no cloud services required for transcription
+- **Speaker Diarization**: Identifies who said what using voice fingerprinting
+- **AI Summarization**: Auto-generates meeting summaries using Claude API (~$0.04/meeting)
+- **Remote Support**: Use from a laptop by connecting to your desktop's GPU over Tailscale
+- **Privacy-First**: Audio never leaves your network (except optional AI summarization)
+
+### Technical Foundation
+
+Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, extensively modified with:
+- Shared server architecture (single GPU model serves multiple clients)
+- Speaker diarization with pyannote-audio
+- Meeting transcription with category organization
+- Remote transcription over Tailscale
+- AI-powered meeting summaries
+
+---
+
+## Features
+
+### Hotkey Transcription (Snippet)
+
+- **Global Hotkey**: `Ctrl+Shift+Space` triggers recording from any application
+- **Press-to-Toggle**: Press hotkey to start, press again to stop
+- **Clipboard Integration**: Transcribed text copied directly to clipboard
+- **Rolling Snippets**: Last 5 transcriptions saved to files (configurable)
+- **Voice Filtering**: Optionally transcribe only your voice in noisy environments
+- **Audio Feedback**: Configurable beep sound on completion
+
+### Meeting Transcription (Scribe)
+
+- **Dual Audio Capture**: Records both microphone and system audio simultaneously
+- **Speaker Identification**: Names speakers using enrolled voice fingerprints
+- **Category Organization**: Organize meetings into folders (Standups, One-on-ones, Investors, etc.)
+- **Pre-Meeting Agendas**: Save agenda templates before meetings, auto-merged with transcript
+- **Note-Taking Interface**: AGENDA, NOTES, ACTION ITEMS sections with live editing
+- **AI Summarization**: Automatic meeting summaries with key points and action items
+
+### AI Summarization
+
+- **Claude Sonnet 4.5**: High-quality summaries using Anthropic's API
+- **Background Processing**: Window can close - summary continues in detached process
+- **Live Progress**: Status updates with clickable link to open completed summary
+- **Cost-Effective**: ~$0.04 per 60-minute meeting
+- **Anti-Hallucination**: Strict prompting ensures factual accuracy
+
+### Speaker Enrollment
+
+- **Microphone Recording**: Record your voice directly
+- **System Audio Capture**: Enroll from video/audio playback (YouTube, Zoom recordings, etc.)
+- **Adaptive Learning**: Voice fingerprints improve over time with high-confidence matches
+- **Easy Management**: Enroll via tray menu or Settings window
+
+### Remote Transcription
+
+- **Tailscale Integration**: Secure network connection between devices
+- **Lightweight Client**: Laptop requires only ~50MB of dependencies (no GPU packages)
+- **Full Feature Parity**: All features work remotely, processing happens on desktop GPU
+
+---
+
+## System Requirements
+
+### Desktop (Server)
+
+| Component | Requirement |
+|-----------|-------------|
+| **Operating System** | Windows 10/11 (64-bit) |
+| **GPU** | NVIDIA GPU with 6GB+ VRAM (8GB+ recommended) |
+| **GPU Driver** | NVIDIA Driver 525.60+ with CUDA support |
+| **CPU** | Any modern multi-core processor |
+| **RAM** | 16GB recommended |
+| **Storage** | ~5GB for models and dependencies |
+| **Python** | Python 3.10 or higher |
+
+### Laptop (Remote Client)
+
+| Component | Requirement |
+|-----------|-------------|
+| **Operating System** | Windows 10/11 (64-bit) |
+| **Network** | Tailscale installed and connected |
+| **Storage** | ~100MB for dependencies |
+| **Python** | Python 3.10 or higher |
+
+### GPU Memory Usage
+
+| Component | VRAM |
+|-----------|------|
+| Whisper large-v3 model | ~3GB |
+| Pyannote diarization (when active) | ~0.5-1GB |
+| **Total during meeting** | ~3.5-4GB |
+
+---
+
+## Architecture
+
+### System Overview
+
+```
+    DESKTOP (GPU Server)                        LAPTOP (Remote Client)
+    ════════════════════                        ════════════════════════
+
+         SYSTEM TRAY                                 SYSTEM TRAY
+    ┌─────────────────┐                         ┌─────────────────┐
+    │  Koe            │                         │  Koe            │
+    │  Scribe         │◄───── Tailscale ───────►│    (remote)     │
+    │  Settings       │      (100.x.x.x)        │  Scribe         │
+    └────────┬────────┘                         └─────────────────┘
+             │
+             ▼
+    ┌─────────────────────────────────────────────────────────────────┐
+    │                    Koe Server (Port 9876)                       │
+    │                                                                 │
+    │  ┌─────────────────────────────────────────────────────────┐   │
+    │  │  Whisper large-v3                        (~3GB VRAM)    │   │
+    │  │  - faster-whisper optimized implementation              │   │
+    │  │  - Supports 99 languages                                │   │
+    │  └─────────────────────────────────────────────────────────┘   │
+    │                                                                 │
+    │  ┌─────────────────────────────────────────────────────────┐   │
+    │  │  Pyannote Diarization                 (~0.5-1GB VRAM)   │   │
+    │  │  - Speaker segmentation (who speaks when)               │   │
+    │  │  - Voice embedding extraction (wespeaker)               │   │
+    │  │  - Cross-chunk speaker tracking                         │   │
+    │  └─────────────────────────────────────────────────────────┘   │
+    │                                                                 │
+    │  ┌─────────────────────────────────────────────────────────┐   │
+    │  │  Speaker Embeddings                                     │   │
+    │  │  - Enrolled voice fingerprints (speaker_embeddings/)    │   │
+    │  │  - Similarity matching (threshold: 0.35)                │   │
+    │  └─────────────────────────────────────────────────────────┘   │
+    └─────────────────────────────────────────────────────────────────┘
+```
+
+### Component Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                              Koe Application                             │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐      │
+│  │   System Tray   │    │  Key Listener   │    │  Result Thread  │      │
+│  │   (main.py)     │───►│ (key_listener)  │───►│ (result_thread) │      │
+│  │                 │    │                 │    │                 │      │
+│  │  - Koe menu     │    │  - Global       │    │  - Audio        │      │
+│  │  - Scribe menu  │    │    hotkey       │    │    recording    │      │
+│  │  - Settings     │    │  - Key capture  │    │  - VAD          │      │
+│  │  - Enrollment   │    │                 │    │  - Buffering    │      │
+│  └─────────────────┘    └─────────────────┘    └────────┬────────┘      │
+│                                                          │               │
+│                                                          ▼               │
+│                                              ┌─────────────────┐         │
+│                                              │  Transcription  │         │
+│                                              │  (transcription)│         │
+│                                              │                 │         │
+│                                              │  - Local model  │         │
+│                                              │  - Server API   │         │
+│                                              │  - OpenAI API   │         │
+│                                              └────────┬────────┘         │
+│                                                       │                  │
+│                                                       ▼                  │
+│                                              ┌─────────────────┐         │
+│                                              │    Clipboard    │         │
+│                                              │   + Snippets    │         │
+│                                              └─────────────────┘         │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                            Scribe Application                            │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐      │
+│  │   Meeting UI    │    │  Audio Capture  │    │    Processor    │      │
+│  │   (app.py)      │───►│   (capture.py)  │───►│  (processor.py) │      │
+│  │                 │    │                 │    │                 │      │
+│  │  - Name/Cat     │    │  - Microphone   │    │  - VAD chunking │      │
+│  │  - Notes editor │    │  - Loopback     │    │  - 30-60s       │      │
+│  │  - Recording    │    │  - Dual stream  │    │    segments     │      │
+│  └─────────────────┘    └─────────────────┘    └────────┬────────┘      │
+│                                                          │               │
+│                                                          ▼               │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐      │
+│  │   Summarizer    │◄───│   Transcript    │◄───│   Diarization   │      │
+│  │ (summarizer.py) │    │ (transcript.py) │    │(diarization.py) │      │
+│  │                 │    │                 │    │                 │      │
+│  │  - Claude API   │    │  - Markdown     │    │  - Pyannote     │      │
+│  │  - Background   │    │    formatting   │    │  - Speaker ID   │      │
+│  │  - Progress     │    │  - Notes merge  │    │  - Embeddings   │      │
+│  └─────────────────┘    └─────────────────┘    └─────────────────┘      │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+#### Hotkey Transcription Flow
+
+```
+User presses Ctrl+Shift+Space
+         │
+         ▼
+┌─────────────────┐
+│  Status Window  │ "Recording..."
+│   (draggable)   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Audio Capture  │ WebRTC VAD detects speech
+│   (16kHz mono)  │
+└────────┬────────┘
+         │
+         ▼ (silence detected OR hotkey pressed again)
+┌─────────────────┐
+│  Transcription  │ Server or local model
+│   Processing    │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Post-Process   │ Remove filler words, fix punctuation
+└────────┬────────┘
+         │
+         ├──────────────────────────────┐
+         ▼                              ▼
+┌─────────────────┐           ┌─────────────────┐
+│   Clipboard     │           │  Rolling        │
+│   (pyperclip)   │           │  Snippets       │
+└─────────────────┘           │  (1-5 files)    │
+                              └─────────────────┘
+```
+
+#### Meeting Transcription Flow
+
+```
+User starts Scribe
+         │
+         ▼
+┌─────────────────┐
+│  Meeting Setup  │ Name (required), Category, Subcategory
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ "Start Recording│
+└────────┬────────┘
+         │
+         ├───────────────────────────────────────┐
+         ▼                                       ▼
+┌─────────────────┐                   ┌─────────────────┐
+│   Microphone    │                   │  System Audio   │
+│   (16kHz)       │                   │  (WASAPI loop)  │
+│   → Your voice  │                   │  → Others       │
+└────────┬────────┘                   └────────┬────────┘
+         │                                     │
+         └──────────────┬──────────────────────┘
+                        ▼
+              ┌─────────────────┐
+              │  Audio Chunking │ 30-60 second segments
+              │  (VAD-based)    │
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  Server API     │ /transcribe_meeting
+              │  + Diarization  │
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │ Speaker Matching│ Compare to enrolled voices
+              │ Cross-chunk     │ Track speakers across chunks
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  Transcript     │ Timestamped, speaker-labeled
+              │  Accumulation   │
+              └────────┬────────┘
+                       │
+         ▼ (User clicks "Stop Recording")
+                       │
+         ┌─────────────┴─────────────┐
+         ▼                           ▼
+┌─────────────────┐       ┌─────────────────┐
+│  Save Markdown  │       │  AI Summary     │
+│  Transcript     │       │  (detached)     │
+│                 │       │                 │
+│  Notes +        │       │  Claude API     │
+│  Full Transcript│       │  → .summary.md  │
+└─────────────────┘       └─────────────────┘
+```
+
+### File Organization
+
+```
+C:\dev\koe\
+│
+├── run.py                          # Application entry point
+├── config.yaml                     # User configuration
+├── config_schema.yaml              # Configuration schema with defaults
+├── .env                            # Environment variables (API keys, server URL)
+│
+├── requirements.txt                # Desktop dependencies (~3GB)
+├── requirements-remote.txt         # Laptop dependencies (~50MB)
+│
+├── assets/
+│   ├── koe-icon.ico               # Application icon (multi-size)
+│   ├── koe-icon.png               # Application icon (256x256)
+│   └── beep.wav                   # Completion sound
+│
+├── scripts/
+│   ├── Start Koe Desktop.bat      # Desktop launcher
+│   ├── Start Koe Desktop.vbs      # Hidden console wrapper
+│   ├── Start Koe Remote.bat       # Laptop launcher
+│   ├── Start Scribe Desktop.bat   # Scribe desktop launcher
+│   ├── Start Scribe Remote.bat    # Scribe laptop launcher
+│   ├── Stop Koe.bat               # Kill all processes
+│   ├── create_shortcuts.ps1       # Generate .lnk shortcuts
+│   └── generate_icon.py           # Generate icon files
+│
+├── .setup_complete                    # Marker file (created after setup wizard)
+│
+├── src/
+│   ├── main.py                    # Koe application
+│   ├── setup_wizard.py            # First-time setup wizard
+│   ├── transcription.py           # Transcription logic
+│   ├── transcription_client.py    # HTTP client for server
+│   ├── result_thread.py           # Recording thread with VAD
+│   ├── key_listener.py            # Global hotkey detection
+│   ├── utils.py                   # ConfigManager singleton
+│   ├── logger.py                  # Centralized error logging
+│   │
+│   ├── server.py                  # FastAPI transcription server
+│   ├── server_tray.py             # Server with system tray
+│   ├── server_launcher.py         # Background server starter
+│   │
+│   ├── meeting/
+│   │   ├── app.py                 # Scribe application
+│   │   ├── capture.py             # Dual audio capture
+│   │   ├── processor.py           # Audio chunking with VAD
+│   │   ├── transcript.py          # Markdown transcript writer
+│   │   ├── diarization.py         # Speaker identification
+│   │   ├── enroll_speaker.py      # Speaker enrollment (mic)
+│   │   ├── record_loopback.py     # Speaker enrollment (system audio)
+│   │   ├── summarizer.py          # Claude API client
+│   │   ├── summarize_detached.py  # Background summarization
+│   │   └── summary_status.py      # Status file management
+│   │
+│   └── ui/
+│       ├── base_window.py         # Base window class
+│       ├── main_window.py         # Main Koe window
+│       ├── settings_window.py     # Settings UI
+│       ├── status_window.py       # Recording status popup
+│       ├── enrollment_window.py   # Speaker enrollment UI
+│       ├── initialization_window.py  # Startup splash
+│       └── theme.py               # Color theme constants
+│
+├── speaker_embeddings/            # Voice fingerprints
+│   ├── Bryce.npy                  # Example enrolled speaker
+│   └── Calum.npy                  # Example enrolled speaker
+│
+├── Snippets/                      # Rolling hotkey snippets (configurable)
+│   ├── snippet_1.md               # Most recent
+│   ├── snippet_2.md
+│   └── ...                        # Up to 5 files
+│
+├── Meetings/                      # Meeting output (configurable)
+│   ├── Transcripts/
+│   │   ├── Standups/              # Category folder
+│   │   │   └── 26_01_20_Daily.md
+│   │   └── One-on-ones/
+│   │       └── Calum/             # Subcategory folder
+│   │           └── 26_01_15_Weekly.md
+│   └── Summaries/                 # AI summaries (mirrors Transcripts)
+│       └── ...
+│
+├── logs/
+│   └── koe_errors.log             # Application error log
+│
+└── .summary_status/               # Temporary summarization status (auto-cleaned)
+```
+
+---
+
+## Installation
+
+### Desktop Setup (Server)
+
+#### Prerequisites
+
+1. **NVIDIA GPU with CUDA support**
+   ```powershell
+   # Verify GPU is detected
+   nvidia-smi
+   ```
+
+2. **Python 3.10+**
+   - Download from [python.org](https://www.python.org/downloads/)
+   - **Important**: Check "Add Python to PATH" during installation
+
+3. **Git** (optional, for updates)
+   - Download from [git-scm.com](https://git-scm.com/downloads)
+
+#### Quick Install with Setup Wizard (Recommended)
+
+The setup wizard guides you through the entire setup process automatically:
+
+```powershell
+# 1. Clone or download the repository
+git clone https://github.com/your-repo/koe.git C:\dev\koe
+
+# 2. Install dependencies
+cd C:\dev\koe
+pip install -r requirements.txt
+
+# 3. Run Koe - setup wizard launches automatically on first run
+python run.py
+```
+
+The wizard will:
+- Check system requirements (GPU, CUDA, Python)
+- Guide you through API key setup
+- Download required AI models (~3-4GB)
+- Configure your name and voice
+- Set up output folders
+- Launch Koe when complete
+
+**To re-run the setup wizard later:**
+```powershell
+python run.py --setup
+```
+
+#### Manual Installation (Alternative)
+
+If you prefer manual setup or the wizard doesn't work:
+
+1. **Clone or download the repository**
+   ```powershell
+   git clone https://github.com/your-repo/koe.git C:\dev\koe
+   # Or download and extract ZIP to C:\dev\koe
+   ```
+
+2. **Install dependencies**
+   ```powershell
+   cd C:\dev\koe
+   pip install -r requirements.txt
+   ```
+
+3. **Install GPU packages** (for speaker diarization)
+   ```powershell
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+   pip install pyannote.audio
+   ```
+   This installs ~3GB of PyTorch and speaker diarization models.
+
+4. **Configure environment variables**
+
+   Create or edit `.env` file:
+   ```ini
+   # Required for pyannote speaker diarization models
+   HF_TOKEN=hf_your_huggingface_token
+
+   # Optional: For AI meeting summaries
+   ANTHROPIC_API_KEY=sk-ant-your_anthropic_key
+
+   # Server URL (localhost for desktop)
+   WHISPER_SERVER_URL=http://localhost:9876
+   ```
+
+   **HuggingFace Token**: Get from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+
+   **Anthropic API Key**: Get from [console.anthropic.com](https://console.anthropic.com)
+
+5. **Accept model licenses**
+
+   Visit these pages and accept the license agreements:
+   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+
+6. **Configure your name**
+
+   Edit `config.yaml`:
+   ```yaml
+   profile:
+     user_name: YourName
+   ```
+
+7. **Test the installation**
+   ```powershell
+   # Start Koe
+   python run.py
+   ```
+   First startup takes 30-60 seconds as models load into GPU memory.
+
+8. **Mark setup complete** (skips wizard on future launches)
+   ```powershell
+   # Create marker file
+   echo. > .setup_complete
+   ```
+
+### Laptop Setup (Remote Client)
+
+#### Prerequisites
+
+1. **Tailscale** installed on both desktop and laptop
+   - Download from [tailscale.com/download](https://tailscale.com/download)
+   - Sign in with the same account on both machines
+
+2. **Desktop running with Koe started**
+
+#### Installation Steps
+
+1. **Copy the koe folder to laptop**
+   ```
+   C:\dev\koe
+   ```
+
+2. **Install lightweight dependencies**
+   ```powershell
+   cd C:\dev\koe
+   pip install -r requirements-remote.txt
+   ```
+   This installs only ~50MB (no GPU packages).
+
+3. **Configure server URL**
+
+   Edit `.env`:
+   ```ini
+   # Your desktop's Tailscale IP
+   WHISPER_SERVER_URL=http://100.x.x.x:9876
+   ```
+
+   Find your desktop's Tailscale IP:
+   ```powershell
+   tailscale ip
+   ```
+
+4. **Test the connection**
+   ```powershell
+   curl http://100.x.x.x:9876/status
+   ```
+
+---
+
+## Configuration
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `config.yaml` | User settings (hotkey, recording options, etc.) |
+| `config_schema.yaml` | Schema with defaults and validation |
+| `.env` | Environment variables (API keys, server URL) |
+
+### Settings (configurable in UI)
+
+| Setting | Description |
+|---------|-------------|
+| **Your Name** | Labels your mic audio in Scribe transcripts |
+| **My Voice** | Select your enrolled voice for snippet filtering |
+| **Filter snippets to my voice** | Only transcribe your voice in Snippet mode (adds latency) |
+| **Meetings Root Folder** | Where meeting transcripts are saved |
+| **Snippets Folder** | Where rolling hotkey snippets are saved |
+| **Toggle Hotkey** | Global hotkey (default: `Ctrl+Shift+Space`) |
+| **Play sound on completion** | Beep when transcription finishes |
+| **Transcription Prompt** | Hint for Whisper (names, punctuation style) |
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HF_TOKEN` | Desktop | HuggingFace token for pyannote models |
+| `WHISPER_SERVER_URL` | Remote | Desktop server URL (e.g., `http://100.x.x.x:9876`) |
+| `ANTHROPIC_API_KEY` | Optional | For AI meeting summaries |
+
+---
+
+## Usage Guide
+
+### Snippet (Hotkey Transcription)
+
+1. **Start Koe**
+   - Double-click `Start Koe Desktop` shortcut
+   - Wait for tray icon to appear (first startup: 30-60 seconds)
+
+2. **Record and transcribe**
+   - Press `Ctrl+Shift+Space` to start recording
+   - Speak clearly
+   - Press `Ctrl+Shift+Space` again to stop
+   - Text is copied to clipboard
+
+3. **Cancel recording**
+   - Click `[ESC]` on status window or press Escape (during recording only)
+
+4. **Access settings**
+   - Right-click tray icon → Settings
+
+5. **Exit**
+   - Right-click tray icon → Exit
+
+### Scribe (Meeting Transcription)
+
+1. **Start Scribe**
+   - Double-click `Start Scribe Desktop` shortcut
+   - Or right-click Koe tray icon → Start Scribe
+
+2. **Set up meeting**
+   - Enter meeting name (required)
+   - Select category/subcategory (optional)
+   - Set max speakers if needed
+
+3. **Pre-meeting agenda (optional)**
+   - Write agenda in AGENDA section
+   - Click "Save Notes" to save template
+   - Click "Open" later to load saved agenda
+
+4. **Record meeting**
+   - Click `[ START RECORDING ]`
+   - Take notes in NOTES and ACTION ITEMS sections
+   - Transcription happens in background
+
+5. **End meeting**
+   - Click `[ STOP RECORDING ]`
+   - Wait for "Saving transcript..." to complete
+   - AI summary generates automatically (if API key configured)
+
+6. **View outputs**
+   - Transcript: `Meetings/Transcripts/[Category]/YY_MM_DD_Name.md`
+   - Summary: `Meetings/Summaries/[Category]/YY_MM_DD_Name.summary.md`
+
+### Speaker Enrollment
+
+#### Via Tray Menu (Recommended)
+
+1. Right-click Koe tray icon
+2. Hover "Enroll Speaker"
+3. Choose method:
+   - **From Microphone**: Record your voice directly
+   - **From System Audio**: Capture from video/audio playback
+4. Enter speaker name
+5. Click Start, speak/play audio for 5-30 seconds
+6. Click Stop or press Enter
+
+#### Via Command Line
+
+```powershell
+# Enroll from microphone
+python -m src.meeting.enroll_speaker "YourName"
+
+# Enroll from system audio (e.g., YouTube video)
+python -m src.meeting.record_loopback "TheirName" --duration 30 --enroll
+
+# List enrolled speakers
+python -m src.meeting.enroll_speaker --list dummy
+
+# Remove speaker
+python -m src.meeting.enroll_speaker "Name" --remove
+```
+
+### Remote Usage (Laptop)
+
+1. **Ensure desktop is running** with Koe started
+2. **Start Koe Remote** or **Start Scribe Remote**
+3. Use exactly as on desktop - processing happens on your desktop GPU
+
+---
+
+## API Reference
+
+The Koe server exposes a REST API on port 9876.
+
+### Endpoints
+
+#### GET /health
+
+Health check endpoint.
+
+**Response:**
+```json
+{
+  "status": "ok"
+}
+```
+
+#### GET /status
+
+Server status and capabilities.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "model": "large-v3",
+  "device": "cuda",
+  "ready": true,
+  "diarization_available": true
+}
+```
+
+#### POST /transcribe
+
+Transcribe audio without speaker diarization.
+
+**Request:**
+```json
+{
+  "audio_base64": "<base64-encoded int16 PCM audio>",
+  "sample_rate": 16000,
+  "language": null,
+  "initial_prompt": null,
+  "vad_filter": true
+}
+```
+
+**Response:**
+```json
+{
+  "text": "Transcribed text here.",
+  "duration_seconds": 5.2
+}
+```
+
+#### POST /transcribe_meeting
+
+Transcribe audio with speaker diarization (for Scribe).
+
+**Request:**
+```json
+{
+  "audio_base64": "<base64-encoded int16 PCM audio>",
+  "sample_rate": 16000,
+  "language": null,
+  "initial_prompt": null,
+  "max_speakers": 4
+}
+```
+
+**Response:**
+```json
+{
+  "segments": [
+    {
+      "speaker": "Bryce",
+      "text": "Hello everyone.",
+      "start": 0.0,
+      "end": 1.5
+    },
+    {
+      "speaker": "Speaker 1",
+      "text": "Thanks for joining.",
+      "start": 1.5,
+      "end": 3.2
+    }
+  ],
+  "duration_seconds": 30.5
+}
+```
+
+#### POST /diarization/reset
+
+Reset diarization session (call at start of new meeting).
+
+**Response:**
+```json
+{
+  "status": "ok"
+}
+```
+
+#### GET /speakers
+
+List enrolled speakers available for matching.
+
+**Response:**
+```json
+{
+  "speakers": ["Bryce", "Calum", "Sash"]
+}
+```
+
+---
+
+## Dependencies
+
+### Desktop Dependencies (requirements.txt)
+
+#### Core ML/Audio Stack
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `faster-whisper` | 1.0.2 | Optimized Whisper implementation |
+| `ctranslate2` | 4.2.1 | Efficient transformer inference |
+| `torch` | - | PyTorch deep learning framework |
+| `onnxruntime` | 1.16.3 | Neural network runtime |
+| `pyannote-audio` | - | Speaker diarization |
+| `pyannote-core` | - | Diarization core library |
+
+#### Audio Processing
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `sounddevice` | 0.4.6 | Microphone input capture |
+| `pyaudiowpatch` | - | WASAPI loopback (system audio) |
+| `soundfile` | 0.12.1 | Audio file I/O |
+| `webrtcvad-wheels` | 2.0.11.post1 | Voice activity detection |
+| `numpy` | 1.26.4 | Numerical array processing |
+| `scipy` | 1.11.4 | High-quality resampling with anti-aliasing |
+
+#### UI Framework
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `PyQt5` | 5.15.10 | Desktop GUI framework |
+| `PyQt5-Qt5` | 5.15.2 | Qt5 bindings |
+
+#### Networking & API
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `fastapi` | - | HTTP API framework (server) |
+| `uvicorn` | - | ASGI server |
+| `requests` | 2.31.0 | HTTP client |
+| `anthropic` | 0.76.0 | Claude API client |
+| `openai` | 1.28.0 | OpenAI API client (optional) |
+
+#### System Integration
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `pynput` | 1.7.6 | Global hotkey detection |
+| `pyperclip` | 1.8.2 | Clipboard access |
+| `python-dotenv` | 1.0.0 | Environment variable loading |
+| `PyYAML` | 6.0.1 | YAML configuration files |
+| `pydantic` | 2.7.1 | Data validation |
+
+#### Other
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `huggingface-hub` | 0.20.1 | Model downloads |
+| `audioplayer` | 0.6 | Beep sound playback |
+| `Pillow` | 9.5.0 | Image processing (icons) |
+| `tqdm` | 4.65.0 | Progress bars |
+| `colorama` | 0.4.6 | Colored console output |
+
+### Remote Dependencies (requirements-remote.txt)
+
+Lightweight ~50MB package set for laptop clients:
+
+| Package | Purpose |
+|---------|---------|
+| `sounddevice` | Microphone capture |
+| `pyaudiowpatch` | System audio capture |
+| `webrtcvad-wheels` | Voice activity detection |
+| `numpy` | Audio processing |
+| `soundfile` | Audio file I/O |
+| `PyQt5` | GUI framework |
+| `pynput` | Hotkey detection |
+| `pyperclip` | Clipboard access |
+| `requests` | HTTP client (to server) |
+| `pyyaml` | Configuration |
+| `python-dotenv` | Environment variables |
+| `audioplayer` | Notification sound |
+
+---
+
+## Troubleshooting
+
+### Desktop Issues
+
+#### CUDA/GPU Not Detected
+
+```powershell
+# Verify GPU is visible
+nvidia-smi
+
+# Check CUDA version
+nvcc --version
+```
+
+**Solutions:**
+- Update NVIDIA drivers: [nvidia.com/drivers](https://www.nvidia.com/drivers)
+- Ensure 6GB+ VRAM is available
+- Close other GPU-intensive applications
+
+#### Model Download Fails
+
+**Causes:**
+- Invalid HuggingFace token
+- Model license not accepted
+- Network issues
+
+**Solutions:**
+1. Verify token in `.env`: `HF_TOKEN=hf_xxx`
+2. Accept licenses at huggingface.co
+3. Check internet connection
+
+#### First Startup Very Slow
+
+**Normal behavior**: First startup loads ~3GB of models into GPU memory. Subsequent startups are faster as models are cached.
+
+#### Hotkey Not Working
+
+**Solutions:**
+1. Check tray icon exists
+2. Some applications block global hotkeys (games, admin windows)
+3. Try different hotkey in Settings
+4. Restart Koe
+
+#### Multiple Tray Icons
+
+Koe has single-instance protection, but if multiple icons appear:
+```powershell
+# Kill all Python processes
+taskkill /F /IM python.exe
+taskkill /F /IM pythonw.exe
+
+# Restart
+Start Koe Desktop
+```
+
+### Remote/Laptop Issues
+
+#### "Server Not Available" Error
+
+1. **Verify Tailscale connection**
+   ```powershell
+   tailscale status
+   ```
+
+2. **Verify desktop is running Koe**
+   - Check for tray icon on desktop
+
+3. **Test server connectivity**
+   ```powershell
+   curl http://100.x.x.x:9876/status
+   ```
+
+4. **Check firewall**
+   - Windows Firewall may block port 9876
+   - Add exception or temporarily disable to test
+
+#### Wrong Server URL
+
+Edit `.env` on laptop:
+```ini
+WHISPER_SERVER_URL=http://YOUR_DESKTOP_TAILSCALE_IP:9876
+```
+
+### Scribe Issues
+
+#### Too Many Speakers Detected
+
+In a 2-person meeting, if you see "Speaker 1", "Speaker 2", "Speaker 3"...:
+
+1. Open Settings → Meeting Options → **Max Speakers**
+2. Set to **2** for 1-on-1 meetings
+3. Re-enroll speakers with longer, clearer audio samples
+
+#### Speaker Not Recognized
+
+**Solutions:**
+1. Re-enroll with 10-30 seconds of clear audio
+2. Ensure quiet environment during enrollment
+3. Try enrolling from different audio sources
+
+#### AI Summary Not Generating
+
+1. Verify `ANTHROPIC_API_KEY` in `.env`
+2. Check for errors in `logs/koe_errors.log`
+3. Ensure API key has sufficient credits
+
+### General Issues
+
+#### Clipboard Copy Fails
+
+Koe uses multiple clipboard methods with automatic fallback:
+1. pyperclip (primary)
+2. Windows clip.exe (fallback)
+3. Retries on failure
+
+If issues persist, restart Koe.
+
+#### Error Logs
+
+Check `logs/koe_errors.log` for detailed error information:
+```powershell
+Get-Content logs\koe_errors.log -Tail 50
+```
+
+---
+
+## Development
+
+### Project Structure
+
+```
+src/
+├── main.py              # Application entry, tray menu, settings
+├── transcription.py     # Core transcription logic
+├── key_listener.py      # Global hotkey capture
+├── result_thread.py     # Recording thread with VAD
+├── utils.py             # ConfigManager, utilities
+├── logger.py            # Centralized logging
+│
+├── server.py            # FastAPI transcription server
+├── server_launcher.py   # Server process management
+│
+├── meeting/             # Scribe module
+│   ├── app.py           # Main Scribe application
+│   ├── capture.py       # Audio capture (mic + loopback)
+│   ├── processor.py     # Audio chunking
+│   ├── transcript.py    # Markdown output
+│   ├── diarization.py   # Speaker identification
+│   └── summarizer.py    # AI summaries
+│
+└── ui/                  # PyQt5 UI components
+    ├── theme.py         # Color constants
+    ├── settings_window.py
+    ├── status_window.py
+    └── enrollment_window.py
+```
+
+### Key Design Patterns
+
+- **Singleton ConfigManager**: Single source of truth for configuration
+- **Signal/Slot (PyQt5)**: Thread-safe UI updates
+- **Background Threads**: Heavy operations don't block UI
+- **Detached Subprocess**: AI summarization continues after window closes
+
+### Running from Source
+
+```powershell
+cd C:\dev\koe
+python run.py
+```
+
+### Running Tests
+
+```powershell
+# Test server connectivity
+curl http://localhost:9876/status
+
+# Test transcription
+python -c "from src.transcription import transcribe; print('OK')"
+```
+
+### Code Style
+
+- Python 3.10+ type hints
+- Pydantic for data validation
+- PyQt5 signals for cross-thread communication
+- Centralized error logging
+
+---
+
+## License
+
+Based on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell.
+
+---
+
+## Acknowledgments
+
+- [OpenAI Whisper](https://github.com/openai/whisper) - Speech recognition model
+- [faster-whisper](https://github.com/guillaumekln/faster-whisper) - Optimized implementation
+- [pyannote-audio](https://github.com/pyannote/pyannote-audio) - Speaker diarization
+- [Anthropic Claude](https://anthropic.com) - AI summarization
