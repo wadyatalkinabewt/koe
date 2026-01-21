@@ -3,16 +3,19 @@ import sys
 
 # Add NVIDIA cuDNN/cuBLAS DLL paths for GPU acceleration (must be before any CUDA imports)
 def _setup_cuda_dlls():
-    """Add cuDNN and cuBLAS DLL directories to the search path."""
+    """Add cuDNN and cuBLAS DLL directories to PATH (more reliable than os.add_dll_directory)."""
     try:
         import site
+        paths_to_add = []
         for sp in [site.getusersitepackages()] + site.getsitepackages():
             cudnn_bin = os.path.join(sp, "nvidia", "cudnn", "bin")
             cublas_bin = os.path.join(sp, "nvidia", "cublas", "bin")
             if os.path.exists(cudnn_bin):
-                os.add_dll_directory(cudnn_bin)
+                paths_to_add.append(cudnn_bin)
             if os.path.exists(cublas_bin):
-                os.add_dll_directory(cublas_bin)
+                paths_to_add.append(cublas_bin)
+        if paths_to_add:
+            os.environ['PATH'] = os.pathsep.join(paths_to_add) + os.pathsep + os.environ.get('PATH', '')
     except Exception:
         pass  # Silently fail if not on Windows or DLLs not installed
 
