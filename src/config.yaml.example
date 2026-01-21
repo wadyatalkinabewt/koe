@@ -1,0 +1,30 @@
+# Koe Configuration
+# Copy this file to config.yaml and customize as needed
+# All settings have sensible defaults - only override what you need
+
+profile:
+  user_name: null          # Your name - labels your mic audio in Scribe
+  my_voice_embedding: null # Your enrolled voice (from speaker_embeddings/)
+
+meeting_options:
+  root_folder: null        # Where meetings are saved (default: koe/Meetings)
+  max_speakers: 4          # Max speakers for diarization (2-10)
+
+recording_options:
+  activation_key: ctrl+shift+space
+  recording_mode: press_to_toggle
+  filter_snippets_to_my_voice: false
+
+model_options:
+  use_api: false
+  common:
+    language: null         # Auto-detect, or set to "en", "es", etc.
+    initial_prompt: "Use proper punctuation including periods, commas, and question marks."
+  local:
+    model: large-v3
+    device: auto           # auto, cuda, or cpu
+    vad_filter: true
+
+misc:
+  noise_on_completion: true
+  snippets_folder: null    # Where snippets are saved (default: koe/Snippets)
