@@ -32,12 +32,6 @@ def preload_model():
 
     ConfigManager.initialize()
     if ConfigManager.config_file_exists():
-        model_options = ConfigManager.get_config_section("model_options")
-
-        # If using API, no local model needed
-        if model_options.get("use_api"):
-            return None
-
         # Check if server is running - if so, use that instead of loading local
         if check_server_available():
             print("[Koe] Using shared transcription server")
@@ -54,7 +48,6 @@ import time
 import socket
 import pyperclip
 from audioplayer import AudioPlayer
-from pynput.keyboard import Controller
 from PyQt5.QtCore import QObject, QProcess
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox
@@ -82,7 +75,7 @@ class KoeApp(QObject):
         # Single-instance check: bind to a specific port as a lock
         self._lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self._lock_socket.bind(('127.0.0.1', 9877))
+            self._lock_socket.bind(('127.0.0.1', 19877))
         except OSError:
             # Another instance is already running
             print("[Koe] Another instance is already running. Exiting.")

@@ -882,9 +882,17 @@ class MeetingTranscriberApp(QObject):
                 self.client.get_speakers()
 
                 status = self.client.get_status()
-                model = prettify_model(status.get("model", "unknown"))
-                device = status.get("device", "unknown").upper()  # CUDA looks better than cuda
+                raw_model = status.get("model", "")
+                raw_device = status.get("device", "")
                 self._server_diarization_available = status.get("diarization_available", False)
+
+                # Handle case where server is up but model not yet loaded
+                if not raw_model or raw_model == "unknown":
+                    model = "Loading model"
+                    device = "..."
+                else:
+                    model = prettify_model(raw_model)
+                    device = raw_device.upper()  # CUDA looks better than cuda
 
                 # Show diarization status
                 if self._diarization_loading:
