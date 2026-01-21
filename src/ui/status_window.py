@@ -197,7 +197,7 @@ class StatusWindow(QMainWindow):
             self.indicator.setText("◉")
             self.indicator.setStyleSheet(f"color: {self.TEXT_COLOR};")
             self.status_label.setText('> Transcribing_')
-            self.status_label.setStyleSheet(f"color: #00ffaa;")
+            self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
 
         elif status in ('complete', 'error', 'cancel'):
             self.timer.stop()
