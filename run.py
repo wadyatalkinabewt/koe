@@ -12,22 +12,23 @@ from dotenv import load_dotenv
 
 
 def needs_setup() -> bool:
-    """Check if setup wizard needs to run."""
+    """Check if setup needs to run."""
     koe_dir = Path(__file__).parent
 
     # Check for setup complete marker
     if (koe_dir / ".setup_complete").exists():
         return False
 
-    # Check for existing config with HF_TOKEN
+    # Check for existing config with WHISPER_MODEL (new setup) or HF_TOKEN (old setup)
     env_path = koe_dir / ".env"
     config_path = koe_dir / "src" / "config.yaml"
 
     if env_path.exists() and config_path.exists():
         with open(env_path) as f:
             content = f.read()
-            if "HF_TOKEN=hf_" in content:
-                # Has valid token, mark as complete
+            # New setup saves WHISPER_MODEL, old setup required HF_TOKEN
+            if "WHISPER_MODEL=" in content or "HF_TOKEN=hf_" in content:
+                # Has valid config, mark as complete
                 (koe_dir / ".setup_complete").touch()
                 return False
 
@@ -35,9 +36,10 @@ def needs_setup() -> bool:
 
 
 def run_setup():
-    """Run the setup wizard."""
-    print("First-time setup required. Launching setup wizard...")
-    subprocess.run([sys.executable, os.path.join('src', 'setup_wizard.py')])
+    """Run the terminal setup."""
+    print("First-time setup required...")
+    from src.setup_cli import run_setup as cli_setup
+    cli_setup()
 
 
 def run_koe():
