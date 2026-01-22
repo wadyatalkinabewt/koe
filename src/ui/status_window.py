@@ -212,12 +212,36 @@ class StatusWindow(QMainWindow):
                 self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
                 # Keep visible for 2 seconds (increased from 1.2s for clarity)
                 QTimer.singleShot(2000, self.close)
+            elif status == 'error':
+                # Error status - showError() will display the message
+                # If no message provided via showError(), show generic error briefly
+                self.indicator.setText("✗")
+                self.indicator.setStyleSheet("color: #ff6666;")
+                if '> Error:' not in self.status_label.text():
+                    self.status_label.setText('> Error')
+                    self.status_label.setStyleSheet("color: #ff6666;")
+                QTimer.singleShot(3000, self.close)
             else:
-                self.close()  # Close immediately for error/cancel
+                self.close()  # Close immediately for cancel
 
         else:
             # Unknown status (e.g., 'idle') - do nothing
             pass
+
+    @pyqtSlot(str)
+    def showError(self, error_msg):
+        """Show error message in status window before closing."""
+        self.timer.stop()
+        self.blink_timer.stop()
+        self.indicator.setText("✗")
+        self.indicator.setStyleSheet("color: #ff6666;")
+        # Truncate long error messages
+        display_msg = error_msg[:30] + '...' if len(error_msg) > 30 else error_msg
+        self.status_label.setText(f'> Error: {display_msg}')
+        self.status_label.setStyleSheet("color: #ff6666;")
+        self.timer_label.setText('')
+        # Close after 3 seconds
+        QTimer.singleShot(3000, self.close)
 
 
 if __name__ == '__main__':

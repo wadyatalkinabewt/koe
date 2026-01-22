@@ -317,6 +317,8 @@ class KoeApp(QObject):
         self.result_thread = ResultThread(self.local_model)
         if not ConfigManager.get_config_value("misc", "hide_status_window"):
             self.result_thread.statusSignal.connect(self.status_window.updateStatus)
+            self.result_thread.errorSignal.connect(self.status_window.showError)
+        self.result_thread.errorSignal.connect(self.on_transcription_error)
         self.result_thread.resultSignal.connect(self.on_transcription_complete)
         self.result_thread.start()
 
@@ -348,6 +350,18 @@ class KoeApp(QObject):
             pass
 
         return False
+
+    def on_transcription_error(self, error_msg):
+        """Handle transcription errors with tray notification."""
+        # Show tray notification so user knows even if they weren't looking
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            self.tray_icon.showMessage(
+                "Koe - Transcription Failed",
+                error_msg,
+                QSystemTrayIcon.Warning,
+                5000  # Show for 5 seconds
+            )
+        ConfigManager.console_print(f'Transcription error: {error_msg}')
 
     def on_transcription_complete(self, result):
         from pathlib import Path
