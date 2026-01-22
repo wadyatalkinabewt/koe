@@ -65,6 +65,31 @@ def post_process_text(text: str) -> str:
 
     text = text.strip()
 
+    # Remove initial prompt if it leaked into transcription
+    # (Whisper sometimes hallucinates the prompt when audio is unclear)
+    try:
+        model_options = ConfigManager.get_config_section('model_options')
+        initial_prompt = model_options.get('common', {}).get('initial_prompt', '')
+        if initial_prompt:
+            # Split prompt into lines and sentences, filter each separately
+            prompt_parts = []
+            for line in initial_prompt.strip().split('\n'):
+                line = line.strip()
+                if line:
+                    prompt_parts.append(line)
+                    # Also split on periods for sentence-level matching
+                    for sentence in line.split('.'):
+                        sentence = sentence.strip()
+                        if len(sentence) > 10:  # Only match substantial sentences
+                            prompt_parts.append(sentence)
+
+            # Remove any prompt parts that appear in the text
+            for part in prompt_parts:
+                if part in text:
+                    text = text.replace(part, '')
+    except Exception:
+        pass  # Don't fail transcription if config access fails
+
     # Filler words to remove
     fillers = [
         r'\bum+\b', r'\buh+\b', r'\bah+\b', r'\beh+\b',
@@ -221,12 +246,357 @@ def preprocess_loopback_audio(
     return audio_float.astype(np.int16)
 
 
+class SpeakerEnrollmentDialog(QMainWindow):
+    """Dialog for enrolling unknown speakers from a meeting."""
+
+    enrolledSignal = pyqtSignal(str, str)  # session_label, name
+    closedSignal = pyqtSignal()  # Emitted when dialog closes
+
+    BG_COLOR = QColor(10, 10, 15, 245)
+    BORDER_COLOR = QColor(0, 255, 136)
+    TEXT_COLOR = theme.TEXT_COLOR
+
+    def __init__(self, unknown_speakers: dict, speaker_samples: dict, diarizer, transcript_path: Path):
+        """
+        Args:
+            unknown_speakers: Dict mapping "Speaker 1" -> embedding
+            speaker_samples: Dict mapping speaker name -> list of sample transcriptions
+            diarizer: DiarizationManager instance for enrollment
+            transcript_path: Path to transcript file for rewriting after enrollment
+        """
+        super().__init__()
+        self.unknown_speakers = unknown_speakers
+        self.speaker_samples = speaker_samples
+        self.diarizer = diarizer
+        self.transcript_path = transcript_path
+        self._drag_pos = None
+        self._name_inputs = {}  # label -> QLineEdit (for unknown speakers)
+        self._enroll_buttons = {}  # label -> QPushButton (for disabling after enrollment)
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle('Enroll Speakers')
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        # Calculate height based on number of unknown speakers
+        num_unknown = len(self.unknown_speakers)
+        base_height = 80  # Header + footer
+        per_speaker_height = 85  # Each speaker row
+        total_height = base_height + (num_unknown * per_speaker_height)
+        self.setFixedSize(500, min(total_height, 450))
+
+        main_widget = QWidget(self)
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(18, 14, 18, 14)
+        main_layout.setSpacing(10)
+
+        # Header
+        header = QLabel("> Enroll speakers")
+        header.setFont(QFont('Cascadia Code', 12, QFont.Bold))
+        header.setStyleSheet(f"color: {self.TEXT_COLOR};")
+        main_layout.addWidget(header)
+
+        # Scrollable area for speakers
+        from PyQt5.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QWidget { background: transparent; }
+        """)
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(8)
+
+        # Unknown speakers (with name input + Enroll button)
+        for label in sorted(self.unknown_speakers.keys()):
+            row = self._create_unknown_speaker_row(label)
+            scroll_layout.addWidget(row)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        main_layout.addWidget(scroll, 1)
+
+        # Close button
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        close_btn = QPushButton("[ESC] Close")
+        close_btn.setFont(QFont('Cascadia Code', 9))
+        close_btn.setStyleSheet("""
+            QPushButton { color: #3a4a4a; background: transparent; border: none; padding: 4px 8px; }
+            QPushButton:hover { color: #ff6666; }
+        """)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+        main_layout.addLayout(btn_layout)
+
+        self.setCentralWidget(main_widget)
+        self._center_window()
+
+    def _create_unknown_speaker_row(self, label: str) -> QWidget:
+        """Create a row for an unknown speaker (with name input + Enroll button)."""
+        row = QWidget()
+        row_layout = QVBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 8)
+        row_layout.setSpacing(4)
+
+        # Speaker label
+        speaker_label = QLabel(f"{label}:")
+        speaker_label.setFont(QFont('Cascadia Code', 10, QFont.Bold))
+        speaker_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
+        row_layout.addWidget(speaker_label)
+
+        # Sample text
+        samples = self.speaker_samples.get(label, [])
+        sample_text = self._format_samples(samples)
+        sample_label = QLabel(f'"{sample_text}"')
+        sample_label.setFont(QFont('Cascadia Code', 9))
+        sample_label.setStyleSheet("color: #888;")
+        sample_label.setWordWrap(True)
+        row_layout.addWidget(sample_label)
+
+        # Name input row
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
+
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("Enter name to enroll...")
+        name_input.setFont(QFont('Cascadia Code', 10))
+        name_input.setStyleSheet("""
+            QLineEdit {
+                background: rgba(0, 0, 0, 0.3);
+                border: 1px solid #3a4a4a;
+                border-radius: 3px;
+                padding: 6px 10px;
+                color: #00ff88;
+            }
+            QLineEdit:focus { border-color: #00ff88; }
+        """)
+        self._name_inputs[label] = name_input
+        input_row.addWidget(name_input, 1)
+
+        enroll_btn = QPushButton("Enroll")
+        enroll_btn.setFont(QFont('Cascadia Code', 9))
+        enroll_btn.setStyleSheet("""
+            QPushButton {
+                color: #00ff88;
+                background: rgba(0, 255, 136, 0.1);
+                border: 1px solid #00ff88;
+                border-radius: 3px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover { background: rgba(0, 255, 136, 0.2); }
+            QPushButton:disabled { color: #555; border-color: #555; background: transparent; }
+        """)
+        enroll_btn.setCursor(Qt.PointingHandCursor)
+        enroll_btn.clicked.connect(lambda checked, lbl=label: self._enroll_speaker(lbl))
+        self._enroll_buttons[label] = enroll_btn
+        input_row.addWidget(enroll_btn)
+
+        row_layout.addLayout(input_row)
+        return row
+
+    def _format_samples(self, samples: list) -> str:
+        """Format sample transcriptions for display."""
+        if samples:
+            sample_text = " | ".join(samples[:3])
+            if len(sample_text) > 150:
+                sample_text = sample_text[:150] + "..."
+            return sample_text
+        return "(no text samples)"
+
+    def _center_window(self):
+        screen_geo = QApplication.desktop().availableGeometry()
+        x = (screen_geo.width() - self.width()) // 2
+        y = (screen_geo.height() - self.height()) // 2
+        self.move(x, y)
+
+    def _find_similar_speakers(self, target_label: str) -> list:
+        """Find other unknown speakers with similar embeddings to target.
+
+        Returns list of labels that should be merged with target.
+        """
+        if target_label not in self.unknown_speakers:
+            return []
+
+        target_embedding = self.unknown_speakers[target_label]
+        similar = []
+
+        SIMILARITY_THRESHOLD = 0.35  # Same as match threshold
+
+        for label, embedding in self.unknown_speakers.items():
+            if label == target_label:
+                continue
+
+            # Cosine similarity (with zero-norm protection)
+            norm_product = np.linalg.norm(target_embedding) * np.linalg.norm(embedding)
+            if norm_product == 0:
+                continue
+            similarity = np.dot(target_embedding, embedding) / norm_product
+
+            if similarity >= SIMILARITY_THRESHOLD:
+                _debug_log(f"[Enroll] Auto-merge: '{label}' similar to '{target_label}' ({similarity:.3f})")
+                similar.append(label)
+
+        return similar
+
+    def _rewrite_transcript(self, old_labels: list, new_name: str):
+        """Rewrite transcript file, replacing old speaker labels with new name.
+
+        Args:
+            old_labels: List of labels to replace (e.g., ["Speaker 1", "Speaker 3"])
+            new_name: New name to use (e.g., "Sritam")
+        """
+        if not self.transcript_path or not self.transcript_path.exists():
+            _debug_log(f"[Enroll] Transcript not found: {self.transcript_path}")
+            return
+
+        try:
+            content = self.transcript_path.read_text(encoding='utf-8')
+
+            for old_label in old_labels:
+                # Replace transcript entries: **[HH:MM] Speaker 1**: → **[HH:MM] Sritam**:
+                # Pattern handles both [MM:SS] and [HH:MM:SS] formats
+                pattern = rf'\*\*\[(\d{{2}}:\d{{2}}(?::\d{{2}})?)\] {re.escape(old_label)}\*\*:'
+                replacement = rf'**[\1] {new_name}**:'
+                content = re.sub(pattern, replacement, content)
+
+            # Update Participants header line
+            # Match: **Participants**: Name1, Name2, Speaker 1, Name3
+            participants_pattern = r'(\*\*Participants\*\*: )(.+)'
+            match = re.search(participants_pattern, content)
+            if match:
+                prefix = match.group(1)
+                participants_str = match.group(2)
+                participants = [p.strip() for p in participants_str.split(',')]
+
+                # Replace old labels with new name, remove duplicates
+                new_participants = []
+                seen = set()
+                for p in participants:
+                    if p in old_labels:
+                        if new_name not in seen:
+                            new_participants.append(new_name)
+                            seen.add(new_name)
+                    else:
+                        if p not in seen:
+                            new_participants.append(p)
+                            seen.add(p)
+
+                new_participants_str = ', '.join(new_participants)
+                content = re.sub(participants_pattern, prefix + new_participants_str, content)
+
+            # Save updated content
+            self.transcript_path.write_text(content, encoding='utf-8')
+            _debug_log(f"[Enroll] Rewrote transcript: {old_labels} -> {new_name}")
+
+        except Exception as e:
+            _debug_log(f"[Enroll] Error rewriting transcript: {e}")
+
+    def _enroll_speaker(self, label: str):
+        """Enroll an unknown speaker with the given name."""
+        name_input = self._name_inputs.get(label)
+        if not name_input:
+            return
+
+        name = name_input.text().strip()
+        if not name:
+            return
+
+        # Enroll using diarizer
+        if self.diarizer and self.diarizer.enroll_speaker_from_session(label, name):
+            _debug_log(f"[Enroll] Enrolled '{label}' as '{name}'")
+
+            # Find similar speakers to auto-merge
+            similar_labels = self._find_similar_speakers(label)
+            all_labels = [label] + similar_labels
+
+            # Rewrite transcript with all matching labels
+            self._rewrite_transcript(all_labels, name)
+
+            # Update UI for all similar speakers too
+            for similar_label in similar_labels:
+                similar_input = self._name_inputs.get(similar_label)
+                if similar_input:
+                    similar_input.setEnabled(False)
+                    similar_input.setText(f"Merged as {name}")
+                    similar_input.setStyleSheet("""
+                        QLineEdit {
+                            background: rgba(0, 255, 136, 0.1);
+                            border: 1px solid #00ff88;
+                            border-radius: 3px;
+                            padding: 6px 10px;
+                            color: #00ff88;
+                        }
+                    """)
+                # Disable the enroll button for similar speaker
+                similar_btn = self._enroll_buttons.get(similar_label)
+                if similar_btn:
+                    similar_btn.setEnabled(False)
+                # Remove from unknown_speakers to prevent re-processing
+                self.unknown_speakers.pop(similar_label, None)
+
+            # Update UI for enrolled speaker
+            name_input.setEnabled(False)
+            name_input.setText(f"Enrolled as {name}")
+            name_input.setStyleSheet("""
+                QLineEdit {
+                    background: rgba(0, 255, 136, 0.1);
+                    border: 1px solid #00ff88;
+                    border-radius: 3px;
+                    padding: 6px 10px;
+                    color: #00ff88;
+                }
+            """)
+            # Disable the enroll button for this speaker
+            enroll_btn = self._enroll_buttons.get(label)
+            if enroll_btn:
+                enroll_btn.setEnabled(False)
+            # Remove from unknown_speakers to prevent re-processing
+            self.unknown_speakers.pop(label, None)
+
+            self.enrolledSignal.emit(label, name)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, self.width(), self.height(), 8, 8)
+        painter.fillPath(path, QBrush(self.BG_COLOR))
+        painter.setPen(self.BORDER_COLOR)
+        painter.drawPath(path)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton and self._drag_pos:
+            self.move(event.globalPos() - self._drag_pos)
+            event.accept()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+
+    def closeEvent(self, event):
+        """Emit signal when dialog closes."""
+        self.closedSignal.emit()
+        super().closeEvent(event)
+
+
 class SummaryStatusWindow(QMainWindow):
     """Small popup window showing summary generation progress."""
 
     closeSignal = pyqtSignal()
     newMeetingSignal = pyqtSignal()
     linkClickedSignal = pyqtSignal(str)
+    startSummarizationSignal = pyqtSignal(object)  # Emits transcript_path when ready to summarize
 
     # Terminal colors (from centralized theme)
     BG_COLOR = QColor(10, 10, 15, 245)
@@ -237,6 +607,12 @@ class SummaryStatusWindow(QMainWindow):
     def __init__(self, meeting_name: str, duration_seconds: int):
         super().__init__()
         self._drag_pos = None
+        self._unknown_speakers = {}  # Will be set after meeting ends
+        self._speaker_samples = {}
+        self._diarizer = None
+        self._enrollment_dialog = None
+        self._transcript_path = None  # For deferred summarization
+        self._summarization_started = False  # Prevent double-triggering
         self.initUI()
 
     def initUI(self):
@@ -279,6 +655,26 @@ class SummaryStatusWindow(QMainWindow):
         button_layout.setSpacing(8)
 
         button_layout.addStretch()
+
+        # Enroll speakers button (hidden by default, shown when speakers available)
+        self.enroll_btn = QPushButton('Enroll Speakers')
+        self.enroll_btn.setFont(QFont('Cascadia Code', 9))
+        self.enroll_btn.setStyleSheet("""
+            QPushButton {
+                color: #ffaa00;
+                background: transparent;
+                border: 1px solid #ffaa00;
+                border-radius: 3px;
+                padding: 4px 12px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 170, 0, 0.1);
+            }
+        """)
+        self.enroll_btn.setCursor(Qt.PointingHandCursor)
+        self.enroll_btn.clicked.connect(self._open_enrollment)
+        self.enroll_btn.hide()  # Hidden until speakers are set
+        button_layout.addWidget(self.enroll_btn)
 
         # New Meeting button
         new_meeting_btn = QPushButton('New Meeting')
@@ -339,6 +735,54 @@ class SummaryStatusWindow(QMainWindow):
         clickable = f'<a href="file:///{url_path}" style="color: #00ffaa; text-decoration: underline;">{summary_path.name}</a>'
         self.status_label.setText(f"✓ {clickable}")
 
+    def set_enrollment_data(self, unknown_speakers: dict, speaker_samples: dict, diarizer, transcript_path: Path):
+        """Set data for speaker enrollment.
+
+        Args:
+            unknown_speakers: Dict mapping "Speaker 1" -> embedding
+            speaker_samples: Dict mapping speaker name -> list of sample transcriptions
+            diarizer: DiarizationManager instance for enrollment
+            transcript_path: Path to transcript file for rewriting
+        """
+        self._unknown_speakers = unknown_speakers
+        self._speaker_samples = speaker_samples
+        self._diarizer = diarizer
+        self._transcript_path = transcript_path
+
+        # Only show enrollment button if there are UNKNOWN speakers
+        if unknown_speakers:
+            self.enroll_btn.show()
+            # Make window a bit wider to fit the button
+            self.setFixedSize(520, 85)
+            self.center_window()
+
+    def _trigger_summarization_if_needed(self):
+        """Start summarization if it hasn't been started yet."""
+        if not self._summarization_started and self._transcript_path:
+            self._summarization_started = True
+            self.startSummarizationSignal.emit(self._transcript_path)
+
+    def _on_enrollment_closed(self):
+        """Called when enrollment dialog is closed - trigger summarization."""
+        self._trigger_summarization_if_needed()
+
+    def _open_enrollment(self):
+        """Open the speaker enrollment dialog."""
+        if not self._unknown_speakers:
+            return
+
+        self._enrollment_dialog = SpeakerEnrollmentDialog(
+            self._unknown_speakers,
+            self._speaker_samples,
+            self._diarizer,
+            self._transcript_path
+        )
+
+        # Connect closed signal to trigger summarization
+        self._enrollment_dialog.closedSignal.connect(self._on_enrollment_closed)
+
+        self._enrollment_dialog.show()
+
     def paintEvent(self, event):
         """Custom paint for rounded border."""
         painter = QPainter(self)
@@ -369,6 +813,11 @@ class SummaryStatusWindow(QMainWindow):
         """Handle ESC key."""
         if event.key() == Qt.Key_Escape:
             self.closeSignal.emit()
+
+    def closeEvent(self, event):
+        """Handle window close - ensure summarization starts."""
+        self._trigger_summarization_if_needed()
+        super().closeEvent(event)
 
 
 class MeetingTranscriberApp(QObject):
@@ -693,7 +1142,7 @@ class MeetingTranscriberApp(QObject):
         # Form inputs - organized in 2 rows for compact layout
         LABEL_WIDTH = 100
 
-        # Row 1: NAME + ATTENDEES (independent fields)
+        # Row 1: NAME
         row1_layout = QHBoxLayout()
         row1_layout.setSpacing(16)
 
@@ -709,25 +1158,6 @@ class MeetingTranscriberApp(QObject):
         self.meeting_name_input.setMaxLength(100)
         self.name_layout.addWidget(self.meeting_name_input)
         row1_layout.addLayout(self.name_layout, 1)  # stretch factor 1
-
-        # ATTENDEES section (max speakers)
-        self.speakers_layout = QHBoxLayout()
-        self.speakers_layout.setSpacing(8)
-        self.speakers_label = QLabel("ATTENDEES")
-        self.speakers_label.setObjectName("sectionHeader")
-        self.speakers_label.setFixedWidth(LABEL_WIDTH)
-        self.speakers_layout.addWidget(self.speakers_label)
-
-        self.max_speakers_combo = QComboBox()
-        self.max_speakers_combo.setFocusPolicy(Qt.StrongFocus)
-        self.max_speakers_combo.wheelEvent = lambda e: e.ignore()
-        # Populate with values 2-10, default to 4
-        for i in range(2, 11):
-            self.max_speakers_combo.addItem(str(i), i)
-        self.max_speakers_combo.setCurrentIndex(2)  # Index 2 = value 4 (default)
-        self.speakers_layout.addWidget(self.max_speakers_combo)
-        self.speakers_layout.addStretch()  # Push content left
-        row1_layout.addLayout(self.speakers_layout, 1)  # stretch factor 1
 
         layout.addLayout(row1_layout)
 
@@ -1149,10 +1579,6 @@ class MeetingTranscriberApp(QObject):
             self.subcategory_combo.setCurrentIndex(0)
 
         # Reset max speakers to default (5)
-        for i in range(self.max_speakers_combo.count()):
-            if self.max_speakers_combo.itemText(i) == "5":
-                self.max_speakers_combo.setCurrentIndex(i)
-                break
 
         # Clear any opened file state
         self._opened_filepath = None
@@ -1467,7 +1893,6 @@ class MeetingTranscriberApp(QObject):
         self.meeting_name_input.setEnabled(False)
         self.category_combo.setEnabled(False)
         self.subcategory_combo.setEnabled(False)
-        self.max_speakers_combo.setEnabled(False)
 
         # Do heavy work in background thread
         threading.Thread(target=self._start_recording_async, daemon=True).start()
@@ -1610,7 +2035,6 @@ class MeetingTranscriberApp(QObject):
         self.meeting_name_input.setEnabled(True)
         self.category_combo.setEnabled(True)
         self.subcategory_combo.setEnabled(True)
-        self.max_speakers_combo.setEnabled(True)
 
     def _hide_form_fields(self):
         """Hide form fields when recording (since they're not editable during recording)."""
@@ -1663,6 +2087,7 @@ class MeetingTranscriberApp(QObject):
         self._summary_window.closeSignal.connect(self._close_summary_window)
         self._summary_window.newMeetingSignal.connect(self._new_meeting_from_summary)
         self._summary_window.linkClickedSignal.connect(self._open_file)
+        self._summary_window.startSummarizationSignal.connect(self._start_summarization_after_enrollment)
 
         # Connect status signal for thread-safe updates
         self.summary_status_changed.connect(self._summary_window.update_status)
@@ -1722,6 +2147,33 @@ class MeetingTranscriberApp(QObject):
 
             _debug_log(f"[Meeting] Transcript saved to: {filepath}")
 
+            # Capture session speakers for potential enrollment (before any reset)
+            # This must happen BEFORE diarizer.reset_session() which is called on next meeting start
+            unknown_speakers = {}
+            speaker_samples = {}
+            if self._diarizer and self._diarization_available:
+                unknown_speakers = self._diarizer.get_unenrolled_session_speakers()
+
+                if unknown_speakers:
+                    _debug_log(f"[Meeting] Found {len(unknown_speakers)} unknown speakers for enrollment")
+                    # Get sample transcriptions for each unknown speaker from transcript
+                    for entry in self.transcript.entries:
+                        if entry.speaker in unknown_speakers:
+                            if entry.speaker not in speaker_samples:
+                                speaker_samples[entry.speaker] = []
+                            # Keep up to 3 samples per speaker
+                            if len(speaker_samples[entry.speaker]) < 3:
+                                # Truncate long text
+                                sample = entry.text[:60] + "..." if len(entry.text) > 60 else entry.text
+                                speaker_samples[entry.speaker].append(sample)
+
+                    # Pass enrollment data to summary window (must do on main thread via signal)
+                    # Store filepath in lambda closure for deferred summarization
+                    transcript_filepath = filepath
+                    QTimer.singleShot(0, lambda: self._set_enrollment_data(
+                        unknown_speakers, speaker_samples, transcript_filepath
+                    ))
+
             # Delete original agenda file if any
             if self._opened_filepath and self._opened_filepath.exists():
                 try:
@@ -1732,14 +2184,22 @@ class MeetingTranscriberApp(QObject):
                     _debug_log(f"[Meeting] Warning: Could not delete original file: {e}")
                 self._opened_filepath = None
 
-            # Spawn summarization subprocess (runs detached, continues even if window closes)
-            self.summary_status_changed.emit("Generating summary...")
-            _debug_log("[Meeting] Starting summarization subprocess")
-            self._spawn_summarization_subprocess(filepath)
+            # Check if we have unknown speakers - if so, delay summarization
+            if unknown_speakers:
+                # Delay summarization until after enrollment dialog closes
+                # The dialog's closedSignal will trigger summarization
+                _debug_log(f"[Meeting] {len(unknown_speakers)} unknown speakers - delaying summary until after enrollment")
+                self.summary_status_changed.emit("Waiting for speaker enrollment...")
+                # Summarization will be triggered by SummaryStatusWindow.startSummarizationSignal
+            else:
+                # No unknown speakers - start summarization immediately
+                _debug_log("[Meeting] All speakers known - starting summary immediately")
+                self.summary_status_changed.emit("Generating summary...")
+                self._spawn_summarization_subprocess(filepath)
+                # Emit signal to start polling on main thread (MUST use signal from background thread)
+                _debug_log("[Meeting] Emitting signal to start polling on main thread")
+                self.start_summary_polling.emit(filepath)
 
-            # Emit signal to start polling on main thread (MUST use signal from background thread)
-            _debug_log("[Meeting] Emitting signal to start polling on main thread")
-            self.start_summary_polling.emit(filepath)
             _debug_log("[Meeting] Background stop complete")
 
         except Exception as e:
@@ -1802,14 +2262,22 @@ class MeetingTranscriberApp(QObject):
         if chunk.mic_audio is not None and len(chunk.mic_audio) > 0:
             if check_audio_has_speech(chunk.mic_audio, threshold=300):
                 self._chunks_processed += 1
-                # Status stays as "Recording..." - no need to spam with chunk numbers
-                text, success = self.client.transcribe(chunk.mic_audio, sample_rate=16000, language=language, initial_prompt=initial_prompt)
-                if success:
-                    text = post_process_text(text)
-                    if text:
-                        self.transcription_ready.emit(self.user_name, text, timestamp)
+                # Use diarization for mic audio when available (timing consistency + embedding extraction)
+                if self._diarization_available and self._diarizer:
+                    # Local diarization: run through same pipeline as loopback for timing consistency
+                    # Also extracts + updates user's embedding for adaptive learning
+                    _debug_log("[Mic] Using LOCAL diarization for timing consistency")
+                    self._process_mic_with_diarization(chunk.mic_audio, 16000, timestamp)
                 else:
-                    self.status_changed.emit(f"Mic error: {text[:30]}")
+                    # No diarization: fall back to direct transcription
+                    _debug_log("[Mic] Using direct transcription (no diarization)")
+                    text, success = self.client.transcribe(chunk.mic_audio, sample_rate=16000, language=language, initial_prompt=initial_prompt)
+                    if success:
+                        text = post_process_text(text)
+                        if text:
+                            self.transcription_ready.emit(self.user_name, text, timestamp)
+                    else:
+                        self.status_changed.emit(f"Mic error: {text[:30]}")
 
         # Transcribe loopback audio (others) - only if it has actual speech
         if chunk.loopback_audio is not None and len(chunk.loopback_audio) > 0:
@@ -1847,8 +2315,8 @@ class MeetingTranscriberApp(QObject):
 
     def _process_loopback_with_diarization(self, audio: np.ndarray, sample_rate: int, base_timestamp: float):
         """Process loopback audio with speaker diarization."""
-        # Get max_speakers from UI dropdown
-        max_speakers = self.max_speakers_combo.currentData()
+        # Hardcoded max_speakers - auto-merge handles speaker consolidation
+        max_speakers = 8
 
         # Get language from config (force English to prevent hallucinations)
         model_options = ConfigManager.get_config_section('model_options')
@@ -1896,8 +2364,8 @@ class MeetingTranscriberApp(QObject):
 
     def _process_loopback_with_server_diarization(self, audio: np.ndarray, sample_rate: int, base_timestamp: float):
         """Process loopback audio using server-side diarization (for remote mode)."""
-        # Get max_speakers from UI dropdown
-        max_speakers = self.max_speakers_combo.currentData()
+        # Hardcoded max_speakers - auto-merge handles speaker consolidation
+        max_speakers = 8
 
         # Get language from config (force English to prevent hallucinations)
         model_options = ConfigManager.get_config_section('model_options')
@@ -1935,6 +2403,53 @@ class MeetingTranscriberApp(QObject):
                 segment_timestamp = base_timestamp + seg.start
                 _debug_log(f"[ServerDiarize] {seg.speaker}: {text[:50]}...")
                 self.transcription_ready.emit(seg.speaker, text, segment_timestamp)
+
+    def _process_mic_with_diarization(self, audio: np.ndarray, sample_rate: int, base_timestamp: float):
+        """
+        Process mic audio with diarization for timing consistency and embedding extraction.
+
+        Unlike loopback, mic audio is always from the user. We run diarization to:
+        1. Ensure timing consistency with loopback (both through same pipeline)
+        2. Extract user's embedding for adaptive learning
+        3. Get timing segments for proper transcription
+        """
+        # Get language from config
+        model_options = ConfigManager.get_config_section('model_options')
+        language = model_options['common'].get('language') or 'en'
+        initial_prompt = model_options['common'].get('initial_prompt')
+
+        _debug_log(f"[UserMic] Processing {len(audio)} samples ({len(audio)/sample_rate:.1f}s) for {self.user_name}")
+
+        # Run diarization for embedding extraction + timing
+        segments = self._diarizer.extract_user_embedding(audio, self.user_name, sample_rate)
+
+        if not segments:
+            # Fallback: transcribe entire audio
+            _debug_log("[UserMic] No segments, transcribing full audio")
+            text, success = self.client.transcribe(audio, sample_rate=sample_rate, language=language, initial_prompt=initial_prompt)
+            if success:
+                text = post_process_text(text)
+                if text:
+                    self.transcription_ready.emit(self.user_name, text, base_timestamp)
+            return
+
+        # Transcribe each segment
+        for segment in segments:
+            start_sample = int(segment.start * sample_rate)
+            end_sample = int(segment.end * sample_rate)
+            segment_audio = audio[start_sample:end_sample]
+
+            if len(segment_audio) < sample_rate * 0.5:  # Skip segments < 0.5s
+                _debug_log(f"[UserMic] Skipping short segment ({len(segment_audio)/sample_rate:.2f}s)")
+                continue
+
+            text, success = self.client.transcribe(segment_audio, sample_rate=sample_rate, language=language, initial_prompt=initial_prompt)
+            if success:
+                text = post_process_text(text)
+                if text:
+                    segment_timestamp = base_timestamp + segment.start
+                    _debug_log(f"[UserMic] {self.user_name}: {text[:50]}...")
+                    self.transcription_ready.emit(self.user_name, text, segment_timestamp)
 
     def _get_speaker_name(self, pyannote_label: str) -> str:
         """Convert pyannote speaker label to friendly name."""
@@ -2192,7 +2707,24 @@ class MeetingTranscriberApp(QObject):
         if self._summary_window:
             self._summary_window.show_summary_link(summary_path)
         # Show "New Meeting" button now that recording is complete
-        
+
+    def _set_enrollment_data(self, unknown_speakers: dict, speaker_samples: dict, transcript_path: Path):
+        """Set enrollment data on the summary window (must be called from main thread)."""
+        if self._summary_window:
+            self._summary_window.set_enrollment_data(
+                unknown_speakers,
+                speaker_samples,
+                self._diarizer,
+                transcript_path
+            )
+
+    def _start_summarization_after_enrollment(self, transcript_path: Path):
+        """Start summarization after enrollment dialog is closed."""
+        _debug_log(f"[Meeting] Enrollment closed, starting summarization for {transcript_path}")
+        self.summary_status_changed.emit("Generating summary...")
+        self._spawn_summarization_subprocess(transcript_path)
+        self.start_summary_polling.emit(transcript_path)
+
     def _close_summary_window(self):
         """Close the summary window."""
         if self._summary_window:
@@ -2208,7 +2740,7 @@ class MeetingTranscriberApp(QObject):
         # Keep the summary window open (user can close it manually with ESC)
 
     def _open_file(self, url: str):
-        """Open file in VS Code when status link is clicked."""
+        """Open folder containing file with the file selected in Explorer."""
         from urllib.parse import unquote, urlparse
 
         # Convert file:/// URL back to Windows path
@@ -2223,32 +2755,12 @@ class MeetingTranscriberApp(QObject):
         # Convert to Windows path separators
         filepath = filepath.replace("/", "\\")
 
-        # Try multiple VS Code locations
-        vscode_commands = [
-            'code',  # VS Code in PATH
-            r'C:\Program Files\Microsoft VS Code\Code.exe',
-            r'C:\Program Files (x86)\Microsoft VS Code\Code.exe',
-            r'C:\Users\{}\AppData\Local\Programs\Microsoft VS Code\Code.exe'.format(os.environ.get('USERNAME', ''))
-        ]
-
-        opened = False
-        for cmd in vscode_commands:
-            try:
-                subprocess.Popen([cmd, filepath], shell=False,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                _debug_log(f"[Summarization] Opened {filepath} in VS Code using: {cmd}")
-                opened = True
-                break
-            except (FileNotFoundError, OSError):
-                continue
-
-        if not opened:
-            # Last resort: use os.startfile which respects file associations
-            try:
-                os.startfile(filepath)
-                _debug_log(f"[Summarization] Opened {filepath} with default handler")
-            except Exception as e:
-                _debug_log(f"[Summarization] Failed to open file: {e}")
+        # Open Explorer with the file selected
+        try:
+            subprocess.Popen(['explorer', '/select,', filepath], shell=False)
+            _debug_log(f"[Summarization] Opened folder with {filepath} selected")
+        except Exception as e:
+            _debug_log(f"[Summarization] Failed to open folder: {e}")
 
     def cleanup(self):
         """Clean up resources before exit."""

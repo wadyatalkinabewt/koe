@@ -154,9 +154,10 @@ misc:
 
 ## Next Steps
 
-1. **Enroll your voice**: Right-click tray → Enroll Speaker → From Microphone
-2. **Try Scribe**: Right-click tray → Start Scribe
-3. **Read full docs**: See [README.md](README.md) for complete documentation
+1. **Try Scribe**: Right-click tray → Start Scribe
+2. **Enroll speakers after meetings**: Stop recording → click "Enroll Speakers" → name unknown speakers
+3. **Your voice enrolled automatically**: Your voice embedding is captured during meetings
+4. **Read full docs**: See [README.md](README.md) for complete documentation
 
 ---
 

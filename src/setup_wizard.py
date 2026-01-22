@@ -1209,8 +1209,7 @@ class SetupWizard(QMainWindow):
                 'my_voice_embedding': self.user_name if self.voice_audio is not None else None
             },
             'meeting_options': {
-                'root_folder': self.meetings_folder if self.meetings_folder else None,
-                'max_speakers': 4
+                'root_folder': self.meetings_folder if self.meetings_folder else None
             },
             'recording_options': {
                 'activation_key': 'ctrl+shift+space',

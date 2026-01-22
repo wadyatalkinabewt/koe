@@ -8,7 +8,6 @@ profile:
 
 meeting_options:
   root_folder: null        # Where meetings are saved (default: koe/Meetings)
-  max_speakers: 4          # Max speakers for diarization (2-10)
 
 recording_options:
   activation_key: ctrl+shift+space

@@ -57,7 +57,6 @@ from result_thread import ResultThread
 from ui.main_window import MainWindow
 from ui.settings_window import SettingsWindow
 from ui.status_window import StatusWindow
-from ui.enrollment_window import EnrollmentWindow
 from ui.initialization_window import InitializationWindow
 from transcription import create_local_model
 from utils import ConfigManager
@@ -221,19 +220,6 @@ class KoeApp(QObject):
         self.settings_action.triggered.connect(self.settings_window.show)
         self.tray_menu.addAction(self.settings_action)
 
-        # Enroll Speaker submenu
-        self.enroll_menu = QMenu("Enroll Speaker")
-        self.enroll_menu.setStyleSheet(menu_style)
-        self.enroll_mic_action = QAction("From Microphone", self.app)
-        self.enroll_mic_action.triggered.connect(self._start_mic_enrollment)
-        self.enroll_menu.addAction(self.enroll_mic_action)
-
-        self.enroll_loopback_action = QAction("From System Audio", self.app)
-        self.enroll_loopback_action.triggered.connect(self._start_loopback_enrollment)
-        self.enroll_menu.addAction(self.enroll_loopback_action)
-
-        self.tray_menu.addMenu(self.enroll_menu)
-
         self.tray_menu.addSeparator()
 
         self.exit_action = QAction("Exit", self.app)
@@ -249,33 +235,6 @@ class KoeApp(QObject):
         # Scribe will handle server availability itself
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         QProcess.startDetached(sys.executable, ["-m", "src.meeting.app"], project_root)
-
-    def _start_mic_enrollment(self):
-        """Open enrollment window for microphone recording."""
-        self.enrollment_window = EnrollmentWindow(mode="mic")
-        self.enrollment_window.enrollmentComplete.connect(self._on_enrollment_complete)
-        self.enrollment_window.show()
-
-    def _start_loopback_enrollment(self):
-        """Open enrollment window for system audio recording."""
-        self.enrollment_window = EnrollmentWindow(mode="loopback")
-        self.enrollment_window.enrollmentComplete.connect(self._on_enrollment_complete)
-        self.enrollment_window.show()
-
-    def _on_enrollment_complete(self, success: bool, name: str):
-        """Handle enrollment completion."""
-        if success:
-            self.tray_icon.showMessage(
-                "Speaker Enrolled",
-                f"'{name}' has been enrolled successfully.",
-                QSystemTrayIcon.Information,
-                2000
-            )
-            # Refresh settings window if it exists
-            if hasattr(self, 'settings_window'):
-                self.settings_window._refresh_speakers_list()
-                self.settings_window._populate_my_voice_dropdown()
-                self.settings_window._update_filter_checkbox_state()
 
     def cleanup(self):
         if self.key_listener:
