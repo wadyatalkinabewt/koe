@@ -161,63 +161,105 @@ class SummarizerClient:
         # Extract metadata from transcript
         metadata = self._extract_metadata(transcript_content)
 
-        # Build metadata header for output format
-        metadata_lines = []
+        # Build metadata header for output format (proper markdown hierarchy)
+        # Format: # Title - DD Mon YYYY
+        #         Duration: X min | Participants: A, B, C
+        title_line = ""
         if metadata["title"]:
-            metadata_lines.append(f"# {metadata['title']}")
-        if metadata["date"]:
-            metadata_lines.append(f"**Date**: {metadata['date']}")
-        if metadata["duration"]:
-            metadata_lines.append(f"**Duration**: {metadata['duration']}")
-        if metadata["participants"]:
-            metadata_lines.append(f"**Participants**: {metadata['participants']}")
+            # Try to format date nicely if available
+            date_str = ""
+            if metadata["date"]:
+                # Try to parse and reformat date (e.g., "2026-01-22 12:34" -> "22 Jan 2026")
+                try:
+                    from datetime import datetime
+                    date_part = metadata["date"].split()[0]  # Get just the date part
+                    dt = datetime.strptime(date_part, "%Y-%m-%d")
+                    date_str = f" - {dt.strftime('%d %b %Y')}"
+                except:
+                    date_str = f" - {metadata['date']}"
+            title_line = f"# {metadata['title']}{date_str}"
 
-        if metadata_lines:
-            metadata_header = "\n".join(metadata_lines) + "\n\n---\n"
+        info_parts = []
+        if metadata["duration"]:
+            info_parts.append(f"Duration: {metadata['duration']}")
+        if metadata["participants"]:
+            info_parts.append(f"Participants: {metadata['participants']}")
+        info_line = " | ".join(info_parts) if info_parts else ""
+
+        if title_line:
+            metadata_header = title_line + "\n" + info_line + "\n" if info_line else title_line + "\n"
         else:
             metadata_header = ""
 
         return f"""You are a meeting summarization assistant. Your task is to create a comprehensive, accurate summary of the following meeting transcript.
 
 **CRITICAL RULES (Anti-Hallucination):**
-1. **Only use information from the transcript** - never add external knowledge or assumptions
-2. **Preserve exact technical terms, names, and numbers** - don't paraphrase domain-specific terminology
-3. **Keep speaker labels as-is** - if transcript shows "Speaker 1", use "Speaker 1" (don't guess real names)
-4. **Trust the meeting notes** - the notes section (Agenda/Notes/Action Items) is ground truth written by the meeting host
-5. **Don't infer unspoken intent** - if something wasn't explicitly said, don't add it
-6. **Preserve uncertainty** - if speakers were uncertain or debating, reflect that
-7. **Don't add generic business advice** - no "best practices" or recommendations beyond what was discussed
+1. Only use information from the transcript - never add external knowledge or assumptions
+2. Preserve exact technical terms, names, and numbers - don't paraphrase domain-specific terminology
+3. Keep speaker labels as-is - if transcript shows "Speaker 1", use "Speaker 1" (don't guess real names)
+4. Trust the meeting notes - the notes section (Agenda/Notes/Action Items) is ground truth written by the meeting host
+5. Don't infer unspoken intent - if something wasn't explicitly said, don't add it
+6. Preserve uncertainty - if speakers were uncertain or debating, reflect that
+7. Don't add generic business advice - no "best practices" or recommendations beyond what was discussed
 
-**OUTPUT FORMAT:**
+**OUTPUT FORMAT (markdown hierarchy: H1 title, H2 sections, H5 subtopics/owners):**
 
-{metadata_header}## Summary
+{metadata_header}
+---
+
+## Summary
 [2-4 paragraphs capturing the meeting's purpose, key outcomes, and overall context]
+
+---
 
 ## Key Decisions
 [Bullet list of concrete decisions made. If none, write "No formal decisions recorded."]
 
-## Topics Discussed
-[Natural breakdown of topics with 1-2 sentence summaries for each. Use clear headings.]
+---
 
-## Action Items & Follow-ups
-[Table format with columns: Action | Owner | Deadline (if mentioned)]
+## Topics Discussed
+
+##### Example Topic Name
+Brief description of what was discussed about this topic.
+
+##### Another Topic
+Description here.
+
+---
+
+## Action Items
+
+##### Bryce
+- Task one
+- Task two
+
+##### Sash
+- Task three
+
+##### Bryce & Sash
+- Shared task
 
 If there are action items in the meeting notes, prioritize those as authoritative.
 If transcript mentions additional tasks, add them.
 If no action items exist, write "No action items assigned."
 
-## Open Questions
-[Unresolved questions or topics requiring follow-up. If none, write "No open questions."]
-
 ---
+
+## Open Questions
+[Bullet list of unresolved questions or topics requiring follow-up. If none, write "No open questions."]
+
+**FORMATTING RULES:**
+- Use --- horizontal rule before each ## H2 section heading
+- Use ##### H5 for topic names under Topics Discussed
+- Use ##### H5 for owner names under Action Items (for shared tasks use ##### Name & Name)
+- Empty line before each heading
+- Content starts immediately after heading (no empty line after heading)
 
 **MEETING TRANSCRIPT:**
 
 {transcript_content}
 
----
-
-**Generate the summary now, following the format above. Start with the metadata header (title, date, duration, participants) exactly as shown:**"""
+**Generate the summary now, following the format above exactly. Start with the H1 title line:**"""
 
     @staticmethod
     def calculate_mirrored_path(transcript_path: Path) -> Path:
@@ -245,15 +287,17 @@ If no action items exist, write "No action items assigned."
                 break
 
         if transcripts_idx is None:
-            # Fallback: just save in same directory with .summary.md suffix
-            return transcript_path.with_suffix('.summary.md')
+            # Fallback: save in same directory (same filename, different folder not possible)
+            # In this case, append _summary to avoid overwriting
+            stem = transcript_path.stem
+            return transcript_path.with_name(f"{stem}_summary.md")
 
         # Replace "Transcripts" with "Summaries"
         new_parts = list(parts)
         new_parts[transcripts_idx] = "Summaries"
 
-        # Change extension to .summary.md
-        summary_path = Path(*new_parts).with_suffix('.summary.md')
+        # Keep same filename (no .summary suffix - files are in separate folders)
+        summary_path = Path(*new_parts)
 
         # Ensure parent directory exists
         summary_path.parent.mkdir(parents=True, exist_ok=True)

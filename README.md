@@ -79,10 +79,12 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
 
 ### Speaker Enrollment
 
-- **Microphone Recording**: Record your voice directly
-- **System Audio Capture**: Enroll from video/audio playback (YouTube, Zoom recordings, etc.)
+- **Post-Meeting Enrollment (Recommended)**: Enroll unknown speakers directly from meeting recordings - highest quality embeddings
+- **Auto-Transcript Rewriting**: When you enroll "Speaker 1" as "Alice", the transcript is automatically updated
+- **Similar Speaker Auto-Merge**: If "Speaker 3" matches "Speaker 1", both are replaced with the enrolled name
+- **Deferred Summarization**: Summary generation waits until enrollment is complete (uses correct names)
 - **Adaptive Learning**: Voice fingerprints improve over time with high-confidence matches
-- **Easy Management**: Enroll via tray menu or Settings window
+- **CLI Tools**: Available for advanced users/debugging
 
 ### Remote Transcription
 
@@ -321,7 +323,7 @@ User starts Scribe
 │  Transcript     │       │  (detached)     │
 │                 │       │                 │
 │  Notes +        │       │  Claude API     │
-│  Full Transcript│       │  → .summary.md  │
+│  Full Transcript│       │  → Summaries/   │
 └─────────────────┘       └─────────────────┘
 ```
 
@@ -386,7 +388,6 @@ C:\dev\koe\
 │       ├── main_window.py         # Main Koe window
 │       ├── settings_window.py     # Settings UI
 │       ├── status_window.py       # Recording status popup
-│       ├── enrollment_window.py   # Speaker enrollment UI
 │       ├── initialization_window.py  # Startup splash
 │       └── theme.py               # Color theme constants
 │
@@ -642,7 +643,6 @@ If you prefer manual setup or the wizard doesn't work:
 2. **Set up meeting**
    - Enter meeting name (required)
    - Select category/subcategory (optional)
-   - Set max speakers if needed
 
 3. **Pre-meeting agenda (optional)**
    - Write agenda in AGENDA section
@@ -661,22 +661,28 @@ If you prefer manual setup or the wizard doesn't work:
 
 6. **View outputs**
    - Transcript: `Meetings/Transcripts/[Category]/YY_MM_DD_Name.md`
-   - Summary: `Meetings/Summaries/[Category]/YY_MM_DD_Name.summary.md`
+   - Summary: `Meetings/Summaries/[Category]/YY_MM_DD_Name.md`
 
 ### Speaker Enrollment
 
-#### Via Tray Menu (Recommended)
+#### Via Post-Meeting Dialog (Recommended)
 
-1. Right-click Koe tray icon
-2. Hover "Enroll Speaker"
-3. Choose method:
-   - **From Microphone**: Record your voice directly
-   - **From System Audio**: Capture from video/audio playback
-4. Enter speaker name
-5. Click Start, speak/play audio for 5-30 seconds
-6. Click Stop or press Enter
+The easiest way to enroll speakers is directly from a meeting recording:
 
-#### Via Command Line
+1. **Record a meeting** in Scribe with the person speaking
+2. **Stop recording** - an "Enroll Speakers" button appears in the summary window
+3. **Click "Enroll Speakers"** - dialog shows:
+   - **Unknown speakers** (green): "Speaker 1", "Speaker 2" with sample transcriptions
+   - **Enrolled speakers** (blue): Speakers who were on the call with "Update" option
+4. **For unknown speakers**: Enter their name and click "Enroll"
+5. **For enrolled speakers**: Click "Update embedding" to improve quality with meeting audio
+
+**Benefits:**
+- No separate enrollment sessions needed
+- Uses running average of entire meeting (higher quality than short recordings)
+- See sample transcriptions to identify who is who
+
+#### Via Command Line (For Debugging)
 
 ```powershell
 # Enroll from microphone
@@ -766,7 +772,7 @@ Transcribe audio with speaker diarization (for Scribe).
   "sample_rate": 16000,
   "language": null,
   "initial_prompt": null,
-  "max_speakers": 4
+  "max_speakers": 8
 }
 ```
 
@@ -987,9 +993,10 @@ WHISPER_SERVER_URL=http://YOUR_DESKTOP_TAILSCALE_IP:9876
 
 In a 2-person meeting, if you see "Speaker 1", "Speaker 2", "Speaker 3"...:
 
-1. Open Settings → Meeting Options → **Max Speakers**
-2. Set to **2** for 1-on-1 meetings
-3. Re-enroll speakers with longer, clearer audio samples
+1. **Use enrollment dialog**: After meeting ends, enroll one of the unknown speakers
+2. **Auto-merge kicks in**: Similar speakers are automatically merged by embedding similarity
+3. **Transcript rewrites**: All instances of merged speakers get renamed automatically
+4. Re-enroll existing speakers with longer, clearer audio samples if matching isn't working
 
 #### Speaker Not Recognized
 
@@ -1051,8 +1058,7 @@ src/
 └── ui/                  # PyQt5 UI components
     ├── theme.py         # Color constants
     ├── settings_window.py
-    ├── status_window.py
-    └── enrollment_window.py
+    └── status_window.py
 ```
 
 ### Key Design Patterns

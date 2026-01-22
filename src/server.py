@@ -77,7 +77,7 @@ class MeetingTranscribeRequest(BaseModel):
     initial_prompt: Optional[str] = None
     vad_filter: bool = True
     min_speakers: int = 1
-    max_speakers: int = 6
+    max_speakers: int = 8
     user_name: Optional[str] = None  # Name for mic audio (if known to be single speaker)
 
 

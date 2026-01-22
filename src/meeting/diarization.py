@@ -152,7 +152,7 @@ class SpeakerDiarizer:
         sample_rate: int = 16000,
         num_speakers: Optional[int] = None,
         min_speakers: int = 1,
-        max_speakers: int = 6
+        max_speakers: int = 8
     ) -> List[SpeakerSegment]:
         """
         Identify speakers in audio.
@@ -461,6 +461,184 @@ class SpeakerDiarizer:
         if best_match:
             _dlog(f"[MaxSpeakers] Force-merging with closest: {best_match} (sim={best_similarity:.3f})")
         return best_match
+
+    def get_unenrolled_session_speakers(self) -> Dict[str, np.ndarray]:
+        """
+        Get session speakers that are not enrolled (e.g., "Speaker 1", "Speaker 2").
+
+        Call this BEFORE reset_session() to get embeddings for enrollment.
+
+        Returns:
+            Dict mapping speaker labels to their embeddings (running averages from session)
+        """
+        return dict(self._session_speakers)  # Return a copy
+
+    def get_enrolled_speakers_seen(self) -> Dict[str, np.ndarray]:
+        """
+        Get enrolled speakers that were seen in this session.
+
+        Call this BEFORE reset_session() to get updated embeddings.
+
+        Returns:
+            Dict mapping speaker names to their current embeddings (may have been
+            updated via adaptive learning during the session)
+        """
+        result = {}
+        for name in self._enrolled_seen_this_session:
+            if name in self._known_speakers:
+                result[name] = self._known_speakers[name]
+        return result
+
+    def update_enrolled_speaker(self, name: str) -> bool:
+        """
+        Force-save the current embedding for an enrolled speaker.
+
+        This saves the adaptively-updated embedding immediately, rather than
+        waiting for session reset.
+
+        Args:
+            name: The enrolled speaker's name
+
+        Returns:
+            True if save succeeded, False otherwise
+        """
+        if name not in self._known_speakers:
+            _dlog(f"[Enroll] Speaker '{name}' not found in known speakers")
+            return False
+
+        embedding = self._known_speakers[name]
+        embedding_file = self._embeddings_dir / f"{name}.npy"
+        try:
+            np.save(embedding_file, embedding)
+            _dlog(f"[Enroll] Updated embedding for '{name}'")
+            # Remove from updated tracking since we just saved it
+            self._enrolled_updated.pop(name, None)
+            return True
+        except Exception as e:
+            _dlog(f"[Enroll] Failed to update '{name}': {e}")
+            return False
+
+    def enroll_speaker_from_session(self, session_label: str, name: str) -> bool:
+        """
+        Enroll a session speaker with a given name.
+
+        Args:
+            session_label: The session label (e.g., "Speaker 1")
+            name: The name to enroll as (e.g., "Sritam")
+
+        Returns:
+            True if enrollment succeeded, False otherwise
+        """
+        if session_label not in self._session_speakers:
+            _dlog(f"[Enroll] Session label '{session_label}' not found")
+            return False
+
+        embedding = self._session_speakers[session_label]
+
+        # Save to file
+        self._embeddings_dir.mkdir(parents=True, exist_ok=True)
+        embedding_file = self._embeddings_dir / f"{name}.npy"
+        try:
+            np.save(embedding_file, embedding)
+            _dlog(f"[Enroll] Saved session speaker '{session_label}' as '{name}'")
+
+            # Add to known speakers for immediate use
+            self._known_speakers[name] = embedding
+
+            return True
+        except Exception as e:
+            _dlog(f"[Enroll] Failed to save '{name}': {e}")
+            return False
+
+    def extract_user_embedding(
+        self,
+        audio: np.ndarray,
+        user_name: str,
+        sample_rate: int = 16000
+    ) -> List[SpeakerSegment]:
+        """
+        Process mic audio for embedding extraction and timing consistency.
+
+        Runs full diarization pipeline to:
+        1. Ensure timing consistency with loopback audio (both go through same pipeline)
+        2. Extract embedding from the audio
+        3. Update user's enrolled embedding (adaptive learning)
+        4. Mark user as seen in session (for post-meeting dialog)
+
+        Args:
+            audio: Audio data as int16 numpy array (mic audio)
+            user_name: Name of the user (from config)
+            sample_rate: Sample rate of audio
+
+        Returns:
+            List of SpeakerSegment with timing info (all labeled as user_name)
+        """
+        if self._pipeline is None:
+            if not self.load():
+                return []
+
+        try:
+            # Convert to float32 for pyannote
+            audio_float = audio.astype(np.float32) / 32768.0
+
+            # Create waveform tensor
+            waveform = torch.from_numpy(audio_float).unsqueeze(0)
+            input_dict = {"waveform": waveform, "sample_rate": sample_rate}
+
+            # Run diarization (for timing consistency)
+            _dlog(f"[UserMic] Running diarization for timing ({len(audio)/sample_rate:.1f}s)")
+            diarization = self._pipeline(input_dict, min_speakers=1, max_speakers=2)
+
+            # Extract annotation
+            annotation = getattr(diarization, 'speaker_diarization', diarization)
+            track_list = list(annotation.itertracks(yield_label=True))
+
+            if not track_list:
+                # No speech detected - return single segment for full audio
+                duration = len(audio) / sample_rate
+                _dlog(f"[UserMic] No speech detected, using full audio ({duration:.1f}s)")
+                return [SpeakerSegment(start=0.0, end=duration, speaker=user_name)]
+
+            # Extract embedding from entire mic audio (we know it's the user)
+            emb = self._extract_embedding(audio, sample_rate)
+            if emb is not None:
+                # Update user's enrolled embedding
+                if user_name in self._known_speakers:
+                    # Force update (we know this is the user, not probabilistic)
+                    old_emb = self._known_speakers[user_name]
+                    # Use slightly higher learning rate for mic audio (we're certain it's them)
+                    rate = 0.10  # 10% new, 90% old
+                    updated = (old_emb * (1 - rate) + emb * rate)
+                    updated = updated / np.linalg.norm(updated)
+                    self._known_speakers[user_name] = updated
+                    self._enrolled_updated[user_name] = True
+                    _dlog(f"[UserMic] Updated {user_name}'s embedding (forced)")
+                else:
+                    # User not enrolled yet - enroll them now
+                    self._embeddings_dir.mkdir(parents=True, exist_ok=True)
+                    embedding_file = self._embeddings_dir / f"{user_name}.npy"
+                    np.save(embedding_file, emb)
+                    self._known_speakers[user_name] = emb
+                    _dlog(f"[UserMic] Auto-enrolled {user_name} from mic audio")
+
+                # Mark user as seen in session
+                self._enrolled_seen_this_session.add(user_name)
+
+            # Convert tracks to segments, all labeled as user_name
+            segments = []
+            for turn, _, _ in track_list:  # Ignore speaker label from diarization
+                segments.append(SpeakerSegment(
+                    start=turn.start,
+                    end=turn.end,
+                    speaker=user_name  # Force label as user
+                ))
+
+            _dlog(f"[UserMic] Returning {len(segments)} segments for {user_name}")
+            return segments
+
+        except Exception as e:
+            _dlog(f"[UserMic] Error: {e}")
+            return []
 
     def reset_session(self):
         """Reset session speaker tracking (call at start of new meeting)."""

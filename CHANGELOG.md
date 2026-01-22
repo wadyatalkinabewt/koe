@@ -9,11 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Scribe**: Continuous transcription with speaker diarization
 - **Server Architecture**: Shared Whisper server (saves GPU memory, enables remote transcription)
 - **Speaker Identification**: Pyannote-based diarization with voice fingerprinting
-- **Speaker Enrollment**: Enroll speakers via tray menu (From Microphone / From System Audio) with terminal-styled UI
+- **Speaker Enrollment**: Enroll speakers via post-meeting dialog with terminal-styled UI
 - **Voice Filtering for Snippets**: Optional diarization to filter hotkey transcriptions to only your voice (Settings → Enrolled Speakers)
 - **Adaptive Voice Fingerprinting**: Speaker embeddings improve over time with high-confidence matches
 - **Cross-Chunk Speaker Tracking**: Running average embeddings for better speaker consistency across meeting chunks
-- **Max Speakers Setting**: Limit speaker detection (2-10) to reduce false splits in small meetings
+- **Auto-merge Similar Speakers**: Automatically consolidates duplicate speaker detections via embedding similarity
 - **Meeting Organization**: Category/subcategory folders (Standups, One-on-ones/Calum, Investors/Sequoia, etc.)
 - **Configurable Output Folders**: Set custom paths for meetings and snippets in Settings
 - **Pre-Meeting Agendas**: Save agenda files without date prefix, load and continue during meeting
@@ -61,6 +61,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Type checking against schema
   - Invalid values reset to defaults with warnings
   - Prevents silent crashes from malformed config
+- **Post-Meeting Speaker Enrollment (2026-01-22)**: Enroll speakers directly from meeting recordings
+  - "Enroll Speakers" button appears in summary window if there are unknown speakers
+  - Shows unknown speakers with sample transcriptions for identification
+  - Auto-rewrites transcript when speaker is enrolled (replaces "Speaker 1" with enrolled name)
+  - Auto-merges similar speakers by embedding similarity (if "Speaker 3" matches "Speaker 1", both replaced)
+  - Summary generation waits until enrollment dialog is closed (uses correct names)
+  - Uses session running-average embeddings (higher quality than short recordings)
+- **Initial Prompt Leak Filtering (2026-01-22)**: Prevents Whisper initial prompt from appearing in transcriptions
+  - Filters prompt text and sentence fragments from transcription output
+  - Applied to both Scribe meetings and Koe hotkey snippets
+- **Mic Audio Diarization (2026-01-22)**: Mic audio now processed through diarization pipeline
+  - Ensures timing consistency with loopback audio (both through same pipeline)
+  - Extracts user's voice embedding for adaptive learning
+  - Still force-labeled as user_name from config (not identified by diarization)
 
 ### Changed
 - Renamed project from WhisperWriter to Koe
@@ -73,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Scribe Performance Phase 3 - Partial (2026-01-21)**: Visual polish - added blinking "● REC" indicator in header (impossible to forget you're recording), "New Meeting" button for quick reset between meetings
 - **Scribe UI Improvements (2026-01-21)**:
   - Window opens larger (1100x900) for comfortable note-taking
-  - Form layout reorganized: NAME + ATTENDEES on row 1, CATEGORY + SUB on row 2 (hierarchical grouping)
+  - Form layout reorganized: NAME on row 1, CATEGORY + SUB on row 2 (simpler, cleaner)
   - "New Meeting" button now hidden until recording completes (no pointless clearing of empty fields)
   - Clean status messages: removed "Transcribing chunk #X" spam, user-friendly summarization messages
   - Dark terminal-themed context menus (no more white Windows menus)
@@ -98,9 +112,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 - No longer using `keyboard` package to listen for key presses
-- Removed obsolete enrollment batch files (now done via tray menu)
+- Removed obsolete enrollment batch files (now done via post-meeting dialog)
 - Removed debug files (debug_init.py, DEBUG_STATUS.md, meeting_debug.log)
 - Removed legacy asset files (old tray icons, microphone.png, pencil.png)
+- **Manual Enrollment from Tray Menu (2026-01-22)**: "Enroll Speaker" submenu removed
+  - Use post-meeting enrollment instead (better quality embeddings, auto transcript cleanup)
+  - CLI tools still available for debugging: `python -m src.meeting.enroll_speaker`
+- **Summary .summary suffix (2026-01-22)**: Summaries now use same filename as transcripts (in separate Summaries/ folder)
+  - Old: `26_01_22_Standup.summary.md`
+  - New: `26_01_22_Standup.md` (in Summaries/ folder instead of Transcripts/)
+- **ATTENDEES Dropdown (2026-01-22)**: Removed per-meeting max_speakers selection from Scribe UI
+  - Auto-merge handles speaker consolidation automatically
+  - Hardcoded default of 8 max speakers is sufficient for most meetings
+  - Simpler UI with less per-meeting configuration needed
 
 ### Fixed
 - [ESC] button now properly stops transcription instead of leaving it running in background
@@ -121,6 +145,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **No config validation (2026-01-21)**: Added type checking and options validation in ConfigManager (invalid values reset to defaults)
 - **No error logging (2026-01-21)**: Errors no longer lost when using pythonw.exe - now logged to logs/koe_errors.log
 - **Duplicate color constants (2026-01-21)**: Eliminated duplicate color definitions across 8 files with centralized theme.py
+- **Initial prompt leaking (2026-01-22)**: Whisper initial prompt (e.g., "Use proper punctuation...") no longer appears in transcription output
+- **Mic/loopback timing inconsistency (2026-01-22)**: Mic audio (fast) could arrive before loopback (slow diarization), causing transcript ordering issues. Both now go through diarization pipeline.
+- **User self-enrollment gap (2026-01-22)**: User couldn't enroll/update themselves from post-meeting dialog because mic wasn't diarized. Now mic embedding is extracted and tracked in session.
 
 ## [1.0.1] - 2024-01-28
 ### Added

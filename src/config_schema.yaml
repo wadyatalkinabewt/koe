@@ -15,10 +15,6 @@ meeting_options:
     value: null
     type: str
     description: "Root folder for meetings. Transcripts saved to 'Transcripts' subfolder, organized by category subfolders."
-  max_speakers:
-    value: 4
-    type: int
-    description: "Default maximum number of speakers for meeting diarization. Can be adjusted per-meeting in Scribe UI (2-10 range)."
 
 # Configuration options for the Whisper models
 model_options:
