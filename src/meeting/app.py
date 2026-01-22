@@ -393,7 +393,10 @@ class SpeakerEnrollmentDialog(QMainWindow):
             QPushButton:disabled { color: #555; border-color: #555; background: transparent; }
         """)
         enroll_btn.setCursor(Qt.PointingHandCursor)
-        enroll_btn.clicked.connect(lambda checked, lbl=label: self._enroll_speaker(lbl))
+        # Capture label in closure for this button
+        captured_label = label  # Explicit capture
+        _debug_log(f"[Enroll] Creating button for label='{captured_label}'")
+        enroll_btn.clicked.connect(lambda checked, lbl=captured_label: self._enroll_speaker(lbl))
         self._enroll_buttons[label] = enroll_btn
         input_row.addWidget(enroll_btn)
 
@@ -499,17 +502,36 @@ class SpeakerEnrollmentDialog(QMainWindow):
 
     def _enroll_speaker(self, label: str):
         """Enroll an unknown speaker with the given name."""
+        _debug_log(f"[Enroll] _enroll_speaker called with label='{label}'")
+        _debug_log(f"[Enroll] Available inputs: {list(self._name_inputs.keys())}")
+
         name_input = self._name_inputs.get(label)
         if not name_input:
+            _debug_log(f"[Enroll] ERROR: No input found for label '{label}'")
             return
+
+        # Log all input values for debugging
+        for lbl, inp in self._name_inputs.items():
+            _debug_log(f"[Enroll] Input '{lbl}' has text: '{inp.text()}'")
 
         name = name_input.text().strip()
+        _debug_log(f"[Enroll] Captured name='{name}' from label='{label}'")
+
         if not name:
+            _debug_log(f"[Enroll] ERROR: Empty name for label '{label}'")
             return
 
-        # Enroll using diarizer
-        if self.diarizer and self.diarizer.enroll_speaker_from_session(label, name):
-            _debug_log(f"[Enroll] Enrolled '{label}' as '{name}'")
+        # Get the embedding from our stored copy (safer than relying on diarizer's session)
+        embedding = self.unknown_speakers.get(label)
+        if embedding is None:
+            _debug_log(f"[Enroll] ERROR: No embedding found for label '{label}'")
+            return
+
+        _debug_log(f"[Enroll] Using embedding from unknown_speakers dict (shape={embedding.shape})")
+
+        # Enroll using the embedding we already have (safer than enroll_speaker_from_session)
+        if self.diarizer and self.diarizer.enroll_speaker_with_embedding(name, embedding):
+            _debug_log(f"[Enroll] Successfully enrolled '{label}' as '{name}'")
 
             # Find similar speakers to auto-merge
             similar_labels = self._find_similar_speakers(label)
@@ -519,11 +541,15 @@ class SpeakerEnrollmentDialog(QMainWindow):
             self._rewrite_transcript(all_labels, name)
 
             # Update UI for all similar speakers too
+            _debug_log(f"[Enroll] Found {len(similar_labels)} similar speakers: {similar_labels}")
             for similar_label in similar_labels:
+                _debug_log(f"[Enroll] Processing similar speaker '{similar_label}'")
                 similar_input = self._name_inputs.get(similar_label)
                 if similar_input:
+                    merge_text = f"Merged as {name}"
+                    _debug_log(f"[Enroll] Setting '{similar_label}' text to: '{merge_text}'")
                     similar_input.setEnabled(False)
-                    similar_input.setText(f"Merged as {name}")
+                    similar_input.setText(merge_text)
                     similar_input.setStyleSheet("""
                         QLineEdit {
                             background: rgba(0, 255, 136, 0.1);
@@ -541,8 +567,10 @@ class SpeakerEnrollmentDialog(QMainWindow):
                 self.unknown_speakers.pop(similar_label, None)
 
             # Update UI for enrolled speaker
+            enroll_text = f"Enrolled as {name}"
+            _debug_log(f"[Enroll] Setting '{label}' text to: '{enroll_text}'")
             name_input.setEnabled(False)
-            name_input.setText(f"Enrolled as {name}")
+            name_input.setText(enroll_text)
             name_input.setStyleSheet("""
                 QLineEdit {
                     background: rgba(0, 255, 136, 0.1);
@@ -829,6 +857,7 @@ class MeetingTranscriberApp(QObject):
     recording_time_updated = pyqtSignal(int)  # seconds
     summary_status_changed = pyqtSignal(str)  # For summary window updates
     start_summary_polling = pyqtSignal(object)  # Trigger polling setup on main thread (passes Path object)
+    enrollment_data_ready = pyqtSignal(dict, dict, object)  # unknown_speakers, speaker_samples, transcript_path
 
     def __init__(self, user_name: str = "Bryce", server_url: str = DEFAULT_SERVER_URL, use_diarization: bool = True):
         super().__init__()
@@ -902,6 +931,7 @@ class MeetingTranscriberApp(QObject):
         self.status_changed.connect(self._on_status_change)
         self.recording_time_updated.connect(self._on_time_update)
         self.start_summary_polling.connect(self._start_polling_summary_status)
+        self.enrollment_data_ready.connect(self._set_enrollment_data)
 
         # Load diarization model in background (after window is visible)
         if use_diarization:
@@ -2039,7 +2069,7 @@ class MeetingTranscriberApp(QObject):
     def _hide_form_fields(self):
         """Hide form fields when recording (since they're not editable during recording)."""
         # Hide all widgets in each layout
-        for layout in [self.name_layout, self.category_layout, self.subcategory_layout, self.speakers_layout]:
+        for layout in [self.name_layout, self.category_layout, self.subcategory_layout]:
             for i in range(layout.count()):
                 widget = layout.itemAt(i).widget()
                 if widget:
@@ -2048,7 +2078,7 @@ class MeetingTranscriberApp(QObject):
     def _show_form_fields(self):
         """Show form fields again when not recording."""
         # Show all widgets in each layout
-        for layout in [self.name_layout, self.category_layout, self.subcategory_layout, self.speakers_layout]:
+        for layout in [self.name_layout, self.category_layout, self.subcategory_layout]:
             for i in range(layout.count()):
                 widget = layout.itemAt(i).widget()
                 if widget:
@@ -2168,11 +2198,7 @@ class MeetingTranscriberApp(QObject):
                                 speaker_samples[entry.speaker].append(sample)
 
                     # Pass enrollment data to summary window (must do on main thread via signal)
-                    # Store filepath in lambda closure for deferred summarization
-                    transcript_filepath = filepath
-                    QTimer.singleShot(0, lambda: self._set_enrollment_data(
-                        unknown_speakers, speaker_samples, transcript_filepath
-                    ))
+                    self.enrollment_data_ready.emit(unknown_speakers, speaker_samples, filepath)
 
             # Delete original agenda file if any
             if self._opened_filepath and self._opened_filepath.exists():
@@ -2708,8 +2734,9 @@ class MeetingTranscriberApp(QObject):
             self._summary_window.show_summary_link(summary_path)
         # Show "New Meeting" button now that recording is complete
 
-    def _set_enrollment_data(self, unknown_speakers: dict, speaker_samples: dict, transcript_path: Path):
+    def _set_enrollment_data(self, unknown_speakers: dict, speaker_samples: dict, transcript_path):
         """Set enrollment data on the summary window (must be called from main thread)."""
+        _debug_log(f"[Meeting] _set_enrollment_data called with {len(unknown_speakers)} unknown speakers")
         if self._summary_window:
             self._summary_window.set_enrollment_data(
                 unknown_speakers,
@@ -2717,6 +2744,9 @@ class MeetingTranscriberApp(QObject):
                 self._diarizer,
                 transcript_path
             )
+            _debug_log("[Meeting] Enrollment data set on summary window")
+        else:
+            _debug_log("[Meeting] WARNING: _summary_window is None, cannot set enrollment data")
 
     def _start_summarization_after_enrollment(self, transcript_path: Path):
         """Start summarization after enrollment dialog is closed."""
