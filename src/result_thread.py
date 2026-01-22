@@ -14,12 +14,25 @@ from datetime import datetime
 from transcription import transcribe
 from utils import ConfigManager
 
-# Debug logging to file
+# Debug logging to file with rotation
 _DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
 _DEBUG_LOG.parent.mkdir(exist_ok=True)
+_MAX_LOG_SIZE = 1 * 1024 * 1024  # 1MB
+
+def _rotate_log_if_needed():
+    """Rotate debug.log if it exceeds max size."""
+    try:
+        if _DEBUG_LOG.exists() and _DEBUG_LOG.stat().st_size > _MAX_LOG_SIZE:
+            backup = _DEBUG_LOG.with_suffix('.log.1')
+            if backup.exists():
+                backup.unlink()
+            _DEBUG_LOG.rename(backup)
+    except:
+        pass
 
 def _debug(msg: str):
     """Write debug message to file with timestamp."""
+    _rotate_log_if_needed()
     timestamp = datetime.now().strftime("%H:%M:%S")
     try:
         with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
@@ -46,6 +59,7 @@ class ResultThread(QThread):
 
     statusSignal = pyqtSignal(str)
     resultSignal = pyqtSignal(str)
+    errorSignal = pyqtSignal(str)  # Emits error message for notifications
 
     def __init__(self, local_model=None):
         """
@@ -129,6 +143,19 @@ class ResultThread(QThread):
             _debug(f"  EXCEPTION: {e}")
             _debug(f"  Traceback: {traceback.format_exc()}")
             traceback.print_exc()
+
+            # Save audio to disk if we have it (don't lose the recording)
+            if audio_data is not None and len(audio_data) > 0:
+                try:
+                    failed_audio_path = _DEBUG_LOG.parent / f"failed_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                    import scipy.io.wavfile as wav
+                    wav.write(str(failed_audio_path), self.sample_rate or 16000, audio_data)
+                    _debug(f"  Saved failed audio to {failed_audio_path}")
+                except Exception as save_err:
+                    _debug(f"  Failed to save audio: {save_err}")
+
+            error_msg = str(e) if str(e) else "Transcription failed"
+            self.errorSignal.emit(error_msg)
             self.statusSignal.emit('error')
             self.resultSignal.emit('')
         finally:
