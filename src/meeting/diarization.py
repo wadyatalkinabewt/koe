@@ -134,17 +134,25 @@ class SpeakerDiarizer:
 
     def _load_known_speakers(self):
         """Load pre-enrolled speaker embeddings."""
+        _dlog(f"[Diarization] Loading known speakers from: {self._embeddings_dir}")
+
         if not self._embeddings_dir.exists():
+            _dlog(f"[Diarization] Embeddings directory does not exist: {self._embeddings_dir}")
             return
 
-        for emb_file in self._embeddings_dir.glob("*.npy"):
+        npy_files = list(self._embeddings_dir.glob("*.npy"))
+        _dlog(f"[Diarization] Found {len(npy_files)} .npy files: {[f.stem for f in npy_files]}")
+
+        for emb_file in npy_files:
             name = emb_file.stem
             try:
                 embedding = np.load(emb_file)
                 self._known_speakers[name] = embedding
-                _dlog(f"[Diarization] Loaded speaker embedding: {name}")
+                _dlog(f"[Diarization] Loaded speaker embedding: {name} (shape={embedding.shape}, norm={np.linalg.norm(embedding):.4f})")
             except Exception as e:
                 _dlog(f"[Diarization] Failed to load {name}: {e}")
+
+        _dlog(f"[Diarization] Total known speakers loaded: {list(self._known_speakers.keys())}")
 
     def diarize(
         self,
@@ -529,18 +537,63 @@ class SpeakerDiarizer:
         Returns:
             True if enrollment succeeded, False otherwise
         """
+        _dlog(f"[Enroll] enroll_speaker_from_session called: session_label='{session_label}', name='{name}'")
+        _dlog(f"[Enroll] Available session speakers: {list(self._session_speakers.keys())}")
+
         if session_label not in self._session_speakers:
-            _dlog(f"[Enroll] Session label '{session_label}' not found")
+            _dlog(f"[Enroll] Session label '{session_label}' not found in session speakers!")
             return False
 
         embedding = self._session_speakers[session_label]
+        _dlog(f"[Enroll] Got embedding for '{session_label}': shape={embedding.shape}, norm={np.linalg.norm(embedding):.4f}")
 
         # Save to file
         self._embeddings_dir.mkdir(parents=True, exist_ok=True)
         embedding_file = self._embeddings_dir / f"{name}.npy"
+        _dlog(f"[Enroll] Saving to: {embedding_file}")
         try:
             np.save(embedding_file, embedding)
-            _dlog(f"[Enroll] Saved session speaker '{session_label}' as '{name}'")
+            # Verify file was created
+            if embedding_file.exists():
+                _dlog(f"[Enroll] SUCCESS: Saved '{session_label}' as '{name}' to {embedding_file}")
+            else:
+                _dlog(f"[Enroll] WARNING: np.save completed but file doesn't exist: {embedding_file}")
+
+            # Add to known speakers for immediate use
+            self._known_speakers[name] = embedding
+
+            return True
+        except Exception as e:
+            _dlog(f"[Enroll] Failed to save '{name}': {e}")
+            return False
+
+    def enroll_speaker_with_embedding(self, name: str, embedding: np.ndarray) -> bool:
+        """
+        Enroll a speaker with a provided embedding.
+
+        This is safer than enroll_speaker_from_session because it doesn't depend
+        on the session speakers dictionary still being populated.
+
+        Args:
+            name: The name to enroll as (e.g., "Joe")
+            embedding: The speaker embedding
+
+        Returns:
+            True if enrollment succeeded, False otherwise
+        """
+        _dlog(f"[Enroll] enroll_speaker_with_embedding: name='{name}', embedding shape={embedding.shape}")
+
+        # Save to file
+        self._embeddings_dir.mkdir(parents=True, exist_ok=True)
+        embedding_file = self._embeddings_dir / f"{name}.npy"
+        _dlog(f"[Enroll] Saving to: {embedding_file}")
+        try:
+            np.save(embedding_file, embedding)
+            # Verify file was created
+            if embedding_file.exists():
+                _dlog(f"[Enroll] SUCCESS: Saved '{name}' to {embedding_file}")
+            else:
+                _dlog(f"[Enroll] WARNING: np.save completed but file doesn't exist: {embedding_file}")
 
             # Add to known speakers for immediate use
             self._known_speakers[name] = embedding

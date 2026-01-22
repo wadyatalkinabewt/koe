@@ -412,14 +412,14 @@ class KoeApp(QObject):
                     _debug(f"  Beep failed: {e}")
                     ConfigManager.console_print(f'Failed to play beep: {e}')
 
-            # Close status window immediately (beep is sufficient feedback)
+            # Signal completion so status window shows "Complete!" for 2 seconds
             _debug("  Checking status window...")
             if not ConfigManager.get_config_value("misc", "hide_status_window"):
-                _debug("  Closing status window...")
-                ConfigManager.console_print('Closing status window...')
-                self.status_window.close()
-                _debug("  Status window closed")
-                ConfigManager.console_print('Status window closed')
+                _debug("  Emitting 'complete' status...")
+                ConfigManager.console_print('Signaling completion to status window...')
+                self.status_window.statusSignal.emit('complete')
+                _debug("  Complete status emitted")
+                ConfigManager.console_print('Status window will close after showing completion')
 
             _debug("  Restarting key listener...")
             if ConfigManager.get_config_value("recording_options", "recording_mode") == "continuous":

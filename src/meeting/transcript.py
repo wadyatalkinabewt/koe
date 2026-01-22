@@ -104,7 +104,11 @@ class TranscriptWriter:
             lines.append("## Full Transcript")
             lines.append("")
 
-            for entry in self.entries:
+            # Sort entries by timestamp to ensure correct chronological order
+            # (mic and loopback may arrive out of order due to parallel processing)
+            sorted_entries = sorted(self.entries, key=lambda e: e.timestamp)
+
+            for entry in sorted_entries:
                 if self.include_timestamps:
                     ts = self.format_timestamp(entry.timestamp)
                     lines.append(f"**[{ts}] {entry.speaker}**: {entry.text}")
@@ -136,10 +140,14 @@ class TranscriptWriter:
             return ""
 
         cutoff = self.get_duration() - seconds
-        recent = [e for e in self.entries if e.timestamp >= cutoff]
+        # Sort by timestamp and filter to recent entries
+        sorted_entries = sorted(self.entries, key=lambda e: e.timestamp)
+        recent = [e for e in sorted_entries if e.timestamp >= cutoff]
 
         return "\n".join(f"{e.speaker}: {e.text}" for e in recent)
 
     def get_full_text(self) -> str:
         """Get all text without formatting."""
-        return "\n".join(f"{e.speaker}: {e.text}" for e in self.entries)
+        # Sort by timestamp for correct chronological order
+        sorted_entries = sorted(self.entries, key=lambda e: e.timestamp)
+        return "\n".join(f"{e.speaker}: {e.text}" for e in sorted_entries)
