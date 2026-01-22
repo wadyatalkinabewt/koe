@@ -95,6 +95,8 @@ class ResultThread(QThread):
 
             if not self.is_running:
                 _debug("  Early exit after recording: is_running=False")
+                # Emit empty result so status window gets closed properly
+                self.resultSignal.emit('')
                 return
 
             if audio_data is None:
