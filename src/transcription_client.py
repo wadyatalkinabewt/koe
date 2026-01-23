@@ -13,7 +13,7 @@ import base64
 import json
 import requests
 import numpy as np
-from typing import Optional, Tuple, Generator, Callable, List
+from typing import Optional, Tuple, Generator, Callable, List, Dict
 from urllib.parse import urljoin
 from dataclasses import dataclass
 
@@ -332,6 +332,32 @@ class TranscriptionClient:
         """Check if diarization is available on the server."""
         status = self.get_status()
         return status.get("diarization_available", False)
+
+    def get_unenrolled_speakers(self) -> Dict[str, np.ndarray]:
+        """Get unenrolled session speakers with their embeddings from the server.
+
+        Returns:
+            Dict mapping speaker labels (e.g., "Speaker 1") to numpy embeddings
+        """
+        try:
+            response = requests.get(
+                f"{self.server_url}/diarization/unenrolled",
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                speakers_data = data.get("speakers", {})
+
+                # Decode base64 embeddings back to numpy arrays
+                result = {}
+                for label, emb_base64 in speakers_data.items():
+                    embedding_bytes = base64.b64decode(emb_base64)
+                    embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
+                    result[label] = embedding
+                return result
+        except requests.RequestException:
+            pass
+        return {}
 
 
 # Convenience function for simple usage
