@@ -148,6 +148,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Initial prompt leaking (2026-01-22)**: Whisper initial prompt (e.g., "Use proper punctuation...") no longer appears in transcription output
 - **Mic/loopback timing inconsistency (2026-01-22)**: Mic audio (fast) could arrive before loopback (slow diarization), causing transcript ordering issues. Both now go through diarization pipeline.
 - **User self-enrollment gap (2026-01-22)**: User couldn't enroll/update themselves from post-meeting dialog because mic wasn't diarized. Now mic embedding is extracted and tracked in session.
+- **Post-meeting enrollment not appearing in remote mode (2026-01-23)**: When using server-side diarization (laptop over Tailscale), unknown speakers like "Speaker 1" appeared in transcripts but the enrollment prompt never showed. Fixed by adding `/diarization/unenrolled` API endpoint to return session speakers with embeddings, and fetching from server when in remote mode.
 
 ## [1.0.1] - 2024-01-28
 ### Added

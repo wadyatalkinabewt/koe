@@ -69,6 +69,8 @@ class KoeApp(QObject):
     MIN_RECORDING_SECONDS = 1.0
 
     def __init__(self, qapp=None, init_window=None, preloaded_model=None):
+        # Flag to track if user explicitly stopped continuous mode (prevents auto-restart)
+        self.continuous_stopped = False
         super().__init__()
 
         # Single-instance check: bind to a specific port as a lock
@@ -273,23 +275,25 @@ class KoeApp(QObject):
 
     def on_activation(self):
         if self.result_thread and self.result_thread.isRunning():
+            # Protection against accidental double-press:
+            # Only allow stopping if we've been recording for MIN_RECORDING_SECONDS
+            if self.recording_start_time is not None:
+                elapsed = time.time() - self.recording_start_time
+                if elapsed < self.MIN_RECORDING_SECONDS:
+                    ConfigManager.console_print(f'Ignoring stop - only {elapsed:.1f}s recorded (min: {self.MIN_RECORDING_SECONDS}s)')
+                    return
+
             recording_mode = ConfigManager.get_config_value("recording_options", "recording_mode")
             if recording_mode == "continuous":
-                self.stop_result_thread()
-            else:
-                # Protection against accidental double-press:
-                # Only allow stopping if we've been recording for MIN_RECORDING_SECONDS
-                if self.recording_start_time is not None:
-                    elapsed = time.time() - self.recording_start_time
-                    if elapsed < self.MIN_RECORDING_SECONDS:
-                        ConfigManager.console_print(f'Ignoring stop - only {elapsed:.1f}s recorded (min: {self.MIN_RECORDING_SECONDS}s)')
-                        return
+                # Mark that user explicitly stopped - prevents auto-restart after transcription
+                self.continuous_stopped = True
 
-                # For press_to_toggle, voice_activity_detection, and hold_to_record:
-                # Pressing hotkey again should stop recording and trigger transcription
-                self.result_thread.stop_recording()
+            # Stop recording and trigger transcription (for all modes)
+            self.result_thread.stop_recording()
             return
 
+        # Starting a new recording
+        self.continuous_stopped = False  # Reset flag when starting fresh
         self.start_result_thread()
 
     def on_deactivation(self):
@@ -422,9 +426,11 @@ class KoeApp(QObject):
                 ConfigManager.console_print('Status window will close after showing completion')
 
             _debug("  Restarting key listener...")
-            if ConfigManager.get_config_value("recording_options", "recording_mode") == "continuous":
+            if ConfigManager.get_config_value("recording_options", "recording_mode") == "continuous" and not self.continuous_stopped:
+                # Auto-restart recording in continuous mode (unless user explicitly stopped)
                 self.start_result_thread()
             else:
+                # Just restart the key listener for next activation
                 self.key_listener.start()
             _debug("  Key listener restarted")
 

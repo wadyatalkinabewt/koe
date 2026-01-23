@@ -492,6 +492,29 @@ async def list_speakers():
     return {"speakers": speakers, "available": True}
 
 
+@app.get("/diarization/unenrolled")
+async def get_unenrolled_speakers():
+    """Get unenrolled session speakers with their embeddings for enrollment.
+
+    Returns speakers that appeared in the meeting but are not enrolled,
+    with their embeddings encoded as base64.
+    """
+    diarizer = get_diarizer()
+    if diarizer is None:
+        return {"speakers": {}, "available": False}
+
+    # Get unenrolled speakers from the session
+    unenrolled = diarizer.get_unenrolled_session_speakers()
+
+    # Encode embeddings as base64 for JSON transport
+    speakers_data = {}
+    for label, embedding in unenrolled.items():
+        embedding_bytes = embedding.astype(np.float32).tobytes()
+        speakers_data[label] = base64.b64encode(embedding_bytes).decode('utf-8')
+
+    return {"speakers": speakers_data, "available": True}
+
+
 def run_server(host: str = "0.0.0.0", port: int = 9876):
     """Run the server."""
     print(f"[Server] Starting on http://{host}:{port}")

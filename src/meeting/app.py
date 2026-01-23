@@ -1385,11 +1385,13 @@ class MeetingTranscriberApp(QObject):
                 # Lazy import to avoid slow startup (pyannote/torch imports are heavy)
                 from .diarization import get_diarizer, PYANNOTE_AVAILABLE
 
+                # Always get diarizer for enrollment capability (saving embeddings)
+                self._diarizer = get_diarizer()
+
                 if not PYANNOTE_AVAILABLE:
-                    _debug_log("[Meeting] Pyannote not installed. Diarization disabled.")
+                    _debug_log("[Meeting] Pyannote not installed. Local diarization disabled, enrollment still available.")
                     return
 
-                self._diarizer = get_diarizer()
                 _debug_log(f"[Meeting] Diarizer is_available: {self._diarizer.is_available()}")
                 if self._diarizer.is_available():
                     _debug_log("[Meeting] Loading diarization model...")
@@ -2182,23 +2184,28 @@ class MeetingTranscriberApp(QObject):
             unknown_speakers = {}
             speaker_samples = {}
             if self._diarizer and self._diarization_available:
+                # Local diarization mode - get from local diarizer
                 unknown_speakers = self._diarizer.get_unenrolled_session_speakers()
+            elif self._server_diarization_available:
+                # Server diarization mode - fetch from server
+                _debug_log("[Meeting] Fetching unenrolled speakers from server...")
+                unknown_speakers = self.client.get_unenrolled_speakers()
 
-                if unknown_speakers:
-                    _debug_log(f"[Meeting] Found {len(unknown_speakers)} unknown speakers for enrollment")
-                    # Get sample transcriptions for each unknown speaker from transcript
-                    for entry in self.transcript.entries:
-                        if entry.speaker in unknown_speakers:
-                            if entry.speaker not in speaker_samples:
-                                speaker_samples[entry.speaker] = []
-                            # Keep up to 3 samples per speaker
-                            if len(speaker_samples[entry.speaker]) < 3:
-                                # Truncate long text
-                                sample = entry.text[:60] + "..." if len(entry.text) > 60 else entry.text
-                                speaker_samples[entry.speaker].append(sample)
+            if unknown_speakers:
+                _debug_log(f"[Meeting] Found {len(unknown_speakers)} unknown speakers for enrollment")
+                # Get sample transcriptions for each unknown speaker from transcript
+                for entry in self.transcript.entries:
+                    if entry.speaker in unknown_speakers:
+                        if entry.speaker not in speaker_samples:
+                            speaker_samples[entry.speaker] = []
+                        # Keep up to 3 samples per speaker
+                        if len(speaker_samples[entry.speaker]) < 3:
+                            # Truncate long text
+                            sample = entry.text[:60] + "..." if len(entry.text) > 60 else entry.text
+                            speaker_samples[entry.speaker].append(sample)
 
-                    # Pass enrollment data to summary window (must do on main thread via signal)
-                    self.enrollment_data_ready.emit(unknown_speakers, speaker_samples, filepath)
+                # Pass enrollment data to summary window (must do on main thread via signal)
+                self.enrollment_data_ready.emit(unknown_speakers, speaker_samples, filepath)
 
             # Delete original agenda file if any
             if self._opened_filepath and self._opened_filepath.exists():
