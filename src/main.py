@@ -269,8 +269,10 @@ class KoeApp(QObject):
 
     def on_status_window_action(self, action):
         """Handle actions from the status window (e.g., cancel button)."""
+        _debug(f"on_status_window_action() called with action: {action}")
         if action == 'cancel':
             # User clicked [ESC] or pressed Escape - stop the recording thread
+            _debug("  Calling stop_result_thread() due to cancel action")
             self.stop_result_thread()
 
     def on_activation(self):
@@ -327,10 +329,14 @@ class KoeApp(QObject):
         self.result_thread.start()
 
     def stop_result_thread(self):
+        _debug("stop_result_thread() called")
         if self.result_thread and self.result_thread.isRunning():
+            _debug("  Thread is running, calling stop()")
             self.recording_start_time = None  # Reset since we're cancelling
             self.processing_result = False  # Clear flag since we're cancelling
             self.result_thread.stop()
+        else:
+            _debug("  Thread not running, nothing to stop")
 
     def _copy_to_clipboard(self, text, retries=3):
         """Copy text to clipboard with retries and fallback."""
@@ -409,7 +415,13 @@ class KoeApp(QObject):
                     _debug("  Playing beep...")
                     ConfigManager.console_print('Playing beep...')
                     beep_path = Path(__file__).parent.parent / "assets" / "beep.wav"
-                    AudioPlayer(str(beep_path)).play(block=True)
+                    # Use winsound on Windows for more reliable playback
+                    import sys
+                    if sys.platform == 'win32':
+                        import winsound
+                        winsound.PlaySound(str(beep_path), winsound.SND_FILENAME)
+                    else:
+                        AudioPlayer(str(beep_path)).play(block=True)
                     _debug("  Beep played")
                     ConfigManager.console_print('Beep played')
                 except Exception as e:
@@ -419,10 +431,11 @@ class KoeApp(QObject):
             # Signal completion so status window shows "Complete!" for 2 seconds
             _debug("  Checking status window...")
             if not ConfigManager.get_config_value("misc", "hide_status_window"):
-                _debug("  Emitting 'complete' status...")
+                _debug("  Updating status window to 'complete'...")
                 ConfigManager.console_print('Signaling completion to status window...')
-                self.status_window.statusSignal.emit('complete')
-                _debug("  Complete status emitted")
+                # Call updateStatus directly - statusSignal is for window-to-app communication
+                self.status_window.updateStatus('complete')
+                _debug("  Status window updated")
                 ConfigManager.console_print('Status window will close after showing completion')
 
             _debug("  Restarting key listener...")

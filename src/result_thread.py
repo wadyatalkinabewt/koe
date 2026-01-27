@@ -7,7 +7,7 @@ import wave
 import webrtcvad
 from PyQt5.QtCore import QThread, QMutex, pyqtSignal
 from collections import deque
-from threading import Event
+from threading import Event, Lock
 from pathlib import Path
 from datetime import datetime
 
@@ -82,6 +82,7 @@ class ResultThread(QThread):
 
     def stop(self):
         """Stop the entire thread execution."""
+        _debug("ResultThread.stop() called - setting is_running=False")
         self.mutex.lock()
         self.is_running = False
         self.mutex.unlock()
@@ -191,11 +192,13 @@ class ResultThread(QThread):
         recording = []
 
         data_ready = Event()
+        buffer_lock = Lock()  # Protect audio_buffer access between threads
 
         def audio_callback(indata, frames, time, status):
             if status:
                 ConfigManager.console_print(f"Audio callback status: {status}")
-            audio_buffer.extend(indata[:, 0])
+            with buffer_lock:
+                audio_buffer.extend(indata[:, 0])
             data_ready.set()
 
         with sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='int16',
@@ -207,12 +210,13 @@ class ResultThread(QThread):
                     continue
                 data_ready.clear()
 
-                if len(audio_buffer) < frame_size:
-                    continue
+                with buffer_lock:
+                    if len(audio_buffer) < frame_size:
+                        continue
 
-                # Save frame
-                frame = np.array(list(audio_buffer), dtype=np.int16)
-                audio_buffer.clear()
+                    # Save frame
+                    frame = np.array(list(audio_buffer), dtype=np.int16)
+                    audio_buffer.clear()
                 recording.extend(frame)
 
                 # Avoid trying to detect voice in initial frames
