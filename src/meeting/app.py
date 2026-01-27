@@ -2192,7 +2192,7 @@ class MeetingTranscriberApp(QObject):
                 unknown_speakers = self.client.get_unenrolled_speakers()
 
             if unknown_speakers:
-                _debug_log(f"[Meeting] Found {len(unknown_speakers)} unknown speakers for enrollment")
+                _debug_log(f"[Meeting] Found {len(unknown_speakers)} unknown speakers from diarization")
                 # Get sample transcriptions for each unknown speaker from transcript
                 for entry in self.transcript.entries:
                     if entry.speaker in unknown_speakers:
@@ -2204,8 +2204,19 @@ class MeetingTranscriberApp(QObject):
                             sample = entry.text[:60] + "..." if len(entry.text) > 60 else entry.text
                             speaker_samples[entry.speaker].append(sample)
 
+                # Filter out speakers with no transcript entries (likely hallucinations)
+                # A speaker can exist in diarization but have no transcribed text if pyannote
+                # detected something (noise, echo) but Whisper produced no text for it
+                speakers_with_entries = {k: v for k, v in unknown_speakers.items() if k in speaker_samples}
+                if len(speakers_with_entries) < len(unknown_speakers):
+                    filtered_out = set(unknown_speakers.keys()) - set(speakers_with_entries.keys())
+                    _debug_log(f"[Meeting] Filtered out {len(filtered_out)} phantom speakers with no text: {filtered_out}")
+                unknown_speakers = speakers_with_entries
+
                 # Pass enrollment data to summary window (must do on main thread via signal)
-                self.enrollment_data_ready.emit(unknown_speakers, speaker_samples, filepath)
+                if unknown_speakers:
+                    _debug_log(f"[Meeting] {len(unknown_speakers)} unknown speakers for enrollment")
+                    self.enrollment_data_ready.emit(unknown_speakers, speaker_samples, filepath)
 
             # Delete original agenda file if any
             if self._opened_filepath and self._opened_filepath.exists():
