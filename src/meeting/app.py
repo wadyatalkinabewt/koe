@@ -1382,6 +1382,21 @@ class MeetingTranscriberApp(QObject):
 
         def load():
             try:
+                # First check if server has diarization - if so, skip heavy local loading
+                # This saves ~10-30 seconds and ~1.5GB VRAM
+                server_status = self.client.get_status()
+                if server_status.get("diarization_available", False):
+                    _debug_log("[Meeting] Server has diarization - skipping local model load")
+                    self._server_diarization_available = True
+                    # Still get diarizer for enrollment capability (saving embeddings)
+                    # but don't load the heavy models
+                    from .diarization import get_diarizer
+                    self._diarizer = get_diarizer()
+                    return
+
+                # Server doesn't have diarization - load locally
+                _debug_log("[Meeting] Server lacks diarization - loading locally...")
+
                 # Lazy import to avoid slow startup (pyannote/torch imports are heavy)
                 from .diarization import get_diarizer, PYANNOTE_AVAILABLE
 
