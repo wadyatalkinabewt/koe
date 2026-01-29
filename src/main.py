@@ -311,6 +311,14 @@ class KoeApp(QObject):
                 self.result_thread.stop_recording()
 
     def start_result_thread(self):
+        # Guard against rapid double-press: if we JUST set recording_start_time, don't create new thread
+        # (isRunning() may not be True yet if thread is still spinning up)
+        if self.recording_start_time is not None:
+            elapsed = time.time() - self.recording_start_time
+            if elapsed < 0.5:  # Thread was just started, don't create another
+                ConfigManager.console_print(f'Thread starting, ignoring duplicate press')
+                return
+
         if self.result_thread and self.result_thread.isRunning():
             return
 
@@ -319,7 +327,7 @@ class KoeApp(QObject):
             ConfigManager.console_print('Still processing previous transcription...')
             return
 
-        self.recording_start_time = time.time()  # Track when recording started
+        self.recording_start_time = time.time()  # Track when recording started (SET BEFORE creating thread)
         self.result_thread = ResultThread(self.local_model)
         if not ConfigManager.get_config_value("misc", "hide_status_window"):
             self.result_thread.statusSignal.connect(self.status_window.updateStatus)
