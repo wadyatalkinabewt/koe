@@ -16,6 +16,20 @@ import numpy as np
 from typing import Optional, Tuple, Generator, Callable, List, Dict
 from urllib.parse import urljoin
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+# Debug logging
+_DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
+
+def _debug(msg: str):
+    """Write debug message to file with timestamp."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] [client] {msg}\n")
+    except:
+        pass
 
 
 @dataclass
@@ -44,7 +58,8 @@ class TranscriptionClient:
 
     def __init__(self, server_url: str = DEFAULT_SERVER_URL, timeout: float = 60.0):
         self.server_url = server_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout  # Read timeout
+        self.connect_timeout = 5.0  # Connection timeout (fail fast if server unreachable)
         self._server_available: Optional[bool] = None
 
     def is_server_available(self, force_check: bool = False) -> bool:
@@ -90,6 +105,8 @@ class TranscriptionClient:
         Returns:
             Tuple of (transcription text, success boolean)
         """
+        _debug(f"transcribe() called: {len(audio_data)} samples, dtype={audio_data.dtype}")
+
         # Convert to int16 if needed
         if audio_data.dtype == np.float32:
             audio_int16 = (audio_data * 32768).astype(np.int16)
@@ -98,8 +115,10 @@ class TranscriptionClient:
         else:
             audio_int16 = audio_data.astype(np.int16)
 
+        _debug(f"  Converting to base64 ({len(audio_int16) * 2} bytes)...")
         # Encode as base64
         audio_base64 = base64.b64encode(audio_int16.tobytes()).decode("utf-8")
+        _debug(f"  Base64 encoded: {len(audio_base64)} chars")
 
         payload = {
             "audio_base64": audio_base64,
@@ -114,22 +133,32 @@ class TranscriptionClient:
             payload["filter_to_speaker"] = filter_to_speaker
 
         try:
+            _debug(f"  POST {self.server_url}/transcribe (connect={self.connect_timeout}s, read={self.timeout}s)...")
             response = requests.post(
                 f"{self.server_url}/transcribe",
                 json=payload,
-                timeout=self.timeout
+                timeout=(self.connect_timeout, self.timeout)  # (connect, read) timeouts
             )
+            _debug(f"  Response received: status={response.status_code}")
 
             if response.status_code == 200:
                 data = response.json()
-                return data.get("text", ""), True
+                text = data.get("text", "")
+                _debug(f"  Success: {len(text)} chars")
+                return text, True
             else:
+                _debug(f"  Server error: {response.status_code}")
                 return f"Server error: {response.status_code}", False
 
         except requests.Timeout:
+            _debug("  TIMEOUT after {self.timeout}s")
             return "Transcription timed out", False
         except requests.RequestException as e:
+            _debug(f"  REQUEST ERROR: {e}")
             return f"Connection error: {e}", False
+        except Exception as e:
+            _debug(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            return f"Unexpected error: {e}", False
 
     def transcribe_stream(
         self,

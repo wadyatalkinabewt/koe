@@ -2399,12 +2399,18 @@ class MeetingTranscriberApp(QObject):
 
             # Transcribe segment
             text, success = self.client.transcribe(segment_audio, sample_rate=sample_rate, language=language, initial_prompt=initial_prompt)
+            _debug_log(f"[Transcribe] success={success}, raw_text='{text[:100] if text else '(empty)'}...'")
+            if not success:
+                _debug_log(f"[Transcribe] FAILED: {text}")  # text contains error message on failure
             if success:
+                original_text = text
                 text = post_process_text(text)
                 if text:
                     segment_timestamp = base_timestamp + segment.start
                     _debug_log(f"[Result] {speaker_name}: {text[:50]}...")
                     self.transcription_ready.emit(speaker_name, text, segment_timestamp)
+                else:
+                    _debug_log(f"[Transcribe] Text filtered out by post_process. Original: '{original_text[:100]}'")
 
     def _process_loopback_with_server_diarization(self, audio: np.ndarray, sample_rate: int, base_timestamp: float):
         """Process loopback audio using server-side diarization (for remote mode)."""
@@ -2488,12 +2494,18 @@ class MeetingTranscriberApp(QObject):
                 continue
 
             text, success = self.client.transcribe(segment_audio, sample_rate=sample_rate, language=language, initial_prompt=initial_prompt)
+            _debug_log(f"[UserMic Transcribe] success={success}, raw_text='{text[:100] if text else '(empty)'}...'")
+            if not success:
+                _debug_log(f"[UserMic Transcribe] FAILED: {text}")  # text contains error message on failure
             if success:
+                original_text = text
                 text = post_process_text(text)
                 if text:
                     segment_timestamp = base_timestamp + segment.start
                     _debug_log(f"[UserMic] {self.user_name}: {text[:50]}...")
                     self.transcription_ready.emit(self.user_name, text, segment_timestamp)
+                else:
+                    _debug_log(f"[UserMic] Text filtered out by post_process. Original: '{original_text[:100]}'")
 
     def _get_speaker_name(self, pyannote_label: str) -> str:
         """Convert pyannote speaker label to friendly name."""
