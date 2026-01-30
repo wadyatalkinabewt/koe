@@ -181,6 +181,10 @@ class StatusWindow(QMainWindow):
         """
         Update the status window based on the given status.
         """
+        # Safety check: don't update if window was closed (e.g., by cancel)
+        if not self.isVisible() and status != 'recording':
+            return
+
         if status == 'recording':
             self.indicator.setText("●")
             self.indicator.setStyleSheet(f"color: {self.RECORDING_COLOR};")
