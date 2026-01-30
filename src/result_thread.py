@@ -87,7 +87,9 @@ class ResultThread(QThread):
         self.is_running = False
         self.mutex.unlock()
         self.statusSignal.emit('idle')
-        self.wait()
+        # Don't use wait() here - it blocks the main thread and prevents
+        # signal processing, causing a deadlock when the worker thread
+        # tries to emit resultSignal. Let the thread finish naturally.
 
     def run(self):
         """Main execution method for the thread."""
