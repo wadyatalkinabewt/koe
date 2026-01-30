@@ -281,10 +281,11 @@ class SpeakerEnrollmentDialog(QMainWindow):
 
         # Calculate height based on number of unknown speakers
         num_unknown = len(self.unknown_speakers)
-        base_height = 80  # Header + footer
-        per_speaker_height = 85  # Each speaker row
+        base_height = 100  # Header + footer
+        per_speaker_height = 180  # Each speaker row (more space for samples)
         total_height = base_height + (num_unknown * per_speaker_height)
-        self.setFixedSize(500, min(total_height, 450))
+        # Larger dialog for better readability
+        self.setFixedSize(650, min(total_height, 600))
 
         main_widget = QWidget(self)
         main_layout = QVBoxLayout(main_widget)
@@ -341,22 +342,24 @@ class SpeakerEnrollmentDialog(QMainWindow):
         """Create a row for an unknown speaker (with name input + Enroll button)."""
         row = QWidget()
         row_layout = QVBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 8)
-        row_layout.setSpacing(4)
+        row_layout.setContentsMargins(0, 0, 0, 12)
+        row_layout.setSpacing(6)
 
-        # Speaker label
-        speaker_label = QLabel(f"{label}:")
+        # Speaker label with entry count
+        samples = self.speaker_samples.get(label, [])
+        speaker_label = QLabel(f"{label} ({len(samples)} entries):")
         speaker_label.setFont(QFont('Cascadia Code', 10, QFont.Bold))
         speaker_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
         row_layout.addWidget(speaker_label)
 
-        # Sample text
-        samples = self.speaker_samples.get(label, [])
+        # Sample text area (scrollable for long content)
         sample_text = self._format_samples(samples)
-        sample_label = QLabel(f'"{sample_text}"')
+        sample_label = QLabel(sample_text)
         sample_label.setFont(QFont('Cascadia Code', 9))
-        sample_label.setStyleSheet("color: #888;")
+        sample_label.setStyleSheet("color: #888; padding-left: 8px;")
         sample_label.setWordWrap(True)
+        sample_label.setTextFormat(Qt.PlainText)
+        sample_label.setMinimumHeight(40)  # Ensure visibility
         row_layout.addWidget(sample_label)
 
         # Name input row
@@ -404,13 +407,29 @@ class SpeakerEnrollmentDialog(QMainWindow):
         return row
 
     def _format_samples(self, samples: list) -> str:
-        """Format sample transcriptions for display."""
-        if samples:
-            sample_text = " | ".join(samples[:3])
-            if len(sample_text) > 150:
-                sample_text = sample_text[:150] + "..."
-            return sample_text
-        return "(no text samples)"
+        """Format sample transcriptions for display.
+
+        Shows up to 5 samples with full text for better speaker identification.
+        """
+        if not samples:
+            return "(no text samples)"
+
+        # Show up to 5 samples, each on its own line
+        display_samples = samples[:5]
+        lines = []
+        for sample in display_samples:
+            # Truncate very long individual samples
+            if len(sample) > 120:
+                sample = sample[:120] + "..."
+            lines.append(f"• {sample}")
+
+        result = "\n".join(lines)
+
+        # Add count if there are more
+        if len(samples) > 5:
+            result += f"\n... and {len(samples) - 5} more entries"
+
+        return result
 
     def _center_window(self):
         screen_geo = QApplication.desktop().availableGeometry()
@@ -429,7 +448,7 @@ class SpeakerEnrollmentDialog(QMainWindow):
         target_embedding = self.unknown_speakers[target_label]
         similar = []
 
-        SIMILARITY_THRESHOLD = 0.35  # Same as match threshold
+        SIMILARITY_THRESHOLD = 0.40  # Same as consolidation threshold
 
         for label, embedding in self.unknown_speakers.items():
             if label == target_label:
@@ -521,6 +540,56 @@ class SpeakerEnrollmentDialog(QMainWindow):
             _debug_log(f"[Enroll] ERROR: Empty name for label '{label}'")
             return
 
+        # Check if name is already enrolled (prevent accidental overwrites)
+        if self.diarizer:
+            existing_speakers = self.diarizer.list_enrolled_speakers()
+            if name in existing_speakers:
+                _debug_log(f"[Enroll] WARNING: '{name}' is already enrolled - showing warning")
+                # Show warning and abort
+                name_input.setStyleSheet("""
+                    QLineEdit {
+                        background: rgba(255, 100, 100, 0.2);
+                        border: 1px solid #ff6666;
+                        border-radius: 3px;
+                        padding: 6px 10px;
+                        color: #ff6666;
+                    }
+                """)
+                name_input.setText(f"'{name}' already enrolled!")
+                # Re-enable after 2 seconds
+                QTimer.singleShot(2000, lambda: self._reset_input_after_warning(label, name_input))
+                return
+
+        # Check if this name was just used in this session (another speaker enrolled with same name)
+        # This is a MANUAL MERGE - user is saying "this speaker is also <name>"
+        for other_label, other_input in self._name_inputs.items():
+            if other_label != label and not other_input.isEnabled():
+                enrolled_text = other_input.text()
+                if f"Enrolled as {name}" == enrolled_text or f"Merged as {name}" == enrolled_text:
+                    _debug_log(f"[Enroll] Manual merge: '{label}' is also '{name}' (user override)")
+                    # User recognizes this is the same person from transcript context
+                    # Just rewrite the transcript, don't save new embedding (first one is usually better)
+                    self._rewrite_transcript([label], name)
+
+                    # Update UI to show merged
+                    name_input.setEnabled(False)
+                    name_input.setText(f"Merged as {name}")
+                    name_input.setStyleSheet("""
+                        QLineEdit {
+                            background: rgba(0, 255, 136, 0.1);
+                            border: 1px solid #00ff88;
+                            border-radius: 3px;
+                            padding: 6px 10px;
+                            color: #00ff88;
+                        }
+                    """)
+                    enroll_btn = self._enroll_buttons.get(label)
+                    if enroll_btn:
+                        enroll_btn.setEnabled(False)
+                    self.unknown_speakers.pop(label, None)
+                    _debug_log(f"[Enroll] Manual merge complete: '{label}' -> '{name}'")
+                    return
+
         # Get the embedding from our stored copy (safer than relying on diarizer's session)
         embedding = self.unknown_speakers.get(label)
         if embedding is None:
@@ -588,6 +657,25 @@ class SpeakerEnrollmentDialog(QMainWindow):
             self.unknown_speakers.pop(label, None)
 
             self.enrolledSignal.emit(label, name)
+
+    def _reset_input_after_warning(self, label: str, name_input):
+        """Reset input field after showing duplicate name warning."""
+        if name_input.isEnabled():
+            return  # Already processed, don't reset
+        name_input.setEnabled(True)
+        name_input.setText("")
+        name_input.setPlaceholderText("Enter name to enroll...")
+        name_input.setStyleSheet("""
+            QLineEdit {
+                background: rgba(0, 0, 0, 0.3);
+                border: 1px solid #3a4a4a;
+                border-radius: 3px;
+                padding: 6px 10px;
+                color: #00ff88;
+            }
+            QLineEdit:focus { border-color: #00ff88; }
+        """)
+        _debug_log(f"[Enroll] Reset input for '{label}' after warning")
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -2198,8 +2286,28 @@ class MeetingTranscriberApp(QObject):
             # This must happen BEFORE diarizer.reset_session() which is called on next meeting start
             unknown_speakers = {}
             speaker_samples = {}
+            speaker_merges = {}  # Track consolidated speakers for transcript rewriting
+
             if self._diarizer and self._diarization_available:
-                # Local diarization mode - get from local diarizer
+                # Local diarization mode - consolidate similar speakers first
+                _debug_log("[Meeting] Consolidating session speakers...")
+                speaker_merges = self._diarizer.consolidate_session_speakers(similarity_threshold=0.40)
+
+                # Rewrite transcript entries with merged speaker names
+                if speaker_merges:
+                    merged_count = 0
+                    for entry in self.transcript.entries:
+                        if entry.speaker in speaker_merges:
+                            old_speaker = entry.speaker
+                            entry.speaker = speaker_merges[old_speaker]
+                            merged_count += 1
+                    if merged_count > 0:
+                        _debug_log(f"[Meeting] Rewrote {merged_count} transcript entries after speaker consolidation")
+                        # Re-save transcript with consolidated speakers
+                        self.transcript.save(filename=filename, notes_markdown=notes_md)
+                        _debug_log(f"[Meeting] Transcript re-saved with consolidated speakers")
+
+                # Now get remaining unenrolled speakers
                 unknown_speakers = self._diarizer.get_unenrolled_session_speakers()
             elif self._server_diarization_available:
                 # Server diarization mode - fetch from server
@@ -2208,16 +2316,16 @@ class MeetingTranscriberApp(QObject):
 
             if unknown_speakers:
                 _debug_log(f"[Meeting] Found {len(unknown_speakers)} unknown speakers from diarization")
-                # Get sample transcriptions for each unknown speaker from transcript
+                # Get ALL transcriptions for each unknown speaker (for better identification)
                 for entry in self.transcript.entries:
                     if entry.speaker in unknown_speakers:
                         if entry.speaker not in speaker_samples:
                             speaker_samples[entry.speaker] = []
-                        # Keep up to 3 samples per speaker
-                        if len(speaker_samples[entry.speaker]) < 3:
-                            # Truncate long text
-                            sample = entry.text[:60] + "..." if len(entry.text) > 60 else entry.text
-                            speaker_samples[entry.speaker].append(sample)
+                        # Keep ALL samples (dialog will display them in scrollable area)
+                        # Include timestamp for context
+                        timestamp = f"[{entry.timestamp}]" if hasattr(entry, 'timestamp') else ""
+                        sample = f"{timestamp} {entry.text}".strip()
+                        speaker_samples[entry.speaker].append(sample)
 
                 # Filter out speakers with no transcript entries (likely hallucinations)
                 # A speaker can exist in diarization but have no transcribed text if pyannote

@@ -132,12 +132,17 @@ class TranscriptionClient:
         if filter_to_speaker:
             payload["filter_to_speaker"] = filter_to_speaker
 
+        # Dynamic timeout based on audio length
+        # Base 30s + 2x audio duration, capped at 300s (5 min)
+        audio_duration_sec = len(audio_data) / sample_rate
+        dynamic_timeout = min(30.0 + (audio_duration_sec * 2), 300.0)
+
         try:
-            _debug(f"  POST {self.server_url}/transcribe (connect={self.connect_timeout}s, read={self.timeout}s)...")
+            _debug(f"  POST {self.server_url}/transcribe (connect={self.connect_timeout}s, read={dynamic_timeout:.1f}s for {audio_duration_sec:.1f}s audio)...")
             response = requests.post(
                 f"{self.server_url}/transcribe",
                 json=payload,
-                timeout=(self.connect_timeout, self.timeout)  # (connect, read) timeouts
+                timeout=(self.connect_timeout, dynamic_timeout)  # (connect, read) timeouts
             )
             _debug(f"  Response received: status={response.status_code}")
 
@@ -151,7 +156,7 @@ class TranscriptionClient:
                 return f"Server error: {response.status_code}", False
 
         except requests.Timeout:
-            _debug("  TIMEOUT after {self.timeout}s")
+            _debug(f"  TIMEOUT after {dynamic_timeout:.1f}s (audio was {audio_duration_sec:.1f}s)")
             return "Transcription timed out", False
         except requests.RequestException as e:
             _debug(f"  REQUEST ERROR: {e}")
@@ -305,11 +310,16 @@ class TranscriptionClient:
         if user_name:
             payload["user_name"] = user_name
 
+        # Dynamic timeout based on audio length
+        # Diarization takes longer: base 45s + 3x audio duration, capped at 300s
+        audio_duration_sec = len(audio_data) / sample_rate
+        dynamic_timeout = min(45.0 + (audio_duration_sec * 3), 300.0)
+
         try:
             response = requests.post(
                 f"{self.server_url}/transcribe_meeting",
                 json=payload,
-                timeout=self.timeout
+                timeout=(self.connect_timeout, dynamic_timeout)
             )
 
             if response.status_code == 200:
