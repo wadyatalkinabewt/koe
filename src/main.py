@@ -439,12 +439,17 @@ class KoeApp(QObject):
             # Signal completion so status window shows "Complete!" for 2 seconds
             _debug("  Checking status window...")
             if not ConfigManager.get_config_value("misc", "hide_status_window"):
-                _debug("  Updating status window to 'complete'...")
-                ConfigManager.console_print('Signaling completion to status window...')
-                # Call updateStatus directly - statusSignal is for window-to-app communication
-                self.status_window.updateStatus('complete')
-                _debug("  Status window updated")
-                ConfigManager.console_print('Status window will close after showing completion')
+                # Only update if window is still visible (might have been closed by cancel)
+                if self.status_window.isVisible():
+                    _debug("  Updating status window to 'complete'...")
+                    ConfigManager.console_print('Signaling completion to status window...')
+                    # Call updateStatus directly - statusSignal is for window-to-app communication
+                    self.status_window.updateStatus('complete')
+                    _debug("  Status window updated")
+                    ConfigManager.console_print('Status window will close after showing completion')
+                else:
+                    _debug("  Status window already closed, skipping update")
+                    ConfigManager.console_print('Status window already closed')
 
             _debug("  Restarting key listener...")
             if ConfigManager.get_config_value("recording_options", "recording_mode") == "continuous" and not self.continuous_stopped:
