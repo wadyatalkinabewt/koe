@@ -61,13 +61,14 @@ class SpeakerDiarizer:
         self._device = device
         self._known_speakers: Dict[str, np.ndarray] = {}  # name -> embedding (enrolled speakers)
         self._embeddings_dir = Path(__file__).parent.parent.parent / "speaker_embeddings"
-        self._similarity_threshold = 0.35  # Cosine similarity threshold for matching (lowered for cross-chunk variance)
+        self._similarity_threshold = 0.25  # Cosine similarity threshold for matching (lowered for cross-chunk variance)
 
         # Session speaker tracking (for cross-chunk consistency)
         self._session_speakers: Dict[str, np.ndarray] = {}  # "Speaker 1" -> embedding
         self._session_speaker_counter = 0
         self._session_embedding_counts: Dict[str, int] = {}  # Track how many embeddings contributed
         self._enrolled_seen_this_session: set = set()  # Track which enrolled speakers have been seen
+        self._last_active_session_speaker: Optional[str] = None  # Most recently assigned session speaker
 
         # Adaptive enrollment settings
         self._adaptive_threshold = 0.6  # Only update if similarity > this (high confidence)
@@ -265,6 +266,7 @@ class SpeakerDiarizer:
                 matched_session = self._match_embedding_to_session(emb)
                 if matched_session:
                     chunk_to_session[chunk_label] = matched_session
+                    self._last_active_session_speaker = matched_session  # Track for fallback
                     _dlog(f"[Diarization] {chunk_label} -> session: {matched_session}")
                     # Update session embedding with running average for better matching
                     self._update_session_embedding(matched_session, emb)
@@ -285,6 +287,7 @@ class SpeakerDiarizer:
                     self._session_speakers[new_label] = emb
                     self._session_embedding_counts[new_label] = 1
                     chunk_to_session[chunk_label] = new_label
+                    self._last_active_session_speaker = new_label  # Track for fallback
                     _dlog(f"[Diarization] {chunk_label} -> NEW: {new_label}")
 
             # Convert to segments with consistent labels
@@ -294,21 +297,29 @@ class SpeakerDiarizer:
                 consistent_label = chunk_to_session.get(speaker)
 
                 if consistent_label is None:
-                    # Unmapped speaker (embedding extraction failed) - assign to session
-                    # This prevents raw SPEAKER_XX labels leaking through
+                    # Unmapped speaker (embedding extraction failed) - assign to existing session speaker
+                    # This prevents raw SPEAKER_XX labels leaking through AND prevents speaker fragmentation
 
-                    # If we've hit max_speakers and have existing session speakers,
-                    # assign to first session speaker instead of creating new
-                    total_speakers = len(self._enrolled_seen_this_session) + len(self._session_speakers)
-                    if total_speakers >= max_speakers and self._session_speakers:
+                    # Prefer: last active session speaker > any session speaker > new speaker
+                    if self._last_active_session_speaker and self._last_active_session_speaker in self._session_speakers:
+                        # Assign to last active (most likely the same person speaking)
+                        consistent_label = self._last_active_session_speaker
+                        chunk_to_session[speaker] = consistent_label
+                        _dlog(f"[Diarization] {speaker} -> fallback REUSE (last_active): {consistent_label}")
+                    elif self._session_speakers:
+                        # Assign to first session speaker (better than creating new)
                         consistent_label = next(iter(self._session_speakers.keys()))
                         chunk_to_session[speaker] = consistent_label
-                        _dlog(f"[Diarization] {speaker} -> fallback MERGED (total={total_speakers}, max={max_speakers}): {consistent_label}")
+                        _dlog(f"[Diarization] {speaker} -> fallback REUSE (first): {consistent_label}")
                     else:
+                        # No session speakers exist yet - must create first one
                         self._session_speaker_counter += 1
                         consistent_label = f"Speaker {self._session_speaker_counter}"
+                        self._session_speakers[consistent_label] = np.zeros(256)  # Placeholder embedding
+                        self._session_embedding_counts[consistent_label] = 0
                         chunk_to_session[speaker] = consistent_label
-                        _dlog(f"[Diarization] {speaker} -> fallback: {consistent_label}")
+                        self._last_active_session_speaker = consistent_label
+                        _dlog(f"[Diarization] {speaker} -> fallback NEW (first): {consistent_label}")
 
                 segments.append(SpeakerSegment(
                     start=turn.start,
@@ -469,6 +480,72 @@ class SpeakerDiarizer:
         if best_match:
             _dlog(f"[MaxSpeakers] Force-merging with closest: {best_match} (sim={best_similarity:.3f})")
         return best_match
+
+    def consolidate_session_speakers(self, similarity_threshold: float = 0.40) -> Dict[str, str]:
+        """
+        Merge similar session speakers to reduce fragmentation.
+
+        Should be called AFTER meeting ends, BEFORE showing enrollment dialog.
+        This catches splits that happened due to threshold misses during recording.
+
+        Args:
+            similarity_threshold: Speakers with similarity above this are merged (default 0.40)
+
+        Returns:
+            Dict mapping old speaker labels to new labels (for transcript rewriting)
+            e.g., {"Speaker 5": "Speaker 3", "Speaker 7": "Speaker 3"}
+        """
+        if len(self._session_speakers) < 2:
+            return {}
+
+        _dlog(f"[Consolidate] Starting consolidation of {len(self._session_speakers)} session speakers")
+
+        # Build list of (label, embedding) sorted by embedding count (most samples first)
+        speakers = [(label, self._session_speakers[label], self._session_embedding_counts.get(label, 1))
+                    for label in self._session_speakers]
+        speakers.sort(key=lambda x: -x[2])  # Most samples first (more reliable embedding)
+
+        # Track merges: old_label -> new_label
+        merges = {}
+        # Track which speakers have been merged into others
+        merged_away = set()
+
+        for i, (label1, emb1, count1) in enumerate(speakers):
+            if label1 in merged_away:
+                continue
+
+            for j, (label2, emb2, count2) in enumerate(speakers[i+1:], i+1):
+                if label2 in merged_away:
+                    continue
+
+                # Calculate cosine similarity (embeddings are normalized)
+                similarity = np.dot(emb1, emb2)
+
+                if similarity >= similarity_threshold:
+                    # Merge label2 into label1 (label1 has more samples)
+                    _dlog(f"[Consolidate] Merging '{label2}' into '{label1}' (sim={similarity:.3f}, counts={count1}/{count2})")
+                    merges[label2] = label1
+                    merged_away.add(label2)
+
+                    # Update label1's embedding with combined average
+                    total_count = count1 + count2
+                    combined_emb = (emb1 * count1 + emb2 * count2) / total_count
+                    combined_emb = combined_emb / np.linalg.norm(combined_emb)  # Re-normalize
+
+                    self._session_speakers[label1] = combined_emb
+                    self._session_embedding_counts[label1] = total_count
+
+        # Remove merged speakers from session
+        for old_label in merged_away:
+            del self._session_speakers[old_label]
+            self._session_embedding_counts.pop(old_label, None)
+
+        if merges:
+            _dlog(f"[Consolidate] Merged {len(merges)} speakers, {len(self._session_speakers)} remaining")
+        else:
+            _dlog(f"[Consolidate] No speakers merged (all below threshold {similarity_threshold})")
+
+        return merges
 
     def get_unenrolled_session_speakers(self) -> Dict[str, np.ndarray]:
         """
@@ -703,6 +780,7 @@ class SpeakerDiarizer:
         self._session_speaker_counter = 0
         self._enrolled_updated.clear()
         self._enrolled_seen_this_session.clear()  # Clear enrolled speaker tracking
+        self._last_active_session_speaker = None  # Clear last active speaker
         _dlog("[Diarization] Session reset - speaker tracking cleared")
 
     def _save_updated_embeddings(self):
