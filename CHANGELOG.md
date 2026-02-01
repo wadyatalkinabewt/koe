@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 ### Added
+- **Parakeet Engine (2026-02-01)**: NVIDIA NeMo-based transcription ~50x faster than Whisper
+  - Engine abstraction with factory pattern (`src/engines/`)
+  - WSL integration with systemd service for Parakeet
+  - Settings UI for engine/model/device selection
+  - CTC models recommended (TDT models have CUDA 12.8 incompatibility)
+  - Auto-downloads models on first use
 - **Scribe**: Continuous transcription with speaker diarization
 - **Server Architecture**: Shared Whisper server (saves GPU memory, enables remote transcription)
 - **Speaker Identification**: Pyannote-based diarization with voice fingerprinting
@@ -149,6 +155,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Mic/loopback timing inconsistency (2026-01-22)**: Mic audio (fast) could arrive before loopback (slow diarization), causing transcript ordering issues. Both now go through diarization pipeline.
 - **User self-enrollment gap (2026-01-22)**: User couldn't enroll/update themselves from post-meeting dialog because mic wasn't diarized. Now mic embedding is extracted and tracked in session.
 - **Post-meeting enrollment not appearing in remote mode (2026-01-23)**: When using server-side diarization (laptop over Tailscale), unknown speakers like "Speaker 1" appeared in transcripts but the enrollment prompt never showed. Fixed by adding `/diarization/unenrolled` API endpoint to return session speakers with embeddings, and fetching from server when in remote mode.
+- **Parakeet TDT CUDA 12.8 crash (2026-02-01)**: TDT model's CUDA graph decoder expected 6 return values from `cu_call()` but CUDA 12.8 returns 5. Switched default to CTC model which doesn't use CUDA graphs.
+- **Parakeet "not installed" in Settings (2026-02-01)**: WSL availability check failed due to UTF-16 LE encoding of `wsl --list` output on Windows. Fixed with proper decoding.
+- **Unicode emoji crash (2026-02-01)**: Config validation warnings used ⚠ emoji which Windows console couldn't encode. Changed to ASCII `[!]`.
 
 ## [1.0.1] - 2024-01-28
 ### Added

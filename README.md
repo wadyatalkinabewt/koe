@@ -33,15 +33,27 @@ Koe provides two primary modes of operation:
 ### Key Capabilities
 
 - **Local Processing**: All speech recognition runs locally on your GPU - no cloud services required for transcription
+- **Dual Engine Support**: Choose between Whisper (99 languages) or Parakeet (~50x faster, English-only)
 - **Speaker Diarization**: Identifies who said what using voice fingerprinting
 - **AI Summarization**: Auto-generates meeting summaries using Claude API (~$0.04/meeting)
 - **Remote Support**: Use from a laptop by connecting to your desktop's GPU over Tailscale
 - **Privacy-First**: Audio never leaves your network (except optional AI summarization)
 
+### Transcription Engines
+
+| Feature | Whisper | Parakeet |
+|---------|---------|----------|
+| Speed | 1x (baseline) | ~50x faster |
+| Languages | 99+ languages | English only |
+| Runs on | Windows (native) | WSL (Ubuntu) |
+| VRAM | ~3GB (large-v3) | ~2GB |
+| Setup | Automatic | One-time WSL setup |
+
 ### Technical Foundation
 
 Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, extensively modified with:
 - Shared server architecture (single GPU model serves multiple clients)
+- Multi-engine support (Whisper and Parakeet)
 - Speaker diarization with pyannote-audio
 - Meeting transcription with category organization
 - Remote transcription over Tailscale
@@ -122,8 +134,10 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
 | Component | VRAM |
 |-----------|------|
 | Whisper large-v3 model | ~3GB |
+| Parakeet CTC 0.6B model | ~2GB |
 | Pyannote diarization (when active) | ~0.5-1GB |
-| **Total during meeting** | ~3.5-4GB |
+| **Total during meeting (Whisper)** | ~3.5-4GB |
+| **Total during meeting (Parakeet)** | ~2.5-3GB |
 
 ---
 
@@ -146,10 +160,16 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
     ┌─────────────────────────────────────────────────────────────────┐
     │                    Koe Server (Port 9876)                       │
     │                                                                 │
+    │  ENGINE: Whisper (Windows) OR Parakeet (WSL)                   │
+    │  ─────────────────────────────────────────                     │
     │  ┌─────────────────────────────────────────────────────────┐   │
-    │  │  Whisper large-v3                        (~3GB VRAM)    │   │
+    │  │  Whisper large-v3 (default)              (~3GB VRAM)    │   │
     │  │  - faster-whisper optimized implementation              │   │
     │  │  - Supports 99 languages                                │   │
+    │  │  OR                                                     │   │
+    │  │  Parakeet CTC 0.6B                       (~2GB VRAM)    │   │
+    │  │  - NVIDIA NeMo via WSL                                  │   │
+    │  │  - ~50x faster, English only                            │   │
     │  └─────────────────────────────────────────────────────────┘   │
     │                                                                 │
     │  ┌─────────────────────────────────────────────────────────┐   │
@@ -576,6 +596,51 @@ If you prefer manual setup or the wizard doesn't work:
    curl http://100.x.x.x:9876/status
    ```
 
+### Parakeet Engine Setup (Optional, ~50x Faster)
+
+Parakeet provides ~50x faster transcription but only supports English and requires WSL.
+
+#### Prerequisites
+
+1. **WSL with Ubuntu 22.04**
+   ```powershell
+   # Install WSL (PowerShell as Admin)
+   wsl --install -d Ubuntu-22.04
+   ```
+
+2. **NVIDIA GPU drivers in WSL**
+   - Drivers should be automatically available from Windows host
+
+#### Setup Steps
+
+1. **Select Parakeet in Settings**
+   - Open Settings → Transcription Engine → Select "Parakeet"
+   - Select model (CTC 0.6B recommended)
+   - Click Save
+
+2. **Restart Koe**
+   - Exit via tray icon
+   - Launch again - WSL server starts automatically
+
+3. **Verify**
+   ```powershell
+   curl http://localhost:9876/status
+   # Should show: {"model":"nvidia/parakeet-ctc-0.6b",...}
+   ```
+
+#### WSL Service Management
+
+```bash
+# Check service status
+wsl -d Ubuntu-22.04 -- systemctl status koe-server
+
+# View logs
+wsl -d Ubuntu-22.04 -- journalctl -u koe-server -n 50
+
+# Restart service
+wsl -d Ubuntu-22.04 -- systemctl restart koe-server
+```
+
 ---
 
 ## Configuration
@@ -597,9 +662,12 @@ If you prefer manual setup or the wizard doesn't work:
 | **Filter snippets to my voice** | Only transcribe your voice in Snippet mode (adds latency) |
 | **Meetings Root Folder** | Where meeting transcripts are saved |
 | **Snippets Folder** | Where rolling hotkey snippets are saved |
+| **Engine** | Transcription engine: Whisper (default) or Parakeet (~50x faster) |
+| **Model** | Model to use (e.g., large-v3 for Whisper, parakeet-ctc-0.6b for Parakeet) |
+| **Device** | Auto (detect GPU), CUDA (NVIDIA GPU), or CPU (no GPU required) |
 | **Toggle Hotkey** | Global hotkey (default: `Ctrl+Shift+Space`) |
 | **Play sound on completion** | Beep when transcription finishes |
-| **Transcription Prompt** | Hint for Whisper (names, punctuation style) |
+| **Transcription Prompt** | Hint for transcription (names, punctuation style) |
 
 ### Environment Variables
 
@@ -958,6 +1026,46 @@ taskkill /F /IM pythonw.exe
 # Restart
 Start Koe Desktop
 ```
+
+### Parakeet Engine Issues
+
+#### Parakeet Shows "Not Installed"
+
+**Cause:** WSL with Ubuntu not detected.
+
+**Solutions:**
+1. Install WSL: `wsl --install -d Ubuntu-22.04`
+2. Verify installation: `wsl --list -v` (should show Ubuntu-22.04)
+
+#### Parakeet Server Not Starting
+
+```powershell
+# Check service status
+wsl -d Ubuntu-22.04 -- systemctl status koe-server
+
+# Check logs
+wsl -d Ubuntu-22.04 -- journalctl -u koe-server -n 50
+
+# Enable service if not enabled
+wsl -d Ubuntu-22.04 -- systemctl enable koe-server
+
+# Manual start
+wsl -d Ubuntu-22.04 -- systemctl start koe-server
+```
+
+#### Parakeet Slower Than Expected
+
+1. First transcription is slow (model loading) - subsequent ones are fast
+2. Verify GPU is being used: `curl http://localhost:9876/status` should show `"device":"cuda"`
+3. Check GPU access in WSL: `wsl -d Ubuntu-22.04 -- nvidia-smi`
+
+#### Switching Between Engines
+
+1. Change engine in Settings → Transcription Engine
+2. Exit Koe completely (tray icon → Exit)
+3. Kill lingering servers: `taskkill /F /IM pythonw.exe`
+4. For Parakeet, also stop WSL: `wsl -d Ubuntu-22.04 -- systemctl stop koe-server`
+5. Restart Koe
 
 ### Remote/Laptop Issues
 
