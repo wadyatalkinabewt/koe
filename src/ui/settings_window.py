@@ -15,6 +15,19 @@ from ui.base_window import BaseWindow
 from ui import theme
 from utils import ConfigManager
 
+# Import engine factory for checking available engines
+try:
+    from engines import get_available_engines, is_engine_available, create_engine
+    ENGINES_AVAILABLE = True
+except ImportError:
+    ENGINES_AVAILABLE = False
+    def get_available_engines():
+        return ["whisper"]
+    def is_engine_available(engine_id):
+        return engine_id == "whisper"
+    def create_engine(engine_id):
+        return None
+
 load_dotenv()
 
 
@@ -67,7 +80,7 @@ class SettingsWindow(BaseWindow):
 
     def _get_current_values(self) -> dict:
         """Get current values of all settings fields."""
-        return {
+        values = {
             'user_name': self.user_name_input[1].text().strip() or None,
             'my_voice': self.my_voice_dropdown.currentData(),
             'filter_snippets': self.filter_snippets_checkbox.isChecked(),
@@ -77,6 +90,14 @@ class SettingsWindow(BaseWindow):
             'sound_on_completion': self.sound_checkbox.isChecked(),
             'initial_prompt': self.initial_prompt_input.toPlainText().strip() or None,
         }
+        # Add engine settings if available
+        if hasattr(self, 'engine_dropdown'):
+            values['engine'] = self.engine_dropdown.currentData()
+        if hasattr(self, 'model_dropdown'):
+            values['model'] = self.model_dropdown.currentData()
+        if hasattr(self, 'device_dropdown'):
+            values['device'] = self.device_dropdown.currentData()
+        return values
 
     def init_settings_ui(self):
         """Initialize the terminal-style settings UI."""
@@ -287,6 +308,65 @@ class SettingsWindow(BaseWindow):
 
         output_group.setLayout(output_layout)
         content_layout.addWidget(output_group)
+
+        # ===== TRANSCRIPTION ENGINE SECTION =====
+        engine_group = self._create_section("Transcription Engine")
+        engine_layout = QVBoxLayout()
+        engine_layout.setSpacing(12)
+
+        engine_help = QLabel("// engine used by the transcription server")
+        engine_help.setObjectName("helpText")
+        engine_layout.addWidget(engine_help)
+
+        # Engine dropdown
+        engine_label = QLabel("Engine")
+        engine_layout.addWidget(engine_label)
+
+        self.engine_dropdown = QComboBox()
+        self.engine_dropdown.setFocusPolicy(Qt.StrongFocus)
+        self.engine_dropdown.wheelEvent = lambda e: e.ignore()
+        self._populate_engine_dropdown()
+        self.engine_dropdown.currentIndexChanged.connect(self._on_engine_changed)
+        engine_layout.addWidget(self.engine_dropdown)
+
+        # Model dropdown (changes based on engine)
+        model_label = QLabel("Model")
+        engine_layout.addWidget(model_label)
+
+        self.model_dropdown = QComboBox()
+        self.model_dropdown.setFocusPolicy(Qt.StrongFocus)
+        self.model_dropdown.wheelEvent = lambda e: e.ignore()
+        self._populate_model_dropdown()
+        engine_layout.addWidget(self.model_dropdown)
+
+        # Model info label
+        self.model_info_label = QLabel("")
+        self.model_info_label.setObjectName("helpText")
+        self.model_info_label.setWordWrap(True)
+        engine_layout.addWidget(self.model_info_label)
+        self._update_model_info()
+
+        # Device dropdown
+        device_label = QLabel("Device")
+        engine_layout.addWidget(device_label)
+
+        self.device_dropdown = QComboBox()
+        self.device_dropdown.setFocusPolicy(Qt.StrongFocus)
+        self.device_dropdown.wheelEvent = lambda e: e.ignore()
+        self._populate_device_dropdown()
+        engine_layout.addWidget(self.device_dropdown)
+
+        device_help = QLabel("// auto detects GPU, use CPU if no NVIDIA GPU")
+        device_help.setObjectName("helpText")
+        engine_layout.addWidget(device_help)
+
+        # Restart warning
+        restart_label = QLabel("// changing engine/device requires server restart")
+        restart_label.setObjectName("helpText")
+        engine_layout.addWidget(restart_label)
+
+        engine_group.setLayout(engine_layout)
+        content_layout.addWidget(engine_group)
 
         # ===== ENROLLED SPEAKERS SECTION =====
         speakers_group = self._create_section("Enrolled Speakers")
@@ -540,6 +620,22 @@ class SettingsWindow(BaseWindow):
         # Advanced - Prompt
         ConfigManager.set_config_value(current_values['initial_prompt'], 'model_options', 'common', 'initial_prompt')
 
+        # Engine settings
+        if 'engine' in current_values:
+            ConfigManager.set_config_value(current_values['engine'], 'model_options', 'engine')
+        if current_values.get('engine'):
+            engine = current_values['engine']
+            if engine == 'whisper':
+                if 'model' in current_values:
+                    ConfigManager.set_config_value(current_values['model'], 'model_options', 'whisper', 'model')
+                if 'device' in current_values:
+                    ConfigManager.set_config_value(current_values['device'], 'model_options', 'whisper', 'device')
+            elif engine == 'parakeet':
+                if 'model' in current_values:
+                    ConfigManager.set_config_value(current_values['model'], 'model_options', 'parakeet', 'model')
+                if 'device' in current_values:
+                    ConfigManager.set_config_value(current_values['device'], 'model_options', 'parakeet', 'device')
+
         ConfigManager.save_config()
 
         QMessageBox.information(
@@ -667,6 +763,140 @@ class SettingsWindow(BaseWindow):
         self.filter_snippets_checkbox.setEnabled(has_voice)
         if not has_voice:
             self.filter_snippets_checkbox.setChecked(False)
+
+    def _populate_engine_dropdown(self):
+        """Populate the engine dropdown with available engines."""
+        self.engine_dropdown.clear()
+
+        engines = [
+            ("whisper", "Whisper (faster-whisper)", "Well-tested, multilingual"),
+            ("parakeet", "Parakeet (NVIDIA NeMo)", "~50x faster, English only"),
+        ]
+
+        current_engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
+        selected_index = 0
+
+        for i, (engine_id, name, description) in enumerate(engines):
+            available = is_engine_available(engine_id)
+            if available:
+                self.engine_dropdown.addItem(name, engine_id)
+            else:
+                # Show unavailable engines as disabled with hint
+                display_name = f"{name} (not installed)"
+                self.engine_dropdown.addItem(display_name, engine_id)
+                # Disable the item
+                model = self.engine_dropdown.model()
+                item = model.item(self.engine_dropdown.count() - 1)
+                item.setEnabled(False)
+
+            if engine_id == current_engine and available:
+                selected_index = i
+
+        self.engine_dropdown.setCurrentIndex(selected_index)
+
+    def _populate_model_dropdown(self):
+        """Populate the model dropdown based on selected engine."""
+        self.model_dropdown.clear()
+
+        engine_id = self.engine_dropdown.currentData() if hasattr(self, 'engine_dropdown') else 'whisper'
+
+        if engine_id == 'whisper':
+            models = [
+                ("tiny", "Tiny (~75MB)", 500),
+                ("tiny.en", "Tiny English (~75MB)", 500),
+                ("base", "Base (~150MB)", 600),
+                ("base.en", "Base English (~150MB)", 600),
+                ("small", "Small (~500MB)", 1000),
+                ("small.en", "Small English (~500MB)", 1000),
+                ("medium", "Medium (~1.5GB)", 2000),
+                ("medium.en", "Medium English (~1.5GB)", 2000),
+                ("large-v3", "Large v3 (~3GB) - Best accuracy", 4000),
+                ("large-v2", "Large v2 (~3GB)", 4000),
+            ]
+            current_model = ConfigManager.get_config_value('model_options', 'whisper', 'model') or 'large-v3'
+        elif engine_id == 'parakeet':
+            # Note: TDT models disabled due to CUDA 12.8 incompatibility
+            models = [
+                ("nvidia/parakeet-ctc-0.6b", "Parakeet CTC 0.6B - Recommended", 2000),
+                ("nvidia/parakeet-ctc-1.1b", "Parakeet CTC 1.1B - Higher accuracy", 3000),
+            ]
+            current_model = ConfigManager.get_config_value('model_options', 'parakeet', 'model') or 'nvidia/parakeet-ctc-0.6b'
+        else:
+            models = []
+            current_model = None
+
+        selected_index = 0
+        for i, (model_id, name, vram) in enumerate(models):
+            self.model_dropdown.addItem(name, model_id)
+            if model_id == current_model:
+                selected_index = i
+
+        if models:
+            self.model_dropdown.setCurrentIndex(selected_index)
+
+    def _on_engine_changed(self):
+        """Handle engine dropdown selection change."""
+        self._populate_model_dropdown()
+        self._populate_device_dropdown()
+        self._update_model_info()
+
+    def _update_model_info(self):
+        """Update the model info label based on current selection."""
+        if not hasattr(self, 'model_info_label'):
+            return
+
+        engine_id = self.engine_dropdown.currentData() if hasattr(self, 'engine_dropdown') else 'whisper'
+        model_id = self.model_dropdown.currentData() if hasattr(self, 'model_dropdown') else None
+
+        if engine_id == 'whisper':
+            vram_map = {
+                'tiny': 500, 'tiny.en': 500,
+                'base': 600, 'base.en': 600,
+                'small': 1000, 'small.en': 1000,
+                'medium': 2000, 'medium.en': 2000,
+                'large-v1': 4000, 'large-v2': 4000, 'large-v3': 4000, 'large': 4000,
+            }
+            vram = vram_map.get(model_id, 2000)
+            self.model_info_label.setText(f"// ~{vram}MB VRAM required")
+        elif engine_id == 'parakeet':
+            if not is_engine_available('parakeet'):
+                import sys
+                if sys.platform == 'win32':
+                    self.model_info_label.setText("// Requires WSL2 on Windows. Run server in WSL.")
+                else:
+                    self.model_info_label.setText("// pip install nemo_toolkit[asr]")
+            else:
+                self.model_info_label.setText("// ~2GB VRAM, English only, ~50x faster")
+        else:
+            self.model_info_label.setText("")
+
+    def _populate_device_dropdown(self):
+        """Populate the device dropdown with available options."""
+        self.device_dropdown.clear()
+
+        devices = [
+            ("auto", "Auto (detect GPU)"),
+            ("cuda", "CUDA (NVIDIA GPU)"),
+            ("cpu", "CPU (no GPU)"),
+        ]
+
+        engine_id = self.engine_dropdown.currentData() if hasattr(self, 'engine_dropdown') else 'whisper'
+
+        # Get current device from config
+        if engine_id == 'whisper':
+            current_device = ConfigManager.get_config_value('model_options', 'whisper', 'device') or 'auto'
+        elif engine_id == 'parakeet':
+            current_device = ConfigManager.get_config_value('model_options', 'parakeet', 'device') or 'auto'
+        else:
+            current_device = 'auto'
+
+        selected_index = 0
+        for i, (device_id, name) in enumerate(devices):
+            self.device_dropdown.addItem(name, device_id)
+            if device_id == current_device:
+                selected_index = i
+
+        self.device_dropdown.setCurrentIndex(selected_index)
 
     def paintEvent(self, event):
         """Override to use terminal dark background with green border."""

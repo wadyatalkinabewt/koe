@@ -16,14 +16,23 @@ meeting_options:
     type: str
     description: "Root folder for meetings. Transcripts saved to 'Transcripts' subfolder, organized by category subfolders."
 
-# Configuration options for the Whisper models
+# Configuration options for transcription engines
 model_options:
-  # Common configuration options
+  # Engine selection
+  engine:
+    value: whisper
+    type: str
+    description: "Transcription engine to use. Whisper is well-tested; Parakeet is ~50x faster but English-only."
+    options:
+      - whisper
+      - parakeet
+
+  # Common configuration options (shared by all engines)
   common:
     language:
-      value: null
+      value: en
       type: str
-      description: "The language code for the transcription in ISO-639-1 format."
+      description: "The language code for the transcription in ISO-639-1 format. Parakeet only supports English."
     temperature:
       value: 0.0
       type: float
@@ -33,7 +42,7 @@ model_options:
       type: str
       description: "A string used as an initial prompt to condition the transcription."
 
-  # Configuration options for the faster-whisper model
+  # Configuration options for the faster-whisper model (local fallback and legacy)
   local:
     model:
       value: base
@@ -81,6 +90,59 @@ model_options:
       value: null
       type: str
       description: "The path to the local Whisper model. If not specified, the default model will be downloaded."
+
+  # Whisper engine configuration (server-side)
+  whisper:
+    model:
+      value: large-v3
+      type: str
+      description: "Whisper model to use. Larger models are more accurate but slower."
+      options:
+        - tiny
+        - tiny.en
+        - base
+        - base.en
+        - small
+        - small.en
+        - medium
+        - medium.en
+        - large-v1
+        - large-v2
+        - large-v3
+    device:
+      value: cuda
+      type: str
+      description: "Device for Whisper model. Use 'cuda' for GPU, 'cpu' for CPU."
+      options:
+        - auto
+        - cuda
+        - cpu
+    compute_type:
+      value: float16
+      type: str
+      description: "Compute precision. float16 is faster on GPU, int8 for CPU."
+      options:
+        - float16
+        - float32
+        - int8
+
+  # Parakeet engine configuration (NVIDIA NeMo)
+  parakeet:
+    model:
+      value: nvidia/parakeet-ctc-0.6b
+      type: str
+      description: "Parakeet model to use. English only, ~50x faster than Whisper."
+      options:
+        - nvidia/parakeet-ctc-0.6b
+        - nvidia/parakeet-ctc-1.1b
+    device:
+      value: cuda
+      type: str
+      description: "Device for Parakeet model."
+      options:
+        - auto
+        - cuda
+        - cpu
 
 # Configuration options for activation and recording
 recording_options:

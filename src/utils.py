@@ -121,7 +121,7 @@ class ConfigManager:
 
         # Check if value is in allowed options
         if 'options' in schema_item and value not in schema_item['options']:
-            print(f"⚠ Config validation warning: '{path}' value '{value}' not in allowed options {schema_item['options']}. Using default.")
+            print(f"[!] Config validation warning: '{path}' value '{value}' not in allowed options {schema_item['options']}. Using default.")
             return False
 
         return True
