@@ -157,6 +157,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Post-meeting enrollment not appearing in remote mode (2026-01-23)**: When using server-side diarization (laptop over Tailscale), unknown speakers like "Speaker 1" appeared in transcripts but the enrollment prompt never showed. Fixed by adding `/diarization/unenrolled` API endpoint to return session speakers with embeddings, and fetching from server when in remote mode.
 - **Parakeet TDT CUDA 12.8 crash (2026-02-01)**: TDT model's CUDA graph decoder expected 6 return values from `cu_call()` but CUDA 12.8 returns 5. Switched default to CTC model which doesn't use CUDA graphs.
 - **Parakeet "not installed" in Settings (2026-02-01)**: WSL availability check failed due to UTF-16 LE encoding of `wsl --list` output on Windows. Fixed with proper decoding.
+- **Crash when clicking ESC during recording (2026-02-03)**: PyQt signal emitted to closed window during signal delivery caused crash. Replaced signal with direct callback; ESC cancel now only works during recording state (ignored during transcription).
 - **Unicode emoji crash (2026-02-01)**: Config validation warnings used ⚠ emoji which Windows console couldn't encode. Changed to ASCII `[!]`.
 
 ## [1.0.1] - 2024-01-28

@@ -86,7 +86,8 @@ class ResultThread(QThread):
         self.mutex.lock()
         self.is_running = False
         self.mutex.unlock()
-        self.statusSignal.emit('idle')
+        # Don't emit statusSignal here - the status window may already be closed
+        # by the cancel handler, and emitting to a closed window can crash.
         # Don't use wait() here - it blocks the main thread and prevents
         # signal processing, causing a deadlock when the worker thread
         # tries to emit resultSignal. Let the thread finish naturally.
@@ -172,81 +173,110 @@ class ResultThread(QThread):
 
         :return: numpy array of audio data, or None if the recording is too short
         """
-        recording_options = ConfigManager.get_config_section('recording_options')
-        self.sample_rate = recording_options.get('sample_rate') or 16000
-        frame_duration_ms = 30  # 30ms frame duration for WebRTC VAD
-        frame_size = int(self.sample_rate * (frame_duration_ms / 1000.0))
-        silence_duration_ms = recording_options.get('silence_duration') or 900
-        silence_frames = int(silence_duration_ms / frame_duration_ms)
+        _debug("  _record_audio() entered")
+        try:
+            recording_options = ConfigManager.get_config_section('recording_options')
+            self.sample_rate = recording_options.get('sample_rate') or 16000
+            frame_duration_ms = 30  # 30ms frame duration for WebRTC VAD
+            frame_size = int(self.sample_rate * (frame_duration_ms / 1000.0))
+            silence_duration_ms = recording_options.get('silence_duration') or 900
+            silence_frames = int(silence_duration_ms / frame_duration_ms)
+            _debug(f"  Config loaded: sample_rate={self.sample_rate}, frame_size={frame_size}")
 
-        # 150ms delay before starting VAD to avoid mistaking the sound of key pressing for voice
-        initial_frames_to_skip = int(0.15 * self.sample_rate / frame_size)
+            # 150ms delay before starting VAD to avoid mistaking the sound of key pressing for voice
+            initial_frames_to_skip = int(0.15 * self.sample_rate / frame_size)
 
-        # Create VAD only for recording modes that use it
-        recording_mode = recording_options.get('recording_mode') or 'continuous'
-        vad = None
-        if recording_mode in ('voice_activity_detection', 'continuous'):
-            vad = webrtcvad.Vad(2)  # VAD aggressiveness: 0 to 3, 3 being the most aggressive
-            speech_detected = False
-            silent_frame_count = 0
+            # Create VAD only for recording modes that use it
+            recording_mode = recording_options.get('recording_mode') or 'continuous'
+            vad = None
+            if recording_mode in ('voice_activity_detection', 'continuous'):
+                _debug("  Creating VAD...")
+                vad = webrtcvad.Vad(2)  # VAD aggressiveness: 0 to 3, 3 being the most aggressive
+                speech_detected = False
+                silent_frame_count = 0
+                _debug("  VAD created")
 
-        audio_buffer = deque(maxlen=frame_size)
-        recording = []
+            audio_buffer = deque(maxlen=frame_size)
+            recording = []
 
-        data_ready = Event()
-        buffer_lock = Lock()  # Protect audio_buffer access between threads
+            data_ready = Event()
+            buffer_lock = Lock()  # Protect audio_buffer access between threads
+            callback_error = [None]  # Mutable container to capture callback errors
 
-        def audio_callback(indata, frames, time, status):
-            if status:
-                ConfigManager.console_print(f"Audio callback status: {status}")
-            with buffer_lock:
-                audio_buffer.extend(indata[:, 0])
-            data_ready.set()
+            def audio_callback(indata, frames, time, status):
+                try:
+                    if status:
+                        ConfigManager.console_print(f"Audio callback status: {status}")
+                    if indata is None or len(indata) == 0:
+                        return  # Skip empty frames
+                    with buffer_lock:
+                        audio_buffer.extend(indata[:, 0])
+                    data_ready.set()
+                except Exception as e:
+                    callback_error[0] = str(e)
+                    data_ready.set()  # Unblock the main loop
 
-        with sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='int16',
-                            blocksize=frame_size, device=recording_options.get('sound_device'),
-                            callback=audio_callback):
-            while self.is_running and self.is_recording:
-                # Use timeout so we can check is_recording flag regularly
-                if not data_ready.wait(timeout=0.1):
-                    continue
-                data_ready.clear()
-
-                with buffer_lock:
-                    if len(audio_buffer) < frame_size:
-                        continue
-
-                    # Save frame
-                    frame = np.array(list(audio_buffer), dtype=np.int16)
-                    audio_buffer.clear()
-                recording.extend(frame)
-
-                # Avoid trying to detect voice in initial frames
-                if initial_frames_to_skip > 0:
-                    initial_frames_to_skip -= 1
-                    continue
-
-                if vad:
-                    if vad.is_speech(frame.tobytes(), self.sample_rate):
-                        silent_frame_count = 0
-                        if not speech_detected:
-                            ConfigManager.console_print("Speech detected.")
-                            speech_detected = True
-                    else:
-                        silent_frame_count += 1
-
-                    if speech_detected and silent_frame_count > silence_frames:
+            _debug("  Opening audio stream...")
+            with sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='int16',
+                                blocksize=frame_size, device=recording_options.get('sound_device'),
+                                callback=audio_callback):
+                _debug("  Audio stream opened, entering recording loop")
+                while self.is_running and self.is_recording:
+                    # Check for callback errors
+                    if callback_error[0]:
+                        _debug(f"  Callback error: {callback_error[0]}")
                         break
 
-        audio_data = np.array(recording, dtype=np.int16)
-        duration = len(audio_data) / self.sample_rate
+                    # Use timeout so we can check is_recording flag regularly
+                    if not data_ready.wait(timeout=0.1):
+                        continue
+                    data_ready.clear()
 
-        ConfigManager.console_print(f'Recording finished. Size: {audio_data.size} samples, Duration: {duration:.2f} seconds')
+                    with buffer_lock:
+                        if len(audio_buffer) < frame_size:
+                            continue
 
-        min_duration_ms = recording_options.get('min_duration') or 100
+                        # Save frame
+                        frame = np.array(list(audio_buffer), dtype=np.int16)
+                        audio_buffer.clear()
+                    recording.extend(frame)
 
-        if (duration * 1000) < min_duration_ms:
-            ConfigManager.console_print(f'Discarded due to being too short.')
-            return None
+                    # Avoid trying to detect voice in initial frames
+                    if initial_frames_to_skip > 0:
+                        initial_frames_to_skip -= 1
+                        continue
 
-        return audio_data
+                    if vad:
+                        if vad.is_speech(frame.tobytes(), self.sample_rate):
+                            silent_frame_count = 0
+                            if not speech_detected:
+                                ConfigManager.console_print("Speech detected.")
+                                speech_detected = True
+                        else:
+                            silent_frame_count += 1
+
+                        if speech_detected and silent_frame_count > silence_frames:
+                            _debug("  Silence detected, breaking loop")
+                            break
+
+                _debug("  Recording loop exited")
+
+            _debug("  Audio stream closed")
+            audio_data = np.array(recording, dtype=np.int16)
+            duration = len(audio_data) / self.sample_rate
+
+            ConfigManager.console_print(f'Recording finished. Size: {audio_data.size} samples, Duration: {duration:.2f} seconds')
+            _debug(f"  Recording finished: {audio_data.size} samples, {duration:.2f}s")
+
+            min_duration_ms = recording_options.get('min_duration') or 100
+
+            if (duration * 1000) < min_duration_ms:
+                ConfigManager.console_print(f'Discarded due to being too short.')
+                _debug("  Recording too short, returning None")
+                return None
+
+            return audio_data
+        except Exception as e:
+            _debug(f"  _record_audio() EXCEPTION: {e}")
+            _debug(f"  Traceback: {traceback.format_exc()}")
+            raise

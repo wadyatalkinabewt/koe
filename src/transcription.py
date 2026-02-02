@@ -77,59 +77,94 @@ def save_rolling_transcription(text):
         _debug(f"  EXCEPTION: {e}")
         ConfigManager.console_print(f"Failed to save snippet: {e}")
 
-def create_local_model():
-    """Create a local model using the faster-whisper library."""
-    from faster_whisper import WhisperModel
-
-    ConfigManager.console_print('Creating local model...')
-    local_model_options = ConfigManager.get_config_section('model_options')['local']
-    compute_type = local_model_options['compute_type']
-    model_path = local_model_options.get('model_path')
-
-    if compute_type == 'int8':
-        device = 'cpu'
-        ConfigManager.console_print('Using int8 quantization, forcing CPU usage.')
-    else:
-        device = local_model_options['device']
-
+def create_local_engine():
+    """Create a local transcription engine using the engine factory."""
     try:
-        if model_path:
-            ConfigManager.console_print(f'Loading model from: {model_path}')
-            model = WhisperModel(model_path,
-                                 device=device,
-                                 compute_type=compute_type,
-                                 download_root=None)
-        else:
-            model = WhisperModel(local_model_options['model'],
-                                 device=device,
-                                 compute_type=compute_type)
-    except Exception as e:
-        ConfigManager.console_print(f'Error initializing WhisperModel: {e}')
-        ConfigManager.console_print('Falling back to CPU.')
-        model = WhisperModel(model_path or local_model_options['model'],
-                             device='cpu',
-                             compute_type=compute_type,
-                             download_root=None if model_path else None)
+        from engines import create_engine, is_engine_available, get_default_engine
+    except ImportError:
+        # Fallback for direct imports
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent))
+        from engines import create_engine, is_engine_available, get_default_engine
 
-    ConfigManager.console_print('Local model created.')
-    return model
+    ConfigManager.console_print('Creating local transcription engine...')
 
-def transcribe_local(audio_data, local_model=None):
-    """Transcribe an audio file using a local model."""
-    if not local_model:
-        local_model = create_local_model()
     model_options = ConfigManager.get_config_section('model_options')
 
-    audio_data_float = audio_data.astype(np.float32) / 32768.0
+    # Get engine ID from config or default to whisper
+    engine_id = model_options.get('engine', 'whisper')
+    if not is_engine_available(engine_id):
+        ConfigManager.console_print(f'Engine {engine_id} not available, using default')
+        engine_id = get_default_engine()
 
-    response = local_model.transcribe(audio=audio_data_float,
-                                      language=model_options['common']['language'],
-                                      initial_prompt=model_options['common']['initial_prompt'],
-                                      condition_on_previous_text=model_options['local']['condition_on_previous_text'],
-                                      temperature=model_options['common']['temperature'],
-                                      vad_filter=model_options['local']['vad_filter'],
-                                      hallucination_silence_threshold=0.5,)
-    return ''.join([segment.text for segment in list(response[0])])
+    # Get engine-specific config
+    if engine_id == 'whisper':
+        engine_config = model_options.get('local', {})
+    else:
+        engine_config = model_options.get(engine_id, {})
+
+    model_name = engine_config.get('model', 'large-v3')
+    device = engine_config.get('device', 'auto')
+    compute_type = engine_config.get('compute_type', 'float16')
+
+    # Handle model_path for whisper
+    model_path = engine_config.get('model_path')
+    if model_path:
+        model_name = model_path
+
+    try:
+        engine = create_engine(engine_id)
+        success = engine.load(model_name, device, compute_type)
+        if success:
+            ConfigManager.console_print(f'Local engine ({engine_id}) created.')
+            return engine
+        else:
+            ConfigManager.console_print(f'Failed to load engine {engine_id}')
+            return None
+    except Exception as e:
+        ConfigManager.console_print(f'Error creating engine: {e}')
+        return None
+
+
+def create_local_model():
+    """Create a local model (backward compatibility wrapper)."""
+    return create_local_engine()
+
+def transcribe_local(audio_data, local_engine=None):
+    """Transcribe audio using a local engine."""
+    if not local_engine:
+        local_engine = create_local_engine()
+
+    if local_engine is None:
+        ConfigManager.console_print('No local engine available')
+        return ''
+
+    model_options = ConfigManager.get_config_section('model_options')
+
+    # Convert audio to float32 if needed
+    if audio_data.dtype != np.float32:
+        audio_data_float = audio_data.astype(np.float32) / 32768.0
+    else:
+        audio_data_float = audio_data
+
+    # Get common options
+    language = model_options.get('common', {}).get('language')
+    initial_prompt = model_options.get('common', {}).get('initial_prompt')
+    vad_filter = model_options.get('local', {}).get('vad_filter', False)
+    condition_on_previous = model_options.get('local', {}).get('condition_on_previous_text', False)
+
+    result = local_engine.transcribe(
+        audio=audio_data_float,
+        sample_rate=16000,
+        language=language,
+        initial_prompt=initial_prompt,
+        vad_filter=vad_filter,
+        condition_on_previous_text=condition_on_previous,
+        hallucination_silence_threshold=0.5,
+    )
+
+    return result.text
 
 def remove_filler_words(text):
     """Remove common filler words and clean up the result."""

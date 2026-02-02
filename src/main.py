@@ -149,8 +149,8 @@ class KoeApp(QObject):
 
         if not ConfigManager.get_config_value("misc", "hide_status_window"):
             self.status_window = StatusWindow()
-            # Connect status window's cancel action to stop the thread
-            self.status_window.statusSignal.connect(self.on_status_window_action)
+            # Set cancel callback to stop the thread
+            self.status_window.set_cancel_callback(self.on_cancel_recording)
             # Note: We intentionally do NOT connect closeSignal to stop_result_thread
             # Closing the status window should not cancel ongoing transcription
 
@@ -267,13 +267,23 @@ class KoeApp(QObject):
             )
             self.initialize_components()
 
-    def on_status_window_action(self, action):
-        """Handle actions from the status window (e.g., cancel button)."""
-        _debug(f"on_status_window_action() called with action: {action}")
-        if action == 'cancel':
-            # User clicked [ESC] or pressed Escape - stop the recording thread
-            _debug("  Calling stop_result_thread() due to cancel action")
-            self.stop_result_thread()
+    def on_cancel_recording(self):
+        """Handle cancel action from the status window."""
+        from pathlib import Path
+        from datetime import datetime
+        debug_log = Path(__file__).parent.parent / "logs" / "debug.log"
+        def _debug(msg):
+            try:
+                with open(debug_log, "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+            except:
+                pass
+
+        _debug("on_cancel_recording() called")
+        # User clicked [ESC] or pressed Escape - stop the recording thread
+        _debug("  Calling stop_result_thread()")
+        self.stop_result_thread()
+        _debug("on_cancel_recording() done")
 
     def on_activation(self):
         if self.result_thread and self.result_thread.isRunning():
