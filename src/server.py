@@ -20,8 +20,9 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict
 
-# Add parent directory for imports
+# Add parent directory and src directory for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 # Setup CUDA DLLs before any CUDA imports (PATH modification more reliable than os.add_dll_directory)
 def _setup_cuda_dlls():
@@ -49,8 +50,8 @@ from typing import Optional, AsyncGenerator
 import uvicorn
 import json
 
-# Import after CUDA setup
-from faster_whisper import WhisperModel
+# Import engine factory (lazy loads actual engines)
+from engines import create_engine, get_available_engines, is_engine_available, TranscriptionEngine
 
 
 class TranscribeRequest(BaseModel):
@@ -104,10 +105,10 @@ class ServerStatus(BaseModel):
     diarization_available: bool = False
 
 
-# Global model instance
-_model: Optional[WhisperModel] = None
-_model_lock = threading.Lock()
-_model_info = {"model": "", "device": ""}
+# Global engine instance
+_engine: Optional[TranscriptionEngine] = None
+_engine_lock = threading.Lock()
+_engine_info = {"engine": "", "model": "", "device": ""}
 
 # Global diarizer instance (lazy loaded)
 _diarizer = None
@@ -143,46 +144,73 @@ def get_diarizer():
         return _diarizer
 
 
-def load_model(model_name: str = "large-v3", device: str = "cuda", compute_type: str = "float16"):
-    """Load the Whisper model."""
-    global _model, _model_info
+def load_engine(
+    engine_id: str = None,
+    model_name: str = "large-v3",
+    device: str = "cuda",
+    compute_type: str = "float16"
+):
+    """Load a transcription engine with the specified model."""
+    global _engine, _engine_info
 
-    with _model_lock:
-        if _model is not None:
-            return _model
+    with _engine_lock:
+        if _engine is not None:
+            return _engine
 
-        print(f"[Server] Loading Whisper model: {model_name} on {device}...")
+        # Use environment variable or default to whisper
+        engine_id = engine_id or os.environ.get("WHISPER_ENGINE", "whisper")
+
+        print(f"[Server] Loading {engine_id} engine with model: {model_name} on {device}...")
 
         try:
-            _model = WhisperModel(model_name, device=device, compute_type=compute_type)
-            _model_info = {"model": model_name, "device": device}
-            print(f"[Server] Model loaded successfully")
+            _engine = create_engine(engine_id)
+            success = _engine.load(model_name, device, compute_type)
+            if success:
+                _engine_info = {
+                    "engine": engine_id,
+                    "model": model_name,
+                    "device": _engine.device or device
+                }
+                print(f"[Server] Engine loaded successfully")
+            else:
+                print(f"[Server] Engine failed to load")
+                _engine = None
         except Exception as e:
-            print(f"[Server] GPU load failed ({e}), falling back to CPU...")
-            _model = WhisperModel(model_name, device="cpu", compute_type=compute_type)
-            _model_info = {"model": model_name, "device": "cpu"}
-            print(f"[Server] Model loaded on CPU")
+            print(f"[Server] Failed to load engine: {e}")
+            _engine = None
 
-        return _model
+        return _engine
 
 
-def get_model() -> WhisperModel:
-    """Get the loaded model, loading if necessary."""
-    global _model
-    if _model is None:
-        load_model()
-    return _model
+def get_engine() -> TranscriptionEngine:
+    """Get the loaded engine, loading if necessary."""
+    global _engine
+    if _engine is None:
+        load_engine()
+    return _engine
+
+
+# Backward compatibility alias
+def load_model(model_name: str = "large-v3", device: str = "cuda", compute_type: str = "float16"):
+    """Load the transcription model (backward compatibility)."""
+    return load_engine(model_name=model_name, device=device, compute_type=compute_type)
+
+
+def get_model():
+    """Get the loaded model (backward compatibility)."""
+    return get_engine()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model on startup."""
+    """Load engine on startup."""
     # Get config from environment or use defaults
+    engine_id = os.environ.get("WHISPER_ENGINE", "whisper")
     model = os.environ.get("WHISPER_MODEL", "large-v3")
     device = os.environ.get("WHISPER_DEVICE", "cuda")
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 
-    load_model(model, device, compute_type)
+    load_engine(engine_id, model, device, compute_type)
     yield
     # Cleanup if needed
     print("[Server] Shutting down...")
@@ -198,12 +226,12 @@ app = FastAPI(
 
 @app.get("/status", response_model=ServerStatus)
 async def status():
-    """Check server status and model readiness."""
+    """Check server status and engine readiness."""
     return ServerStatus(
         status="running",
-        model=_model_info.get("model", "not loaded"),
-        device=_model_info.get("device", "unknown"),
-        ready=_model is not None,
+        model=_engine_info.get("model", "not loaded"),
+        device=_engine_info.get("device", "unknown"),
+        ready=_engine is not None,
         diarization_available=_diarizer_available
     )
 
@@ -235,16 +263,16 @@ async def transcribe(request: TranscribeRequest):
     Audio should be base64-encoded int16 PCM data.
     If filter_to_speaker is set, only audio matching that enrolled speaker is transcribed.
     """
-    model = get_model()
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not loaded")
 
     try:
         # Decode base64 audio
         audio_bytes = base64.b64decode(request.audio_base64)
         audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
 
-        # Convert to float32 for Whisper
+        # Convert to float32 for transcription
         audio_float = audio_int16.astype(np.float32) / 32768.0
 
         duration = len(audio_float) / request.sample_rate
@@ -292,19 +320,19 @@ async def transcribe(request: TranscribeRequest):
             audio_to_transcribe = audio_float
 
         # Transcribe with anti-hallucination settings
-        with _model_lock:
-            segments, info = model.transcribe(
+        with _engine_lock:
+            result = engine.transcribe(
                 audio=audio_to_transcribe,
+                sample_rate=request.sample_rate,
                 language=request.language,
                 initial_prompt=request.initial_prompt,
                 vad_filter=request.vad_filter,
                 condition_on_previous_text=False,  # Prevents hallucination bleeding
-                hallucination_silence_threshold=0.5,  # Skip silent sections (reduces trailing hallucinations)
+                hallucination_silence_threshold=0.5,  # Skip silent sections
             )
-            text = "".join([segment.text for segment in segments])
 
         return TranscribeResponse(
-            text=text.strip(),
+            text=result.text,
             duration_seconds=duration
         )
 
@@ -321,9 +349,9 @@ async def transcribe_stream(request: TranscribeRequest):
     Each event contains JSON: {"text": "...", "start": 0.0, "end": 1.5}
     Final event: {"done": true, "full_text": "..."}
     """
-    model = get_model()
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not loaded")
 
     try:
         # Decode base64 audio
@@ -332,27 +360,28 @@ async def transcribe_stream(request: TranscribeRequest):
         audio_float = audio_int16.astype(np.float32) / 32768.0
 
         async def generate_segments() -> AsyncGenerator[str, None]:
-            full_text = []
-            with _model_lock:
-                segments, info = model.transcribe(
+            with _engine_lock:
+                result = engine.transcribe(
                     audio=audio_float,
+                    sample_rate=request.sample_rate,
                     language=request.language,
                     initial_prompt=request.initial_prompt,
                     vad_filter=request.vad_filter,
                     condition_on_previous_text=False,
                     hallucination_silence_threshold=0.5,
                 )
-                for segment in segments:
+
+                # Stream segments
+                for segment in result.segments:
                     segment_data = {
                         "text": segment.text,
                         "start": segment.start,
                         "end": segment.end
                     }
-                    full_text.append(segment.text)
                     yield f"data: {json.dumps(segment_data)}\n\n"
 
             # Send completion event
-            done_data = {"done": True, "full_text": "".join(full_text).strip()}
+            done_data = {"done": True, "full_text": result.text}
             yield f"data: {json.dumps(done_data)}\n\n"
 
         return StreamingResponse(
@@ -376,9 +405,9 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
     Performs both diarization (who spoke when) and transcription (what they said).
     Returns segments with speaker labels and transcribed text.
     """
-    model = get_model()
-    if model is None:
-        raise HTTPException(status_code=503, detail="Whisper model not loaded")
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Transcription engine not loaded")
 
     diarizer = get_diarizer()
     if diarizer is None:
@@ -402,21 +431,21 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
 
         if not speaker_segments:
             # No speakers detected, transcribe as single segment
-            with _model_lock:
-                segments, info = model.transcribe(
+            with _engine_lock:
+                result = engine.transcribe(
                     audio=audio_float,
+                    sample_rate=request.sample_rate,
                     language=request.language,
                     initial_prompt=request.initial_prompt,
                     vad_filter=request.vad_filter,
                     condition_on_previous_text=False,
                     hallucination_silence_threshold=0.5,
                 )
-                text = "".join([segment.text for segment in segments])
 
             return MeetingTranscribeResponse(
                 segments=[MeetingSegment(
                     speaker=request.user_name or "Speaker",
-                    text=text.strip(),
+                    text=result.text,
                     start=0.0,
                     end=duration
                 )],
@@ -440,21 +469,21 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
                 continue
 
             # Transcribe this segment
-            with _model_lock:
-                segments, info = model.transcribe(
+            with _engine_lock:
+                result = engine.transcribe(
                     audio=segment_audio,
+                    sample_rate=request.sample_rate,
                     language=request.language,
                     initial_prompt=request.initial_prompt,
                     vad_filter=False,  # Already segmented by diarizer
                     condition_on_previous_text=False,
                     hallucination_silence_threshold=0.5,
                 )
-                text = "".join([s.text for s in segments]).strip()
 
-            if text:  # Only include non-empty segments
+            if result.text:  # Only include non-empty segments
                 result_segments.append(MeetingSegment(
                     speaker=seg.speaker,
-                    text=text,
+                    text=result.text,
                     start=seg.start,
                     end=seg.end
                 ))
@@ -525,13 +554,15 @@ def run_server(host: str = "0.0.0.0", port: int = 9876):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Whisper Transcription Server")
+    parser = argparse.ArgumentParser(description="Koe Transcription Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=9876, help="Port to listen on")
-    parser.add_argument("--model", default="large-v3", help="Whisper model to use")
+    parser.add_argument("--engine", default="whisper", help="Transcription engine (whisper/parakeet)")
+    parser.add_argument("--model", default="large-v3", help="Model to use")
     parser.add_argument("--device", default="cuda", help="Device (cuda/cpu)")
     args = parser.parse_args()
 
+    os.environ["WHISPER_ENGINE"] = args.engine
     os.environ["WHISPER_MODEL"] = args.model
     os.environ["WHISPER_DEVICE"] = args.device
 

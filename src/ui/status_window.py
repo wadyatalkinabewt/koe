@@ -1,6 +1,8 @@
 import sys
 import os
 import time
+from datetime import datetime
+from pathlib import Path
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QRectF
 from PyQt5.QtGui import QFont, QPixmap, QIcon, QPainter, QBrush, QColor, QPainterPath, QPen, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QApplication, QLabel, QHBoxLayout, QVBoxLayout, QWidget, QMainWindow, QPushButton
@@ -9,9 +11,22 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from ui import theme
 
+# Debug logging
+_DEBUG_LOG = Path(__file__).parent.parent.parent / "logs" / "debug.log"
+
+def _debug(msg: str):
+    """Write debug message to file with timestamp."""
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            f.write(f"[{timestamp}] [status_window] {msg}\n")
+    except:
+        pass
+
 
 class StatusWindow(QMainWindow):
     statusSignal = pyqtSignal(str)
+    cancelSignal = pyqtSignal()  # Separate signal for cancel - notifies external handlers only
     closeSignal = pyqtSignal()
 
     # Terminal color scheme (from centralized theme)
@@ -33,6 +48,8 @@ class StatusWindow(QMainWindow):
         self.blink_timer.timeout.connect(self.toggle_blink)
         self.blink_state = True
         self._drag_pos = None  # For window dragging
+        self._cancel_callback = None  # Callback for cancel action
+        self._is_recording = False  # Track if we're in recording (not transcribing) state
         self.initUI()
         self.statusSignal.connect(self.updateStatus)
 
@@ -92,11 +109,42 @@ class StatusWindow(QMainWindow):
             }
         """)
         self.hint_label.setCursor(Qt.PointingHandCursor)
-        self.hint_label.clicked.connect(lambda: self.statusSignal.emit('cancel'))
+        self.hint_label.clicked.connect(self._on_cancel_clicked)
 
         self.main_layout.addWidget(self.hint_label)
 
         self.setCentralWidget(self.main_widget)
+
+    def set_cancel_callback(self, callback):
+        """Set callback function to be called on cancel."""
+        self._cancel_callback = callback
+
+    def _on_cancel_clicked(self):
+        """Handle cancel button click - only during recording."""
+        _debug(f"_on_cancel_clicked() - ESC button clicked, _is_recording={self._is_recording}")
+        if not self._is_recording:
+            _debug("_on_cancel_clicked() - ignoring, not in recording state")
+            return
+        self._handle_cancel()
+
+    def _handle_cancel(self):
+        """Handle cancel action - stop timers, notify external, close window."""
+        _debug("_handle_cancel() - stopping timers")
+        self.timer.stop()
+        self.blink_timer.stop()
+        self.recording_start_time = None
+
+        _debug("_handle_cancel() - calling cancel callback")
+        if self._cancel_callback:
+            try:
+                self._cancel_callback()
+                _debug("_handle_cancel() - callback completed")
+            except Exception as e:
+                _debug(f"_handle_cancel() - callback error: {e}")
+
+        _debug("_handle_cancel() - closing window")
+        self.close()
+        _debug("_handle_cancel() - done")
 
     def paintEvent(self, event):
         """
@@ -118,9 +166,13 @@ class StatusWindow(QMainWindow):
         painter.drawPath(path)
 
     def keyPressEvent(self, event: QKeyEvent):
-        """Handle key press events - Escape to cancel."""
+        """Handle key press events - Escape to cancel (only during recording)."""
         if event.key() == Qt.Key_Escape:
-            self.statusSignal.emit('cancel')
+            _debug(f"keyPressEvent() - Escape key pressed, _is_recording={self._is_recording}")
+            if self._is_recording:
+                self._handle_cancel()
+            else:
+                _debug("keyPressEvent() - ignoring, not in recording state")
         else:
             super().keyPressEvent(event)
 
@@ -181,11 +233,15 @@ class StatusWindow(QMainWindow):
         """
         Update the status window based on the given status.
         """
+        _debug(f"updateStatus() called with status: {status}")
         # Safety check: don't update if window was closed (e.g., by cancel)
         if not self.isVisible() and status != 'recording':
+            _debug(f"updateStatus() early return - window not visible")
             return
 
         if status == 'recording':
+            _debug("updateStatus() handling 'recording'")
+            self._is_recording = True  # ESC cancel allowed
             self.indicator.setText("●")
             self.indicator.setStyleSheet(f"color: {self.RECORDING_COLOR};")
             self.status_label.setText('> Recording_')
@@ -196,6 +252,8 @@ class StatusWindow(QMainWindow):
             self.blink_timer.start(500)  # Blink every 500ms
             self.show()
         elif status == 'transcribing':
+            _debug("updateStatus() handling 'transcribing'")
+            self._is_recording = False  # ESC cancel no longer allowed
             self.timer.stop()
             # Keep blinking during transcription
             self.indicator.setText("●")
@@ -203,19 +261,15 @@ class StatusWindow(QMainWindow):
             self.status_label.setText('> Transcribing_')
             self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
 
-        elif status in ('complete', 'error', 'cancel'):
+        elif status in ('complete', 'error'):
+            _debug(f"updateStatus() handling '{status}' - stopping timers")
             self.timer.stop()
             self.blink_timer.stop()
             self.recording_start_time = None
 
             if status == 'complete':
-                # Show completion status with checkmark
-                self.indicator.setText("✓")
-                self.indicator.setStyleSheet(f"color: {self.TEXT_COLOR};")
-                self.status_label.setText('> Complete!')
-                self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
-                # Keep visible for 2 seconds (increased from 1.2s for clarity)
-                QTimer.singleShot(2000, self.close)
+                _debug("updateStatus() - closing immediately (beep is sufficient feedback)")
+                self.close()
             elif status == 'error':
                 # Error status - showError() will display the message
                 # If no message provided via showError(), show generic error briefly
@@ -225,11 +279,10 @@ class StatusWindow(QMainWindow):
                     self.status_label.setText('> Error')
                     self.status_label.setStyleSheet("color: #ff6666;")
                 QTimer.singleShot(3000, self.close)
-            else:
-                self.close()  # Close immediately for cancel
 
         else:
             # Unknown status (e.g., 'idle') - do nothing
+            _debug(f"updateStatus() - unknown status '{status}', ignoring")
             pass
 
     @pyqtSlot(str)
