@@ -131,9 +131,10 @@ class AudioCapture:
             # Start loopback stream with callback
             if self.loopback_device:
                 self.loopback_sample_rate = int(self.loopback_device['defaultSampleRate'])
-                self.loopback_channels = min(int(self.loopback_device['maxInputChannels']), 2)
+                # Use native channel count - some WASAPI devices require opening with all channels
+                self.loopback_channels = int(self.loopback_device['maxInputChannels'])
 
-                debug_log(f"START: Opening loopback device {self.loopback_device['index']}")
+                debug_log(f"START: Opening loopback device {self.loopback_device['index']} ({self.loopback_channels}ch)")
                 self._loopback_stream = self.p.open(
                     format=pyaudio.paInt16,
                     channels=self.loopback_channels,
@@ -203,7 +204,7 @@ class AudioCapture:
         return None
 
     def get_loopback_audio(self, timeout: float = 0.1) -> Optional[np.ndarray]:
-        """Get queued loopback audio."""
+        """Get queued loopback audio, converted to mono."""
         chunks = []
         # First wait for at least one item (with timeout)
         try:
@@ -221,7 +222,18 @@ class AudioCapture:
                 break
 
         if chunks:
-            return np.concatenate(chunks)
+            audio = np.concatenate(chunks)
+            # Convert multi-channel to mono if needed
+            if self.loopback_channels > 1:
+                # Reshape to (samples, channels) and take mean
+                audio = audio.reshape(-1, self.loopback_channels)
+                # Use first 2 channels (left/right) for stereo content
+                if self.loopback_channels >= 2:
+                    audio = audio[:, :2].mean(axis=1)
+                else:
+                    audio = audio.mean(axis=1)
+                audio = audio.astype(np.int16)
+            return audio
         return None
 
     def is_recording(self) -> bool:
