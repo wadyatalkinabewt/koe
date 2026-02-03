@@ -1,7 +1,8 @@
 """
-Whisper Server (Headless)
+Transcription Server (Headless)
 
 Runs the transcription server in the background without a tray icon.
+Supports Whisper and Parakeet engines based on WHISPER_ENGINE env var.
 Controlled via the /shutdown endpoint or by killing the process.
 """
 
@@ -36,11 +37,12 @@ import uvicorn
 def main():
     """Run the headless server."""
     # Load model
+    engine = os.environ.get("WHISPER_ENGINE", "whisper")
     model = os.environ.get("WHISPER_MODEL", "large-v3")
     device = os.environ.get("WHISPER_DEVICE", "cuda")
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 
-    print(f"[Server] Loading Whisper {model} on {device}...")
+    print(f"[Server] Loading {engine} engine with model {model} on {device}...")
     load_model(model, device, compute_type)
     print("[Server] Model loaded!")
 

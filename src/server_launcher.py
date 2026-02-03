@@ -2,7 +2,7 @@
 Background server launcher.
 
 Starts the transcription server in the background if not already running.
-Supports both Whisper (Windows) and Parakeet (WSL) engines based on config.
+Supports both Whisper and Parakeet engines based on config.
 Designed to be called from batch files or at startup.
 """
 
@@ -100,39 +100,43 @@ def start_whisper_server(model: str = "large-v3", device: str = "auto"):
 
 
 def start_parakeet_server(model: str = "nvidia/parakeet-ctc-0.6b", device: str = "auto"):
-    """Start the Parakeet server (WSL with systemd)."""
-    print(f"[Launcher] Starting Parakeet server in WSL (model={model}, device={device})...")
+    """Start the Parakeet server (Windows native with NeMo)."""
+    print(f"[Launcher] Starting Parakeet server (model={model}, device={device})...")
 
-    try:
-        # Start the systemd service in WSL
-        result = subprocess.run(
-            ["wsl", "-d", "Ubuntu-22.04", "--", "bash", "-c",
-             "systemctl start koe-server 2>&1"],
-            capture_output=True,
-            text=True,
-            timeout=30
+    # Use pythonw for no console window on Windows
+    python_exe = sys.executable
+    pythonw_exe = python_exe.replace("python.exe", "pythonw.exe")
+    if not os.path.exists(pythonw_exe):
+        pythonw_exe = python_exe  # Fallback
+
+    # Use server_tray.py which has the tray icon
+    server_script = SCRIPT_DIR / "server_tray.py"
+
+    # Set environment variables for the server process
+    env = os.environ.copy()
+    env["WHISPER_MODEL"] = model  # Reuse same env var
+    env["WHISPER_DEVICE"] = device
+    env["WHISPER_ENGINE"] = "parakeet"
+
+    # Start server process detached
+    if sys.platform == "win32":
+        subprocess.Popen(
+            [pythonw_exe, str(server_script)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=str(SCRIPT_DIR.parent),
+            env=env
         )
-
-        if result.returncode != 0:
-            print(f"[Launcher] Warning: systemctl start returned: {result.stderr}")
-            # Try starting manually as fallback
-            print("[Launcher] Trying manual start...")
-            subprocess.Popen(
-                ["wsl", "-d", "Ubuntu-22.04", "--", "bash", "-c",
-                 f"cd /opt/koe && source venv/bin/activate && "
-                 f"HF_TOKEN=$(grep HF_TOKEN /mnt/c/dev/koe/.env | cut -d= -f2) "
-                 f"python src/server.py --host 0.0.0.0 --port 9876 --engine parakeet "
-                 f"--model {model} --device {device} &"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-        return True
-    except subprocess.TimeoutExpired:
-        print("[Launcher] Warning: WSL command timed out")
-        return False
-    except FileNotFoundError:
-        print("[Launcher] Error: WSL not found. Parakeet requires WSL with Ubuntu-22.04.")
-        return False
+    else:
+        subprocess.Popen(
+            [python_exe, str(server_script)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            cwd=str(SCRIPT_DIR.parent),
+            env=env
+        )
+    return True
 
 
 def start_server_background():
@@ -164,10 +168,27 @@ def start_server_background():
     return False
 
 
+def is_server_ready() -> bool:
+    """Check if server is running AND model is loaded."""
+    try:
+        response = requests.get(f"{SERVER_URL}/status", timeout=2)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("ready", False)
+    except:
+        pass
+    return False
+
+
 def stop_server():
-    """Stop the server if running."""
+    """Stop the server if running and ready (skip if still loading)."""
     if not is_server_running():
         print("[Launcher] Server not running")
+        return True
+
+    # Don't kill the server if it's still loading the model
+    if not is_server_ready():
+        print("[Launcher] Server is loading model, not stopping")
         return True
 
     try:

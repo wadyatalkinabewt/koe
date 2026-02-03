@@ -338,7 +338,7 @@ def transcribe(audio_data, local_model=None):
     # Parakeet requires server (can't run locally on Windows)
     if engine == 'parakeet' and not server_available:
         _debug("  ERROR: Parakeet requires server but server not available")
-        raise RuntimeError("Server not ready. Parakeet is still loading - please wait and try again.")
+        raise RuntimeError("Parakeet is still loading - please wait.")
 
     # Priority: 1) Server if running, 2) Local model
     if server_available:

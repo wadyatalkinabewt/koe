@@ -2,10 +2,9 @@
 Parakeet transcription engine using NVIDIA NeMo.
 
 ~50x faster than Whisper with slightly better accuracy.
-Requires WSL2 on Windows (native Windows not supported by NeMo).
+English only.
 """
 
-import sys
 from typing import List, Optional
 import numpy as np
 
@@ -47,41 +46,6 @@ PARAKEET_MODELS = [
 ]
 
 
-def _is_wsl() -> bool:
-    """Check if running inside WSL."""
-    try:
-        with open("/proc/version", "r") as f:
-            return "microsoft" in f.read().lower()
-    except:
-        return False
-
-
-def _check_wsl_available() -> bool:
-    """Check if WSL with Ubuntu-22.04 is available (for Windows native).
-
-    We check for WSL availability rather than a running server, since the server
-    starts on demand when Koe launches.
-    """
-    import subprocess
-    try:
-        # Check if wsl command exists and Ubuntu-22.04 is installed
-        result = subprocess.run(
-            ["wsl", "--list", "--quiet"],
-            capture_output=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            # WSL outputs UTF-16 LE on Windows, decode properly
-            try:
-                distros = result.stdout.decode('utf-16-le').lower()
-            except UnicodeDecodeError:
-                distros = result.stdout.decode('utf-8', errors='ignore').lower()
-            return "ubuntu-22.04" in distros or "ubuntu" in distros
-        return False
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
 @register_engine
 class ParakeetEngine(TranscriptionEngine):
     """
@@ -89,9 +53,6 @@ class ParakeetEngine(TranscriptionEngine):
 
     Parakeet is significantly faster than Whisper (~50x) with slightly better
     accuracy (6.05% vs 6.43% WER). However, it only supports English.
-
-    On Windows, this requires WSL2 with GPU passthrough since NeMo doesn't
-    support native Windows.
     """
 
     ENGINE_ID = "parakeet"
@@ -103,17 +64,7 @@ class ParakeetEngine(TranscriptionEngine):
 
     @classmethod
     def is_available(cls) -> bool:
-        """
-        Check if Parakeet/NeMo is available.
-
-        On Windows native, checks for WSL with Ubuntu.
-        On Linux/WSL, checks for nemo_toolkit import.
-        """
-        if sys.platform == "win32":
-            # On Windows, can only use via WSL - check if WSL is available
-            return _check_wsl_available()
-
-        # On Linux (including WSL), check for NeMo
+        """Check if Parakeet/NeMo is available."""
         try:
             import nemo.collections.asr as nemo_asr
             return True
@@ -122,22 +73,10 @@ class ParakeetEngine(TranscriptionEngine):
 
     @classmethod
     def get_install_hint(cls) -> str:
-        if sys.platform == "win32":
-            return (
-                "Parakeet requires WSL2 on Windows. Setup:\n"
-                "1. Install WSL2: wsl --install\n"
-                "2. In WSL: pip install nemo_toolkit[asr]\n"
-                "3. Run Koe server in WSL: python -m src.server"
-            )
         return "pip install nemo_toolkit[asr]"
 
     def load(self, model_name: str, device: str = "auto", compute_type: str = "float16") -> bool:
         """Load a Parakeet model."""
-        if sys.platform == "win32":
-            raise RuntimeError(
-                "Parakeet cannot be loaded on Windows native. "
-                "Run the Koe server in WSL2 instead."
-            )
 
         try:
             import nemo.collections.asr as nemo_asr
