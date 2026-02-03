@@ -107,7 +107,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Auto-cleanup after completion
   - Easy to find/delete stale files if process crashes
 - Snippets folder configurable in Settings (default: Koe/Snippets)
-- Status window stays visible during transcription, closes after completion beep
+- Status window stays visible during transcription, closes immediately after beep (no "Complete!" message - beep is sufficient feedback)
 - Utility scripts moved to scripts/ folder (create_shortcuts.ps1, generate_icon.py)
 - Batch launchers use pythonw instead of python (no console window flash)
 - Expanded hallucination filter with more YouTube outro patterns and trailing phrases
@@ -158,6 +158,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Parakeet TDT CUDA 12.8 crash (2026-02-01)**: TDT model's CUDA graph decoder expected 6 return values from `cu_call()` but CUDA 12.8 returns 5. Switched default to CTC model which doesn't use CUDA graphs.
 - **Parakeet "not installed" in Settings (2026-02-01)**: WSL availability check failed due to UTF-16 LE encoding of `wsl --list` output on Windows. Fixed with proper decoding.
 - **Crash when clicking ESC during recording (2026-02-03)**: PyQt signal emitted to closed window during signal delivery caused crash. Replaced signal with direct callback; ESC cancel now only works during recording state (ignored during transcription).
+- **Parakeet extremely slow on long audio (2026-02-03)**: Audio >60s caused O(n²) attention slowdown (180s audio took 160s to transcribe = 1.1x realtime). Enabled local attention (`change_attention_model('rel_pos_local_attn', [128, 128])`) and auto-chunking. Now 180s transcribes in 2.6s = 69x realtime.
+- **Transcription timeout too short (2026-02-03)**: 300s cap was insufficient for long recordings. Increased to 900s cap with 3x audio duration formula.
+- **Lost audio on transcription failure (2026-02-03)**: When server timed out or errored, audio was lost forever. Now saves failed audio to `logs/failed_audio_<reason>_<timestamp>.wav` for recovery.
 - **Unicode emoji crash (2026-02-01)**: Config validation warnings used ⚠ emoji which Windows console couldn't encode. Changed to ASCII `[!]`.
 
 ## [1.0.1] - 2024-01-28

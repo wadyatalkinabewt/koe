@@ -62,6 +62,29 @@ class TranscriptionClient:
         self.connect_timeout = 5.0  # Connection timeout (fail fast if server unreachable)
         self._server_available: Optional[bool] = None
 
+    def _save_failed_audio(self, audio_data: np.ndarray, sample_rate: int, reason: str):
+        """Save audio to logs folder when transcription fails, so it can be recovered."""
+        try:
+            import wave
+            logs_dir = Path(__file__).parent.parent / "logs"
+            logs_dir.mkdir(exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = logs_dir / f"failed_audio_{reason}_{timestamp}.wav"
+
+            # Convert to int16 if needed
+            if audio_data.dtype != np.int16:
+                audio_data = (audio_data * 32767).astype(np.int16)
+
+            with wave.open(str(filename), 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # 16-bit
+                wf.setframerate(sample_rate)
+                wf.writeframes(audio_data.tobytes())
+
+            _debug(f"  SAVED failed audio to {filename} ({len(audio_data)/sample_rate:.1f}s)")
+        except Exception as e:
+            _debug(f"  Failed to save audio: {e}")
+
     def is_server_available(self, force_check: bool = False) -> bool:
         """Check if the transcription server is running and ready."""
         if self._server_available is not None and not force_check:
@@ -133,9 +156,10 @@ class TranscriptionClient:
             payload["filter_to_speaker"] = filter_to_speaker
 
         # Dynamic timeout based on audio length
-        # Base 30s + 2x audio duration, capped at 300s (5 min)
+        # Base 30s + 3x audio duration, capped at 900s (15 min)
+        # WSL Parakeet can be slow on long recordings due to overhead
         audio_duration_sec = len(audio_data) / sample_rate
-        dynamic_timeout = min(30.0 + (audio_duration_sec * 2), 300.0)
+        dynamic_timeout = min(30.0 + (audio_duration_sec * 3), 900.0)
 
         try:
             _debug(f"  POST {self.server_url}/transcribe (connect={self.connect_timeout}s, read={dynamic_timeout:.1f}s for {audio_duration_sec:.1f}s audio)...")
@@ -157,12 +181,15 @@ class TranscriptionClient:
 
         except requests.Timeout:
             _debug(f"  TIMEOUT after {dynamic_timeout:.1f}s (audio was {audio_duration_sec:.1f}s)")
+            self._save_failed_audio(audio_data, sample_rate, "timeout")
             return "Transcription timed out", False
         except requests.RequestException as e:
             _debug(f"  REQUEST ERROR: {e}")
+            self._save_failed_audio(audio_data, sample_rate, "connection_error")
             return f"Connection error: {e}", False
         except Exception as e:
             _debug(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            self._save_failed_audio(audio_data, sample_rate, "error")
             return f"Unexpected error: {e}", False
 
     def transcribe_stream(
