@@ -251,6 +251,9 @@ class KoeApp(QObject):
 
     def exit_app(self):
         self.cleanup()
+        # Stop the server when Koe exits
+        from server_launcher import stop_server
+        stop_server()
         QApplication.quit()
 
     def restart_app(self):

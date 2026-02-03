@@ -1017,15 +1017,7 @@ nvcc --version
 
 #### Multiple Tray Icons
 
-Koe has single-instance protection, but if multiple icons appear:
-```powershell
-# Kill all Python processes
-taskkill /F /IM python.exe
-taskkill /F /IM pythonw.exe
-
-# Restart
-Start Koe Desktop
-```
+Koe has single-instance protection. If multiple icons appear, exit via tray icon → Exit (server stops automatically) and restart.
 
 ### Parakeet Engine Issues
 
@@ -1062,10 +1054,8 @@ wsl -d Ubuntu-22.04 -- systemctl start koe-server
 #### Switching Between Engines
 
 1. Change engine in Settings → Transcription Engine
-2. Exit Koe completely (tray icon → Exit)
-3. Kill lingering servers: `taskkill /F /IM pythonw.exe`
-4. For Parakeet, also stop WSL: `wsl -d Ubuntu-22.04 -- systemctl stop koe-server`
-5. Restart Koe
+2. Exit Koe completely (tray icon → Exit) - server stops automatically
+3. Restart Koe - new engine will start
 
 ### Remote/Laptop Issues
 
