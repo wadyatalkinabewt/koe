@@ -45,9 +45,8 @@ Koe provides two primary modes of operation:
 |---------|---------|----------|
 | Speed | 1x (baseline) | ~50x faster |
 | Languages | 99+ languages | English only |
-| Runs on | Windows (native) | WSL (Ubuntu) |
 | VRAM | ~3GB (large-v3) | ~2GB |
-| Setup | Automatic | One-time WSL setup |
+| Setup | Automatic | One-time NeMo install |
 
 ### Technical Foundation
 
@@ -160,7 +159,7 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
     ┌─────────────────────────────────────────────────────────────────┐
     │                    Koe Server (Port 9876)                       │
     │                                                                 │
-    │  ENGINE: Whisper (Windows) OR Parakeet (WSL)                   │
+    │  ENGINE: Whisper OR Parakeet (both native Windows)              │
     │  ─────────────────────────────────────────                     │
     │  ┌─────────────────────────────────────────────────────────┐   │
     │  │  Whisper large-v3 (default)              (~3GB VRAM)    │   │
@@ -168,7 +167,7 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
     │  │  - Supports 99 languages                                │   │
     │  │  OR                                                     │   │
     │  │  Parakeet CTC 0.6B                       (~2GB VRAM)    │   │
-    │  │  - NVIDIA NeMo via WSL                                  │   │
+    │  │  - NVIDIA NeMo toolkit                                  │   │
     │  │  - ~50x faster, English only                            │   │
     │  └─────────────────────────────────────────────────────────┘   │
     │                                                                 │
@@ -598,18 +597,19 @@ If you prefer manual setup or the wizard doesn't work:
 
 ### Parakeet Engine Setup (Optional, ~50x Faster)
 
-Parakeet provides ~50x faster transcription but only supports English and requires WSL.
+Parakeet provides ~50x faster transcription but only supports English.
 
 #### Prerequisites
 
-1. **WSL with Ubuntu 22.04**
+1. **Visual C++ Build Tools** (required for NeMo dependencies)
    ```powershell
-   # Install WSL (PowerShell as Admin)
-   wsl --install -d Ubuntu-22.04
+   winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
    ```
 
-2. **NVIDIA GPU drivers in WSL**
-   - Drivers should be automatically available from Windows host
+2. **Install NeMo toolkit**
+   ```bash
+   pip install nemo_toolkit[asr]
+   ```
 
 #### Setup Steps
 
@@ -620,26 +620,13 @@ Parakeet provides ~50x faster transcription but only supports English and requir
 
 2. **Restart Koe**
    - Exit via tray icon
-   - Launch again - WSL server starts automatically
+   - Launch again - Parakeet server starts (~30 seconds to load)
 
 3. **Verify**
    ```powershell
    curl http://localhost:9876/status
    # Should show: {"model":"nvidia/parakeet-ctc-0.6b",...}
    ```
-
-#### WSL Service Management
-
-```bash
-# Check service status
-wsl -d Ubuntu-22.04 -- systemctl status koe-server
-
-# View logs
-wsl -d Ubuntu-22.04 -- journalctl -u koe-server -n 50
-
-# Restart service
-wsl -d Ubuntu-22.04 -- systemctl restart koe-server
-```
 
 ---
 
@@ -1023,33 +1010,31 @@ Koe has single-instance protection. If multiple icons appear, exit via tray icon
 
 #### Parakeet Shows "Not Installed"
 
-**Cause:** WSL with Ubuntu not detected.
+**Cause:** NeMo toolkit not installed.
 
 **Solutions:**
-1. Install WSL: `wsl --install -d Ubuntu-22.04`
-2. Verify installation: `wsl --list -v` (should show Ubuntu-22.04)
+1. Install Visual C++ Build Tools: `winget install Microsoft.VisualStudio.2022.BuildTools`
+2. Install NeMo: `pip install nemo_toolkit[asr]`
+3. Verify: `python -c "import nemo.collections.asr"`
 
 #### Parakeet Server Not Starting
 
-```powershell
-# Check service status
-wsl -d Ubuntu-22.04 -- systemctl status koe-server
+```bash
+# Check if NeMo is installed
+pip show nemo_toolkit
 
-# Check logs
-wsl -d Ubuntu-22.04 -- journalctl -u koe-server -n 50
+# Check server status
+curl http://localhost:9876/status
 
-# Enable service if not enabled
-wsl -d Ubuntu-22.04 -- systemctl enable koe-server
-
-# Manual start
-wsl -d Ubuntu-22.04 -- systemctl start koe-server
+# Check for import errors
+python -c "import nemo.collections.asr"
 ```
 
 #### Parakeet Slower Than Expected
 
 1. First transcription is slow (model loading) - subsequent ones are fast
 2. Verify GPU is being used: `curl http://localhost:9876/status` should show `"device":"cuda"`
-3. Check GPU access in WSL: `wsl -d Ubuntu-22.04 -- nvidia-smi`
+3. Check CUDA is available: `python -c "import torch; print(torch.cuda.is_available())"`
 
 #### Switching Between Engines
 
