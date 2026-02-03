@@ -168,14 +168,24 @@ def stop_server():
     """Stop the server if running."""
     if not is_server_running():
         print("[Launcher] Server not running")
-        return
+        return True
 
     try:
-        # Send shutdown request (we'd need to add this endpoint)
-        # For now, just report it's running
-        print("[Launcher] Server is running - close it manually or restart computer")
-    except:
-        pass
+        print("[Launcher] Sending shutdown request...")
+        response = requests.post(f"{SERVER_URL}/shutdown", timeout=5)
+        if response.status_code == 200:
+            print("[Launcher] Server shutting down...")
+            # Wait for it to actually stop
+            for _ in range(10):
+                time.sleep(0.5)
+                if not is_server_running():
+                    print("[Launcher] Server stopped")
+                    return True
+            print("[Launcher] Warning: Server may still be running")
+            return False
+    except Exception as e:
+        print(f"[Launcher] Error stopping server: {e}")
+        return False
 
 
 if __name__ == "__main__":
