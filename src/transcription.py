@@ -328,8 +328,20 @@ def transcribe(audio_data, local_model=None):
         _debug("  audio_data is None, returning empty")
         return ''
 
+    # Check if server is available
+    server_available = check_server_available()
+
+    # Get configured engine
+    engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
+    _debug(f"  Engine: {engine}, Server available: {server_available}")
+
+    # Parakeet requires server (can't run locally on Windows)
+    if engine == 'parakeet' and not server_available:
+        _debug("  ERROR: Parakeet requires server but server not available")
+        raise RuntimeError("Server not ready. Parakeet is still loading - please wait and try again.")
+
     # Priority: 1) Server if running, 2) Local model
-    if check_server_available():
+    if server_available:
         _debug("  Using server transcription")
         transcription = transcribe_server(audio_data)
     else:
