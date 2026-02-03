@@ -162,6 +162,16 @@ class ParakeetEngine(TranscriptionEngine):
             # Set to eval mode
             self._model.eval()
 
+            # Enable local attention for long audio support (up to hours of audio)
+            # Without this, audio >60s causes massive slowdown due to O(n²) attention
+            print(f"[ParakeetEngine] Enabling local attention for long audio support...")
+            try:
+                self._model.change_attention_model('rel_pos_local_attn', [128, 128])
+                self._model.change_subsampling_conv_chunking_factor(1)  # auto-chunk subsampling
+                print(f"[ParakeetEngine] Local attention enabled")
+            except Exception as e:
+                print(f"[ParakeetEngine] Warning: Could not enable local attention: {e}")
+
             self._model_name = model_name
             self._device = device
             self._loaded = True
