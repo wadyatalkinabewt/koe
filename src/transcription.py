@@ -168,6 +168,20 @@ def transcribe_local(audio_data, local_engine=None):
 
     return result.text
 
+def apply_name_replacements(text):
+    """Apply configured name spelling corrections."""
+    try:
+        from utils import ConfigManager
+        replacements = ConfigManager.get_config_value('post_processing', 'name_replacements') or {}
+        for wrong, correct in replacements.items():
+            # Case-insensitive word boundary replacement
+            pattern = r'\b' + re.escape(wrong) + r'\b'
+            text = re.sub(pattern, correct, text, flags=re.IGNORECASE)
+    except Exception:
+        pass  # Don't fail if config access fails
+    return text
+
+
 def remove_filler_words(text):
     """Remove common filler words and clean up the result."""
 
@@ -256,6 +270,7 @@ def post_process_transcription(transcription):
     """Apply post-processing to the transcription."""
     transcription = transcription.strip()
     transcription = remove_filler_words(transcription)
+    transcription = apply_name_replacements(transcription)
     transcription = ensure_ending_punctuation(transcription)
     transcription += ' '  # Trailing space for easy pasting
     return transcription

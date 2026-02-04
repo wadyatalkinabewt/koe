@@ -202,6 +202,15 @@ def post_process_text(text: str) -> str:
     if len(text) < 3:
         return ""
 
+    # Apply name spelling corrections
+    try:
+        replacements = ConfigManager.get_config_value('post_processing', 'name_replacements') or {}
+        for wrong, correct in replacements.items():
+            pattern = r'\b' + re.escape(wrong) + r'\b'
+            text = re.sub(pattern, correct, text, flags=re.IGNORECASE)
+    except Exception:
+        pass
+
     if text and text[-1] not in '.?!':
         text += '.'
 
