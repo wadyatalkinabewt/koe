@@ -198,6 +198,14 @@ post_processing:
     value: true
     type: bool
     description: "Remove filler words like 'um', 'uh', 'ah' from transcriptions."
+  ai_cleanup_enabled:
+    value: true
+    type: bool
+    description: "Use Claude to clean up grammar, punctuation, and filler words in snippets longer than the threshold."
+  ai_cleanup_threshold:
+    value: 30
+    type: int
+    description: "Minimum snippet duration in seconds before AI cleanup is applied. Set to 0 to apply to all snippets."
 
 # Miscellaneous settings
 misc:
