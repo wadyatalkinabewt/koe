@@ -188,6 +188,17 @@ recording_options:
     type: bool
     description: "Filter snippet transcriptions to only include your voice. Requires my_voice_embedding to be set. Adds ~0.5-1s latency."
 
+# Post-processing settings
+post_processing:
+  name_replacements:
+    value: {}
+    type: dict
+    description: "Dictionary of name corrections. Keys are incorrect spellings, values are correct spellings. Example: {'Callum': 'Calum', 'Sasha': 'Sash'}"
+  remove_fillers:
+    value: true
+    type: bool
+    description: "Remove filler words like 'um', 'uh', 'ah' from transcriptions."
+
 # Miscellaneous settings
 misc:
   print_to_terminal:
