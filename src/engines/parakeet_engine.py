@@ -61,6 +61,7 @@ class ParakeetEngine(TranscriptionEngine):
     def __init__(self):
         super().__init__()
         self._processor = None
+        self._local_attention_enabled = False  # Track if local attention is active
 
     @classmethod
     def is_available(cls) -> bool:
@@ -74,6 +75,11 @@ class ParakeetEngine(TranscriptionEngine):
     @classmethod
     def get_install_hint(cls) -> str:
         return "pip install nemo_toolkit[asr]"
+
+    @property
+    def supports_long_audio(self) -> bool:
+        """Check if local attention is enabled for efficient long audio processing."""
+        return self._local_attention_enabled
 
     def load(self, model_name: str, device: str = "auto", compute_type: str = "float16") -> bool:
         """Load a Parakeet model."""
@@ -107,9 +113,12 @@ class ParakeetEngine(TranscriptionEngine):
             try:
                 self._model.change_attention_model('rel_pos_local_attn', [128, 128])
                 self._model.change_subsampling_conv_chunking_factor(1)  # auto-chunk subsampling
+                self._local_attention_enabled = True
                 print(f"[ParakeetEngine] Local attention enabled")
             except Exception as e:
-                print(f"[ParakeetEngine] Warning: Could not enable local attention: {e}")
+                self._local_attention_enabled = False
+                print(f"[ParakeetEngine] WARNING: Could not enable local attention: {e}")
+                print(f"[ParakeetEngine] Long audio (>60s) will be VERY slow without local attention!")
 
             self._model_name = model_name
             self._device = device

@@ -78,6 +78,17 @@ class TranscriptionEngine(ABC):
         """Get the device the model is running on."""
         return self._device
 
+    @property
+    def supports_long_audio(self) -> bool:
+        """
+        Check if this engine can efficiently handle long audio (>60s).
+
+        Returns True by default. Engines that require special configuration
+        (like Parakeet's local attention) should override this to return
+        False when that configuration is not active.
+        """
+        return True
+
     @abstractmethod
     def load(self, model_name: str, device: str = "auto", compute_type: str = "float16") -> bool:
         """

@@ -62,6 +62,21 @@ from transcription import create_local_model
 from utils import ConfigManager
 from server_launcher import is_server_running, start_server_background
 
+# Module-level debug logging
+from pathlib import Path
+from datetime import datetime
+
+_DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
+
+def _debug(msg: str):
+    """Write debug message to file with timestamp."""
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            f.write(f"[{timestamp}] {msg}\n")
+    except:
+        pass
+
 
 class KoeApp(QObject):
     # Minimum recording time (seconds) before hotkey can stop recording
@@ -272,16 +287,6 @@ class KoeApp(QObject):
 
     def on_cancel_recording(self):
         """Handle cancel action from the status window."""
-        from pathlib import Path
-        from datetime import datetime
-        debug_log = Path(__file__).parent.parent / "logs" / "debug.log"
-        def _debug(msg):
-            try:
-                with open(debug_log, "a", encoding="utf-8") as f:
-                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-            except:
-                pass
-
         _debug("on_cancel_recording() called")
         # User clicked [ESC] or pressed Escape - stop the recording thread
         _debug("  Calling stop_result_thread()")
@@ -395,18 +400,6 @@ class KoeApp(QObject):
         ConfigManager.console_print(f'Transcription error: {error_msg}')
 
     def on_transcription_complete(self, result):
-        from pathlib import Path
-        from datetime import datetime
-
-        # Debug logging to file
-        debug_log = Path(__file__).parent.parent / "logs" / "debug.log"
-        def _debug(msg):
-            try:
-                with open(debug_log, "a", encoding="utf-8") as f:
-                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-            except:
-                pass
-
         _debug("on_transcription_complete() STARTED")
         self.recording_start_time = None  # Reset recording start time
         self.processing_result = True  # Block new recordings during processing

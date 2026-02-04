@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 import numpy as np
@@ -25,6 +26,7 @@ def _debug(msg: str):
 # Server client (lazy initialized)
 _server_client = None
 _server_mode = None  # None = not checked, True = use server, False = use local
+_server_lock = threading.Lock()
 
 # Rolling snippet storage
 MAX_SNIPPETS = 5
@@ -262,26 +264,29 @@ def check_server_available():
     """Check if the transcription server is running."""
     global _server_client, _server_mode
 
-    if _server_mode is not None:
+    with _server_lock:
+        if _server_mode is not None:
+            return _server_mode
+
+        _server_client = TranscriptionClient()
+        _server_mode = _server_client.is_server_available(force_check=True)
+
+        if _server_mode:
+            ConfigManager.console_print('Transcription server detected - using shared model')
+        else:
+            ConfigManager.console_print('No transcription server - using local model')
+
         return _server_mode
-
-    _server_client = TranscriptionClient()
-    _server_mode = _server_client.is_server_available(force_check=True)
-
-    if _server_mode:
-        ConfigManager.console_print('Transcription server detected - using shared model')
-    else:
-        ConfigManager.console_print('No transcription server - using local model')
-
-    return _server_mode
 
 
 def transcribe_server(audio_data, retry_count=0):
     """Transcribe using the shared server with retry on failure."""
     global _server_client, _server_mode
 
-    if _server_client is None:
-        _server_client = TranscriptionClient()
+    with _server_lock:
+        if _server_client is None:
+            _server_client = TranscriptionClient()
+        client = _server_client
 
     model_options = ConfigManager.get_config_section('model_options')
     language = model_options['common'].get('language')
@@ -294,7 +299,7 @@ def transcribe_server(audio_data, retry_count=0):
             filter_to_speaker = my_voice
             ConfigManager.console_print(f'Voice filtering enabled: {my_voice}')
 
-    text, success = _server_client.transcribe(
+    text, success = client.transcribe(
         audio_data,
         sample_rate=16000,
         language=language,
@@ -311,9 +316,11 @@ def transcribe_server(audio_data, retry_count=0):
         if retry_count < 1:
             ConfigManager.console_print('Retrying with fresh server connection...')
             # Reset cached state and recreate client
-            _server_mode = None
-            _server_client = TranscriptionClient()
-            if _server_client.is_server_available(force_check=True):
+            with _server_lock:
+                _server_mode = None
+                _server_client = TranscriptionClient()
+                new_client = _server_client
+            if new_client.is_server_available(force_check=True):
                 return transcribe_server(audio_data, retry_count=1)
             else:
                 ConfigManager.console_print('Server no longer available after retry')

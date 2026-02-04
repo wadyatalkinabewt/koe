@@ -58,6 +58,40 @@ from .summary_status import SummaryStatusReader
 import subprocess
 
 
+def sanitize_filename(name: str) -> str:
+    """Sanitize a string for use as a filename.
+
+    - Removes Windows reserved characters: < > : " / \\ | ? *
+    - Handles Windows reserved names: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+    - Limits length to 200 characters
+    - Returns 'untitled' if the result would be empty
+    """
+    if not name:
+        return "untitled"
+
+    # Remove Windows reserved characters
+    name = re.sub(r'[<>:"/\\|?*]', '', name)
+
+    # Remove control characters (0-31)
+    name = re.sub(r'[\x00-\x1f]', '', name)
+
+    # Handle Windows reserved names (case-insensitive)
+    reserved = {'CON', 'PRN', 'AUX', 'NUL',
+                'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+                'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'}
+    base_name = name.split('.')[0].upper()  # Check name without extension
+    if base_name in reserved:
+        name = f"_{name}"
+
+    # Strip trailing dots and spaces (Windows doesn't allow these at end of filename)
+    name = name.rstrip('. ')
+
+    # Limit length
+    name = name[:200] if name else "untitled"
+
+    return name if name else "untitled"
+
+
 def post_process_text(text: str) -> str:
     """Clean up transcribed text."""
     if not text:
@@ -969,7 +1003,7 @@ class MeetingTranscriberApp(QObject):
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Koe.Transcription.App')
-        except:
+        except Exception:
             pass
 
         icon_path = str(Path(__file__).parent.parent.parent / "assets" / "koe-icon.ico")
@@ -1020,6 +1054,9 @@ class MeetingTranscriberApp(QObject):
         self.recording_time_updated.connect(self._on_time_update)
         self.start_summary_polling.connect(self._start_polling_summary_status)
         self.enrollment_data_ready.connect(self._set_enrollment_data)
+
+        # Check for crash recovery data AFTER window is set up
+        self._check_crash_recovery()
 
         # Load diarization model in background (after window is visible)
         if use_diarization:
@@ -1457,7 +1494,11 @@ class MeetingTranscriberApp(QObject):
                 self.server_label.setStyleSheet("color: #00aa66; font-size: 13px;")
             else:
                 self.status_changed.emit("Server offline")
-                self.server_label.setText("// ERROR: server not running")
+                # Add helpful hint for remote connections
+                if not self.server_url.startswith("http://localhost"):
+                    self.server_label.setText("// ERROR: server not running (Check desktop is running and Tailscale is connected)")
+                else:
+                    self.server_label.setText("// ERROR: server not running")
                 self.server_label.setStyleSheet("color: #ff4444; font-size: 13px;")
             self._server_checked = True
 
@@ -1510,6 +1551,100 @@ class MeetingTranscriberApp(QObject):
                 self._check_server()
 
         threading.Thread(target=load, daemon=True).start()
+
+    def _check_crash_recovery(self):
+        """Check if there's recovery data from a crashed meeting and offer to save it."""
+        if not TranscriptWriter.has_recovery_data():
+            return
+
+        recovery_info = TranscriptWriter.get_recovery_info()
+        if not recovery_info:
+            return
+
+        meeting_name = recovery_info.get("meeting_name", "Unknown Meeting")
+        entry_count = recovery_info.get("entry_count", 0)
+        meeting_start = recovery_info.get("meeting_start", "")
+
+        # Format the start time for display
+        try:
+            from datetime import datetime
+            start_dt = datetime.fromisoformat(meeting_start)
+            start_str = start_dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            start_str = meeting_start
+
+        # Show recovery dialog
+        msg = QMessageBox(self.live_window)
+        msg.setWindowTitle("Recover Meeting Data")
+        msg.setText(f"Found unsaved meeting data from a previous session:")
+        msg.setInformativeText(
+            f"Meeting: {meeting_name}\n"
+            f"Started: {start_str}\n"
+            f"Entries: {entry_count} transcript entries\n\n"
+            f"Would you like to save this data?"
+        )
+        msg.setIcon(QMessageBox.Question)
+        msg.setStandardButtons(QMessageBox.Save | QMessageBox.Discard)
+        msg.setDefaultButton(QMessageBox.Save)
+
+        # Apply dark theme
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #0a0a0f;
+                color: #00ff88;
+            }
+            QMessageBox QLabel {
+                color: #00ff88;
+            }
+            QPushButton {
+                background-color: #1a1a2e;
+                color: #00ff88;
+                border: 1px solid #00ff88;
+                padding: 8px 16px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #2a2a4e;
+            }
+        """)
+
+        result = msg.exec_()
+
+        if result == QMessageBox.Save:
+            # Load the recovered transcript and save it
+            recovered = TranscriptWriter.load_from_recovery()
+            if recovered and recovered.entries:
+                # Generate recovery filename
+                if recovered.meeting_start:
+                    date_prefix = recovered.meeting_start.strftime("%y_%m_%d")
+                else:
+                    date_prefix = datetime.now().strftime("%y_%m_%d")
+
+                safe_name = "".join(c for c in (recovered.meeting_name or "Recovered") if c.isalnum() or c in " _-")
+                filename = f"{date_prefix}_{safe_name}_recovered.md"
+
+                # Get output directory from recovery info
+                output_dir = recovery_info.get("output_dir")
+                if output_dir:
+                    recovered.output_dir = Path(output_dir)
+
+                # Save the recovered transcript
+                filepath = recovered.save(filename=filename)
+                _debug_log(f"[Meeting] Recovered transcript saved to: {filepath}")
+
+                # Show success message
+                QMessageBox.information(
+                    self.live_window,
+                    "Recovery Complete",
+                    f"Recovered transcript saved to:\n{filepath}"
+                )
+            else:
+                _debug_log("[Meeting] Recovery file was empty or corrupted")
+                TranscriptWriter.delete_recovery_file()
+        else:
+            # User chose to discard
+            _debug_log("[Meeting] User discarded recovery data")
+            TranscriptWriter.delete_recovery_file()
 
     def _get_transcripts_dir(self) -> Path:
         """Get the transcripts directory (root_folder/Transcripts or default)."""
@@ -1952,8 +2087,7 @@ class MeetingTranscriberApp(QObject):
             output_dir = transcripts_dir
 
         # Generate filename WITHOUT date prefix (for agenda files)
-        import re as re_module
-        safe_name = re_module.sub(r'[<>:"/\\|?*]', '_', meeting_name)
+        safe_name = sanitize_filename(meeting_name)
         filename = f"{safe_name}.md"
         filepath = output_dir / filename
 
@@ -2252,6 +2386,9 @@ class MeetingTranscriberApp(QObject):
 
             _debug_log("[Meeting] Final audio processed")
 
+            # Retry any failed audio chunks from this session (server may have recovered)
+            self._retry_failed_chunks()
+
             # Save transcript (disk I/O)
             self.summary_status_changed.emit("Saving transcript...")
             _debug_log("[Meeting] Saving transcript")
@@ -2276,7 +2413,7 @@ class MeetingTranscriberApp(QObject):
             meeting_name = self.meeting_name_input.text().strip()
             date_prefix = self.transcript.meeting_start.strftime("%y_%m_%d") if self.transcript.meeting_start else datetime.now().strftime("%y_%m_%d")
 
-            safe_name = re.sub(r'[<>:"/\\|?*]', '_', meeting_name)
+            safe_name = sanitize_filename(meeting_name)
             filename = f"{date_prefix}_{safe_name}.md"
             filepath = self.transcript.save(filename=filename, notes_markdown=notes_md)
 
@@ -2415,6 +2552,51 @@ class MeetingTranscriberApp(QObject):
             daemon=True
         )
         thread.start()
+
+    def _retry_failed_chunks(self):
+        """Retry transcription of any failed audio chunks from this session.
+
+        Called when stopping a meeting - the server may have recovered from earlier failures.
+        """
+        # Get failed audio files from the last 60 minutes
+        failed_files = self.client.get_failed_audio_files(max_age_minutes=60)
+
+        if not failed_files:
+            _debug_log("[Meeting] No failed audio chunks to retry")
+            return
+
+        _debug_log(f"[Meeting] Found {len(failed_files)} failed audio chunks to retry")
+
+        # Get transcription settings
+        model_options = ConfigManager.get_config_section('model_options')
+        language = model_options['common'].get('language') or 'en'
+        initial_prompt = model_options['common'].get('initial_prompt')
+
+        retried = 0
+        succeeded = 0
+
+        for audio_path in failed_files:
+            retried += 1
+            self.summary_status_changed.emit(f"Retrying failed audio ({retried}/{len(failed_files)})...")
+
+            result, success = self.client.retry_failed_audio(
+                audio_path, language=language, initial_prompt=initial_prompt
+            )
+
+            if success and result.strip():
+                succeeded += 1
+                # Add to transcript as "Recovered" speaker (we don't know who it was)
+                # Use current time as timestamp since we don't know original timestamp
+                current_time = time.time() - self._meeting_start_time if self._meeting_start_time else 0
+                text = post_process_text(result)
+                if text:
+                    self.transcription_ready.emit("(Recovered)", text, current_time)
+                    _debug_log(f"[Meeting] Recovered chunk: {text[:50]}...")
+
+        if succeeded > 0:
+            _debug_log(f"[Meeting] Recovered {succeeded}/{retried} failed chunks")
+        else:
+            _debug_log(f"[Meeting] No chunks recovered from {retried} retry attempts")
 
     def _process_chunk(self, chunk: AudioChunk):
         """Process an audio chunk through transcription."""
@@ -2951,7 +3133,7 @@ class MeetingTranscriberApp(QObject):
         if hasattr(self, '_lock_socket'):
             try:
                 self._lock_socket.close()
-            except:
+            except Exception:
                 pass
 
     def run(self):

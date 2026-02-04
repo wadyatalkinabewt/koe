@@ -70,6 +70,11 @@ class SpeakerDiarizer:
         self._enrolled_seen_this_session: set = set()  # Track which enrolled speakers have been seen
         self._last_active_session_speaker: Optional[str] = None  # Most recently assigned session speaker
 
+        # Session persistence (survives server restarts)
+        self._session_state_file = Path(__file__).parent.parent.parent / ".session_state.npz"
+        self._session_start_time: Optional[float] = None  # When this session started
+        self._session_max_age = 3600  # Session state valid for 1 hour
+
         # Adaptive enrollment settings
         self._adaptive_threshold = 0.6  # Only update if similarity > this (high confidence)
         self._adaptive_rate = 0.05  # 5% new, 95% old - very slow adaptation
@@ -124,6 +129,10 @@ class SpeakerDiarizer:
 
             # Load known speaker embeddings if they exist
             self._load_known_speakers()
+
+            # Try to restore session state (for crash recovery)
+            if self._load_session_state():
+                _dlog("[Diarization] Recovered previous session state")
 
             return True
 
@@ -288,6 +297,11 @@ class SpeakerDiarizer:
                     self._session_embedding_counts[new_label] = 1
                     chunk_to_session[chunk_label] = new_label
                     self._last_active_session_speaker = new_label  # Track for fallback
+                    # Set session start time on first speaker
+                    if self._session_start_time is None:
+                        self._session_start_time = time.time()
+                    # Save session state for crash recovery
+                    self._save_session_state()
                     _dlog(f"[Diarization] {chunk_label} -> NEW: {new_label}")
 
             # Convert to segments with consistent labels
@@ -319,6 +333,11 @@ class SpeakerDiarizer:
                         self._session_embedding_counts[consistent_label] = 0
                         chunk_to_session[speaker] = consistent_label
                         self._last_active_session_speaker = consistent_label
+                        # Set session start time on first speaker
+                        if self._session_start_time is None:
+                            self._session_start_time = time.time()
+                        # Save session state for crash recovery
+                        self._save_session_state()
                         _dlog(f"[Diarization] {speaker} -> fallback NEW (first): {consistent_label}")
 
                 segments.append(SpeakerSegment(
@@ -542,6 +561,8 @@ class SpeakerDiarizer:
 
         if merges:
             _dlog(f"[Consolidate] Merged {len(merges)} speakers, {len(self._session_speakers)} remaining")
+            # Save updated session state after consolidation
+            self._save_session_state()
         else:
             _dlog(f"[Consolidate] No speakers merged (all below threshold {similarity_threshold})")
 
@@ -781,7 +802,83 @@ class SpeakerDiarizer:
         self._enrolled_updated.clear()
         self._enrolled_seen_this_session.clear()  # Clear enrolled speaker tracking
         self._last_active_session_speaker = None  # Clear last active speaker
+        self._session_start_time = None
+        # Delete session state file on reset
+        self._delete_session_state()
         _dlog("[Diarization] Session reset - speaker tracking cleared")
+
+    def _save_session_state(self):
+        """Save session state to disk for persistence across server restarts."""
+        if not self._session_speakers:
+            return  # Nothing to save
+
+        try:
+            # Prepare data for saving
+            labels = list(self._session_speakers.keys())
+            embeddings = np.array([self._session_speakers[k] for k in labels])
+            counts = np.array([self._session_embedding_counts.get(k, 1) for k in labels])
+
+            np.savez(
+                self._session_state_file,
+                labels=labels,
+                embeddings=embeddings,
+                counts=counts,
+                counter=self._session_speaker_counter,
+                start_time=self._session_start_time or time.time(),
+                last_active=self._last_active_session_speaker or ""
+            )
+            _dlog(f"[Session] Saved session state: {len(labels)} speakers")
+        except Exception as e:
+            _dlog(f"[Session] Failed to save session state: {e}")
+
+    def _load_session_state(self) -> bool:
+        """Load session state from disk if it exists and is recent.
+
+        Returns:
+            True if session state was loaded, False otherwise
+        """
+        if not self._session_state_file.exists():
+            return False
+
+        try:
+            data = np.load(self._session_state_file, allow_pickle=True)
+
+            # Check if session is too old
+            start_time = float(data['start_time'])
+            age = time.time() - start_time
+            if age > self._session_max_age:
+                _dlog(f"[Session] Session state too old ({age:.0f}s > {self._session_max_age}s), ignoring")
+                self._delete_session_state()
+                return False
+
+            # Restore session state
+            labels = list(data['labels'])
+            embeddings = data['embeddings']
+            counts = data['counts']
+
+            self._session_speakers = {labels[i]: embeddings[i] for i in range(len(labels))}
+            self._session_embedding_counts = {labels[i]: int(counts[i]) for i in range(len(labels))}
+            self._session_speaker_counter = int(data['counter'])
+            self._session_start_time = start_time
+            last_active = str(data['last_active'])
+            self._last_active_session_speaker = last_active if last_active else None
+
+            _dlog(f"[Session] Restored session state: {len(labels)} speakers (age: {age:.0f}s)")
+            return True
+
+        except Exception as e:
+            _dlog(f"[Session] Failed to load session state: {e}")
+            self._delete_session_state()
+            return False
+
+    def _delete_session_state(self):
+        """Delete session state file."""
+        try:
+            if self._session_state_file.exists():
+                self._session_state_file.unlink()
+                _dlog("[Session] Deleted session state file")
+        except Exception as e:
+            _dlog(f"[Session] Failed to delete session state: {e}")
 
     def _save_updated_embeddings(self):
         """Save enrolled embeddings that were updated during this session."""

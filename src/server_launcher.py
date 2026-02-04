@@ -180,8 +180,36 @@ def is_server_ready() -> bool:
     return False
 
 
-def stop_server():
-    """Stop the server if running and ready (skip if still loading)."""
+def is_server_busy() -> bool:
+    """Check if server is actively processing requests."""
+    try:
+        response = requests.get(f"{SERVER_URL}/status", timeout=2)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("busy", False)
+    except:
+        pass
+    return False
+
+
+def get_server_status() -> dict:
+    """Get full server status including busy state."""
+    try:
+        response = requests.get(f"{SERVER_URL}/status", timeout=2)
+        if response.status_code == 200:
+            return response.json()
+    except:
+        pass
+    return {}
+
+
+def stop_server(force: bool = False, wait_for_idle: bool = True):
+    """Stop the server if running and ready.
+
+    Args:
+        force: If True, stop even if busy (not recommended)
+        wait_for_idle: If True, wait for active requests to complete before stopping
+    """
     if not is_server_running():
         print("[Launcher] Server not running")
         return True
@@ -190,6 +218,31 @@ def stop_server():
     if not is_server_ready():
         print("[Launcher] Server is loading model, not stopping")
         return True
+
+    # Check if server is busy
+    status = get_server_status()
+    active_requests = status.get("active_requests", 0)
+    if active_requests > 0:
+        if force:
+            print(f"[Launcher] WARNING: Force stopping with {active_requests} active request(s)")
+        elif wait_for_idle:
+            print(f"[Launcher] Server busy ({active_requests} active request(s)), waiting...")
+            for i in range(120):  # Wait up to 2 minutes
+                time.sleep(1)
+                status = get_server_status()
+                active_requests = status.get("active_requests", 0)
+                if active_requests == 0:
+                    print("[Launcher] Server idle, proceeding with shutdown")
+                    break
+                if i % 10 == 9:
+                    print(f"[Launcher] Still waiting... ({active_requests} active request(s))")
+            else:
+                print("[Launcher] Timeout waiting for idle, aborting stop")
+                return False
+        else:
+            print(f"[Launcher] Server busy ({active_requests} active request(s)), not stopping")
+            print("[Launcher] Use --force to stop anyway, or --wait to wait for idle")
+            return False
 
     try:
         print("[Launcher] Sending shutdown request...")
@@ -209,18 +262,41 @@ def stop_server():
         return False
 
 
+def restart_server():
+    """Restart the server (wait for idle, then stop and start)."""
+    print("[Launcher] Restarting server...")
+    if not stop_server(wait_for_idle=True):
+        print("[Launcher] Failed to stop server, aborting restart")
+        return False
+    time.sleep(1)  # Brief pause before starting
+    return start_server_background()
+
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["start", "stop", "status"], default="start", nargs="?")
+    parser = argparse.ArgumentParser(description="Koe Server Launcher")
+    parser.add_argument("command", choices=["start", "stop", "restart", "status"], default="start", nargs="?")
+    parser.add_argument("--force", action="store_true", help="Force stop even if busy (not recommended)")
+    parser.add_argument("--no-wait", action="store_true", help="Don't wait for idle before stopping")
     args = parser.parse_args()
 
     if args.command == "start":
         start_server_background()
     elif args.command == "stop":
-        stop_server()
+        stop_server(force=args.force, wait_for_idle=not args.no_wait)
+    elif args.command == "restart":
+        restart_server()
     elif args.command == "status":
-        if is_server_running():
-            print("Server is running")
+        status = get_server_status()
+        if status:
+            print(f"Server: running")
+            print(f"  Model: {status.get('model', 'unknown')}")
+            print(f"  Device: {status.get('device', 'unknown')}")
+            print(f"  Ready: {status.get('ready', False)}")
+            print(f"  Busy: {status.get('busy', False)}")
+            print(f"  Active requests: {status.get('active_requests', 0)}")
+            print(f"  Diarization: {status.get('diarization_available', False)}")
+        elif is_server_running():
+            print("Server: starting (not ready yet)")
         else:
-            print("Server is not running")
+            print("Server: not running")
