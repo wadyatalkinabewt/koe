@@ -153,6 +153,11 @@ _diarizer_available = False
 _active_requests = 0
 _active_requests_lock = threading.Lock()
 
+# CUDA cache clearing - track cumulative audio to prevent VRAM fragmentation
+_cumulative_audio_seconds = 0.0
+_cumulative_audio_lock = threading.Lock()
+CUDA_CACHE_CLEAR_THRESHOLD = 600.0  # Clear CUDA cache after 10 minutes of cumulative audio
+
 
 def _increment_requests():
     """Increment active request counter."""
@@ -172,6 +177,28 @@ def get_active_requests() -> int:
     """Get current number of active requests."""
     with _active_requests_lock:
         return _active_requests
+
+
+def _maybe_clear_cuda_cache(audio_duration: float):
+    """Clear CUDA cache if cumulative audio exceeds threshold.
+
+    This prevents VRAM fragmentation that can cause freezes after many transcriptions.
+    Clearing the cache has minimal performance impact (~100-200ms on next transcription).
+    """
+    global _cumulative_audio_seconds
+
+    with _cumulative_audio_lock:
+        _cumulative_audio_seconds += audio_duration
+
+        if _cumulative_audio_seconds >= CUDA_CACHE_CLEAR_THRESHOLD:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    print(f"[Server] Cleared CUDA cache after {_cumulative_audio_seconds:.0f}s cumulative audio")
+                    _cumulative_audio_seconds = 0.0
+            except Exception as e:
+                print(f"[Server] Warning: failed to clear CUDA cache: {e}")
 
 
 def get_diarizer():
@@ -419,6 +446,9 @@ async def transcribe(request: TranscribeRequest):
                 hallucination_silence_threshold=0.5,  # Skip silent sections
             )
 
+        # Clear CUDA cache periodically to prevent VRAM fragmentation
+        _maybe_clear_cuda_cache(duration)
+
         return TranscribeResponse(
             text=result.text,
             duration_seconds=duration
@@ -588,6 +618,9 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
                     start=seg.start,
                     end=seg.end
                 ))
+
+        # Clear CUDA cache periodically to prevent VRAM fragmentation
+        _maybe_clear_cuda_cache(duration)
 
         return MeetingTranscribeResponse(
             segments=result_segments,

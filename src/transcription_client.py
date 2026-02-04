@@ -103,6 +103,22 @@ class TranscriptionClient:
             headers["X-API-Token"] = self.api_token
         return headers
 
+    def _rename_or_save_failed_audio(self, presave_path: Optional[Path], audio_data: np.ndarray,
+                                       sample_rate: int, reason: str):
+        """Rename presaved audio or save new file on failure."""
+        if presave_path and presave_path.exists():
+            # Rename presaved file to failed_audio
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                failed_path = presave_path.parent / f"failed_audio_{reason}_{timestamp}.wav"
+                presave_path.rename(failed_path)
+                _debug(f"  RENAMED presave to {failed_path.name}")
+                return
+            except Exception as e:
+                _debug(f"  Warning: failed to rename presave: {e}")
+                # Fall through to save new file
+        self._save_failed_audio(audio_data, sample_rate, reason)
+
     def _save_failed_audio(self, audio_data: np.ndarray, sample_rate: int, reason: str):
         """Save audio to logs folder when transcription fails, so it can be recovered."""
         try:
@@ -225,6 +241,29 @@ class TranscriptionClient:
         audio_duration_sec = len(audio_data) / sample_rate
         dynamic_timeout = min(30.0 + (audio_duration_sec * 3), 900.0)
 
+        # Pre-save long audio as safety net before sending to server
+        # If process is killed mid-request, audio is already saved
+        PRESAVE_THRESHOLD = 60.0  # seconds
+        presave_path = None
+        if audio_duration_sec > PRESAVE_THRESHOLD:
+            try:
+                import wave
+                logs_dir = Path(__file__).parent.parent / "logs"
+                logs_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                presave_path = logs_dir / f"pending_audio_{timestamp}.wav"
+
+                with wave.open(str(presave_path), 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)  # 16-bit
+                    wf.setframerate(sample_rate)
+                    wf.writeframes(audio_int16.tobytes())
+
+                _debug(f"  Pre-saved long audio ({audio_duration_sec:.1f}s) to {presave_path.name}")
+            except Exception as e:
+                _debug(f"  Warning: failed to pre-save audio: {e}")
+                presave_path = None
+
         # Check for long audio without local attention support
         # Without local attention, Parakeet has O(n²) attention which causes massive slowdown
         LONG_AUDIO_THRESHOLD = 60.0  # seconds
@@ -266,6 +305,13 @@ class TranscriptionClient:
                     data = response.json()
                     text = data.get("text", "")
                     _debug(f"  Success: {len(text)} chars")
+                    # Delete pre-saved audio on success
+                    if presave_path and presave_path.exists():
+                        try:
+                            presave_path.unlink()
+                            _debug(f"  Deleted pre-saved audio: {presave_path.name}")
+                        except Exception as e:
+                            _debug(f"  Warning: failed to delete pre-save: {e}")
                     return text, True
                 elif response.status_code == 401:
                     # Auth error - don't retry
@@ -286,22 +332,22 @@ class TranscriptionClient:
                 if attempt == max_retries:
                     # All retries exhausted - save audio for recovery
                     reason = "timeout" if isinstance(e, requests.Timeout) else "connection_error"
-                    self._save_failed_audio(audio_data, sample_rate, reason)
+                    self._rename_or_save_failed_audio(presave_path, audio_data, sample_rate, reason)
                     return f"{'Transcription timed out' if isinstance(e, requests.Timeout) else 'Connection error'} after {max_retries + 1} attempts", False
                 continue
 
             except requests.RequestException as e:
                 _debug(f"  REQUEST ERROR: {e}")
-                self._save_failed_audio(audio_data, sample_rate, "connection_error")
+                self._rename_or_save_failed_audio(presave_path, audio_data, sample_rate, "connection_error")
                 return f"Connection error: {e}", False
 
             except Exception as e:
                 _debug(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
-                self._save_failed_audio(audio_data, sample_rate, "error")
+                self._rename_or_save_failed_audio(presave_path, audio_data, sample_rate, "error")
                 return f"Unexpected error: {e}", False
 
         # Should not reach here, but just in case
-        self._save_failed_audio(audio_data, sample_rate, "unknown")
+        self._rename_or_save_failed_audio(presave_path, audio_data, sample_rate, "unknown")
         return f"Failed after {max_retries + 1} attempts: {last_error}", False
 
     def transcribe_stream(
