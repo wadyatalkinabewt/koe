@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from PyQt5.QtWidgets import (
     QApplication, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QCheckBox, QMessageBox, QWidget, QFrame, QScrollArea,
-    QSizePolicy, QFileDialog, QGroupBox, QTextEdit
+    QSizePolicy, QFileDialog, QGroupBox, QTextEdit, QSpinBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF
 from PyQt5.QtGui import QFont, QPainter, QBrush, QColor, QPainterPath, QPen, QIcon
@@ -134,6 +134,11 @@ class SettingsWindow(BaseWindow):
             values['model'] = self.model_dropdown.currentData()
         if hasattr(self, 'device_dropdown'):
             values['device'] = self.device_dropdown.currentData()
+        # Add AI cleanup settings
+        if hasattr(self, 'ai_cleanup_checkbox'):
+            values['ai_cleanup_enabled'] = self.ai_cleanup_checkbox.isChecked()
+        if hasattr(self, 'ai_cleanup_threshold_input'):
+            values['ai_cleanup_threshold'] = self.ai_cleanup_threshold_input.value()
         return values
 
     def init_settings_ui(self):
@@ -482,6 +487,68 @@ class SettingsWindow(BaseWindow):
         recording_group.setLayout(recording_layout)
         content_layout.addWidget(recording_group)
 
+        # ===== AI CLEANUP SECTION =====
+        ai_cleanup_group = self._create_section("AI Cleanup (Snippets)")
+        ai_cleanup_layout = QVBoxLayout()
+        ai_cleanup_layout.setSpacing(12)
+
+        ai_cleanup_help = QLabel("// use Claude to clean up grammar and punctuation")
+        ai_cleanup_help.setObjectName("helpText")
+        ai_cleanup_layout.addWidget(ai_cleanup_help)
+
+        # Enable checkbox
+        self.ai_cleanup_checkbox = self._create_checkbox(
+            "Enable AI cleanup for longer snippets",
+            ConfigManager.get_config_value('post_processing', 'ai_cleanup_enabled') or False
+        )
+        ai_cleanup_layout.addWidget(self.ai_cleanup_checkbox)
+
+        # Threshold input
+        threshold_layout = QHBoxLayout()
+        threshold_layout.setSpacing(8)
+
+        threshold_label = QLabel("Minimum duration:")
+        threshold_layout.addWidget(threshold_label)
+
+        self.ai_cleanup_threshold_input = QSpinBox()
+        self.ai_cleanup_threshold_input.setMinimum(0)
+        self.ai_cleanup_threshold_input.setMaximum(600)
+        self.ai_cleanup_threshold_input.setSuffix(" seconds")
+        self.ai_cleanup_threshold_input.setValue(
+            ConfigManager.get_config_value('post_processing', 'ai_cleanup_threshold') or 30
+        )
+        self.ai_cleanup_threshold_input.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {self.INPUT_BG};
+                border: 1px solid {self.INPUT_BORDER};
+                border-radius: 4px;
+                padding: 8px 12px;
+                font-size: 13px;
+                color: {self.TEXT_COLOR};
+                font-family: 'Cascadia Code', 'Consolas', monospace;
+                min-height: 20px;
+                min-width: 120px;
+            }}
+            QSpinBox:focus {{
+                border-color: {self.BORDER_COLOR};
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                width: 20px;
+                border: none;
+                background-color: {self.INPUT_BORDER};
+            }}
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+                background-color: {self.BORDER_COLOR};
+            }}
+        """)
+        threshold_layout.addWidget(self.ai_cleanup_threshold_input)
+        threshold_layout.addStretch()
+
+        ai_cleanup_layout.addLayout(threshold_layout)
+
+        ai_cleanup_group.setLayout(ai_cleanup_layout)
+        content_layout.addWidget(ai_cleanup_group)
+
         # ===== TRANSCRIPTION PROMPT SECTION =====
         prompt_group = self._create_section("Transcription Prompt")
         prompt_layout = QVBoxLayout()
@@ -656,6 +723,12 @@ class SettingsWindow(BaseWindow):
 
         # Advanced - Prompt
         ConfigManager.set_config_value(current_values['initial_prompt'], 'model_options', 'common', 'initial_prompt')
+
+        # AI Cleanup settings
+        if 'ai_cleanup_enabled' in current_values:
+            ConfigManager.set_config_value(current_values['ai_cleanup_enabled'], 'post_processing', 'ai_cleanup_enabled')
+        if 'ai_cleanup_threshold' in current_values:
+            ConfigManager.set_config_value(current_values['ai_cleanup_threshold'], 'post_processing', 'ai_cleanup_threshold')
 
         # Engine settings
         if 'engine' in current_values:

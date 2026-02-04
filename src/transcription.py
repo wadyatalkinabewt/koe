@@ -275,6 +275,66 @@ def post_process_transcription(transcription):
     transcription += ' '  # Trailing space for easy pasting
     return transcription
 
+
+def ai_cleanup_transcription(text):
+    """Use Claude Sonnet 4.5 to clean up grammar, punctuation, and filler words.
+
+    Returns the cleaned text, or the original text if cleanup fails.
+    """
+    _debug("ai_cleanup_transcription() STARTED")
+
+    if not text or not text.strip():
+        _debug("  Empty text, skipping")
+        return text
+
+    try:
+        import anthropic
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            _debug("  No ANTHROPIC_API_KEY, skipping AI cleanup")
+            return text
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        prompt = """Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words (um, uh, like, you know, etc.).
+
+IMPORTANT:
+- Do NOT summarize or change the meaning
+- Do NOT add any new information
+- Keep the same speaking style and tone
+- Output ONLY the cleaned text, nothing else (no quotes, no explanation)
+
+Transcription:
+""" + text.strip()
+
+        _debug("  Calling Claude Sonnet 4.5 API...")
+        response = client.messages.create(
+            model="claude-sonnet-4-5-20250514",
+            max_tokens=2048,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        cleaned = response.content[0].text.strip()
+        _debug(f"  AI cleanup complete: {len(text)} -> {len(cleaned)} chars")
+
+        # Add trailing space back (was in original post-processing)
+        if not cleaned.endswith(' '):
+            cleaned += ' '
+
+        return cleaned
+
+    except ImportError:
+        _debug("  anthropic package not installed, skipping AI cleanup")
+        return text
+    except Exception as e:
+        _debug(f"  AI cleanup error: {e}")
+        return text
+
 def check_server_available():
     """Check if the transcription server is running."""
     global _server_client, _server_mode
@@ -350,6 +410,11 @@ def transcribe(audio_data, local_model=None):
         _debug("  audio_data is None, returning empty")
         return ''
 
+    # Calculate audio duration for AI cleanup threshold check
+    sample_rate = 16000
+    audio_duration_sec = len(audio_data) / sample_rate
+    _debug(f"  Audio duration: {audio_duration_sec:.1f}s")
+
     # Check if server is available
     server_available = check_server_available()
 
@@ -373,6 +438,17 @@ def transcribe(audio_data, local_model=None):
     _debug(f"  Raw transcription length: {len(transcription)}")
     result = post_process_transcription(transcription)
     _debug(f"  Post-processed result length: {len(result)}")
+
+    # Check if AI cleanup is enabled and duration meets threshold
+    ai_cleanup_enabled = ConfigManager.get_config_value('post_processing', 'ai_cleanup_enabled')
+    ai_cleanup_threshold = ConfigManager.get_config_value('post_processing', 'ai_cleanup_threshold') or 30
+
+    if ai_cleanup_enabled and audio_duration_sec >= ai_cleanup_threshold:
+        _debug(f"  AI cleanup enabled and duration ({audio_duration_sec:.1f}s) >= threshold ({ai_cleanup_threshold}s)")
+        result = ai_cleanup_transcription(result)
+    else:
+        _debug(f"  AI cleanup skipped (enabled={ai_cleanup_enabled}, duration={audio_duration_sec:.1f}s, threshold={ai_cleanup_threshold}s)")
+
     save_rolling_transcription(result)
     _debug("transcribe() FINISHED")
     return result
