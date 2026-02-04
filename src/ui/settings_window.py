@@ -28,6 +28,43 @@ except ImportError:
     def create_engine(engine_id):
         return None
 
+
+def _check_engine_available_via_server(engine_id: str) -> bool:
+    """Check if engine is available by querying the server.
+
+    This works around Qt/NeMo DLL conflicts on Windows by checking
+    what the server (which doesn't load Qt) reports.
+    """
+    import requests
+
+    # Whisper (faster-whisper) doesn't have Qt conflicts, check locally
+    if engine_id == "whisper":
+        return is_engine_available(engine_id)
+
+    # For Parakeet, check if server is running it (avoids Qt/NeMo DLL conflict)
+    if engine_id == "parakeet":
+        try:
+            response = requests.get("http://localhost:9876/status", timeout=2)
+            if response.status_code == 200:
+                data = response.json()
+                server_model = data.get("model", "")
+                # If server is running parakeet, it's definitely available
+                if "parakeet" in server_model.lower():
+                    return True
+                # Server is running but not parakeet - check config to see if parakeet is configured
+                # (user may have parakeet installed but running whisper currently)
+                config_engine = ConfigManager.get_config_value('model_options', 'engine')
+                if config_engine == 'parakeet':
+                    # Config says parakeet, so assume it's available
+                    return True
+        except:
+            pass
+        # Fall back to local check (may fail due to Qt/NeMo conflict)
+        return is_engine_available(engine_id)
+
+    return is_engine_available(engine_id)
+
+
 load_dotenv()
 
 
@@ -777,7 +814,8 @@ class SettingsWindow(BaseWindow):
         selected_index = 0
 
         for i, (engine_id, name, description) in enumerate(engines):
-            available = is_engine_available(engine_id)
+            # Check via server first (works around Qt/NeMo DLL conflict)
+            available = _check_engine_available_via_server(engine_id)
             if available:
                 self.engine_dropdown.addItem(name, engine_id)
             else:
@@ -859,12 +897,8 @@ class SettingsWindow(BaseWindow):
             vram = vram_map.get(model_id, 2000)
             self.model_info_label.setText(f"// ~{vram}MB VRAM required")
         elif engine_id == 'parakeet':
-            if not is_engine_available('parakeet'):
-                import sys
-                if sys.platform == 'win32':
-                    self.model_info_label.setText("// Requires WSL2 on Windows. Run server in WSL.")
-                else:
-                    self.model_info_label.setText("// pip install nemo_toolkit[asr]")
+            if not _check_engine_available_via_server('parakeet'):
+                self.model_info_label.setText("// pip install nemo_toolkit[asr]")
             else:
                 self.model_info_label.setText("// ~2GB VRAM, English only, ~50x faster")
         else:

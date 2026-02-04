@@ -9,6 +9,7 @@ For remote usage (laptop over Tailscale), set the WHISPER_SERVER_URL environment
 """
 
 import os
+import time
 import base64
 import json
 import requests
@@ -52,15 +53,55 @@ class MeetingSegment:
 # Support remote server via environment variable
 DEFAULT_SERVER_URL = os.environ.get("WHISPER_SERVER_URL", "http://localhost:9876")
 
+# API token for authentication (optional - if not set, no auth sent)
+DEFAULT_API_TOKEN = os.environ.get("KOE_API_TOKEN")
+
+
+def _validate_server_url(url: str) -> str:
+    """Validate server URL has valid scheme and netloc.
+
+    Args:
+        url: The server URL to validate
+
+    Returns:
+        The validated URL (stripped of trailing slash)
+
+    Raises:
+        ValueError: If URL is malformed
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"Invalid WHISPER_SERVER_URL: must start with http:// or https:// (got '{url}')"
+        )
+
+    if not parsed.netloc or not parsed.hostname:
+        raise ValueError(
+            f"Invalid WHISPER_SERVER_URL: missing host (got '{url}')"
+        )
+
+    return url.rstrip("/")
+
 
 class TranscriptionClient:
     """Client for the Whisper transcription server."""
 
-    def __init__(self, server_url: str = DEFAULT_SERVER_URL, timeout: float = 60.0):
-        self.server_url = server_url.rstrip("/")
+    def __init__(self, server_url: str = DEFAULT_SERVER_URL, timeout: float = 60.0,
+                 api_token: Optional[str] = DEFAULT_API_TOKEN):
+        self.server_url = _validate_server_url(server_url)
         self.timeout = timeout  # Read timeout
         self.connect_timeout = 5.0  # Connection timeout (fail fast if server unreachable)
+        self.api_token = api_token
         self._server_available: Optional[bool] = None
+
+    def _get_headers(self) -> Dict[str, str]:
+        """Get headers for requests, including API token if configured."""
+        headers = {}
+        if self.api_token:
+            headers["X-API-Token"] = self.api_token
+        return headers
 
     def _save_failed_audio(self, audio_data: np.ndarray, sample_rate: int, reason: str):
         """Save audio to logs folder when transcription fails, so it can be recovered."""
@@ -93,7 +134,8 @@ class TranscriptionClient:
         try:
             response = requests.get(
                 f"{self.server_url}/status",
-                timeout=2.0
+                timeout=2.0,
+                headers=self._get_headers()
             )
             if response.status_code == 200:
                 data = response.json()
@@ -103,6 +145,28 @@ class TranscriptionClient:
             pass
 
         self._server_available = False
+        return False
+
+    def supports_long_audio(self) -> bool:
+        """Check if the server supports efficient long audio transcription.
+
+        Returns False if:
+        - Server is not available
+        - Server is running Parakeet without local attention enabled
+
+        Long audio (>60s) without local attention will be extremely slow.
+        """
+        try:
+            response = requests.get(
+                f"{self.server_url}/status",
+                timeout=2.0,
+                headers=self._get_headers()
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("supports_long_audio", True)
+        except requests.RequestException:
+            pass
         return False
 
     def transcribe(
@@ -161,36 +225,84 @@ class TranscriptionClient:
         audio_duration_sec = len(audio_data) / sample_rate
         dynamic_timeout = min(30.0 + (audio_duration_sec * 3), 900.0)
 
-        try:
-            _debug(f"  POST {self.server_url}/transcribe (connect={self.connect_timeout}s, read={dynamic_timeout:.1f}s for {audio_duration_sec:.1f}s audio)...")
-            response = requests.post(
-                f"{self.server_url}/transcribe",
-                json=payload,
-                timeout=(self.connect_timeout, dynamic_timeout)  # (connect, read) timeouts
-            )
-            _debug(f"  Response received: status={response.status_code}")
+        # Check for long audio without local attention support
+        # Without local attention, Parakeet has O(n²) attention which causes massive slowdown
+        LONG_AUDIO_THRESHOLD = 60.0  # seconds
+        if audio_duration_sec > LONG_AUDIO_THRESHOLD:
+            if not self.supports_long_audio():
+                _debug(f"  WARNING: Long audio ({audio_duration_sec:.1f}s) but server doesn't support it!")
+                _debug(f"  Server likely missing local attention - transcription would be extremely slow")
+                self._save_failed_audio(audio_data, sample_rate, "no_long_audio_support")
+                return (
+                    f"Server does not support long audio (>{LONG_AUDIO_THRESHOLD:.0f}s). "
+                    "Restart the server to enable local attention. "
+                    f"Audio saved to logs/failed_audio_no_long_audio_support_*.wav",
+                    False
+                )
+            _debug(f"  Long audio ({audio_duration_sec:.1f}s) - server supports it, proceeding...")
 
-            if response.status_code == 200:
-                data = response.json()
-                text = data.get("text", "")
-                _debug(f"  Success: {len(text)} chars")
-                return text, True
-            else:
-                _debug(f"  Server error: {response.status_code}")
-                return f"Server error: {response.status_code}", False
+        # Retry logic with exponential backoff
+        max_retries = 2
+        retry_delays = [1.0, 2.0]  # Exponential backoff: 1s, 2s
+        last_error = None
 
-        except requests.Timeout:
-            _debug(f"  TIMEOUT after {dynamic_timeout:.1f}s (audio was {audio_duration_sec:.1f}s)")
-            self._save_failed_audio(audio_data, sample_rate, "timeout")
-            return "Transcription timed out", False
-        except requests.RequestException as e:
-            _debug(f"  REQUEST ERROR: {e}")
-            self._save_failed_audio(audio_data, sample_rate, "connection_error")
-            return f"Connection error: {e}", False
-        except Exception as e:
-            _debug(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
-            self._save_failed_audio(audio_data, sample_rate, "error")
-            return f"Unexpected error: {e}", False
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    delay = retry_delays[attempt - 1]
+                    _debug(f"  Retry {attempt}/{max_retries} after {delay}s delay...")
+                    time.sleep(delay)
+
+                _debug(f"  POST {self.server_url}/transcribe (connect={self.connect_timeout}s, read={dynamic_timeout:.1f}s for {audio_duration_sec:.1f}s audio)...")
+                response = requests.post(
+                    f"{self.server_url}/transcribe",
+                    json=payload,
+                    timeout=(self.connect_timeout, dynamic_timeout),  # (connect, read) timeouts
+                    headers=self._get_headers()
+                )
+                _debug(f"  Response received: status={response.status_code}")
+
+                if response.status_code == 200:
+                    data = response.json()
+                    text = data.get("text", "")
+                    _debug(f"  Success: {len(text)} chars")
+                    return text, True
+                elif response.status_code == 401:
+                    # Auth error - don't retry
+                    _debug(f"  AUTH ERROR: Invalid or missing API token")
+                    return "Authentication failed: invalid or missing API token", False
+                else:
+                    _debug(f"  Server error: {response.status_code}")
+                    last_error = f"Server error: {response.status_code}"
+                    # Don't retry on server errors (4xx, 5xx) except connection issues
+                    if response.status_code >= 500:
+                        continue  # Retry on 5xx errors
+                    return last_error, False
+
+            except (requests.Timeout, requests.ConnectionError) as e:
+                # Retry on timeout and connection errors
+                _debug(f"  {'TIMEOUT' if isinstance(e, requests.Timeout) else 'CONNECTION ERROR'} (attempt {attempt + 1}/{max_retries + 1}): {e}")
+                last_error = str(e)
+                if attempt == max_retries:
+                    # All retries exhausted - save audio for recovery
+                    reason = "timeout" if isinstance(e, requests.Timeout) else "connection_error"
+                    self._save_failed_audio(audio_data, sample_rate, reason)
+                    return f"{'Transcription timed out' if isinstance(e, requests.Timeout) else 'Connection error'} after {max_retries + 1} attempts", False
+                continue
+
+            except requests.RequestException as e:
+                _debug(f"  REQUEST ERROR: {e}")
+                self._save_failed_audio(audio_data, sample_rate, "connection_error")
+                return f"Connection error: {e}", False
+
+            except Exception as e:
+                _debug(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
+                self._save_failed_audio(audio_data, sample_rate, "error")
+                return f"Unexpected error: {e}", False
+
+        # Should not reach here, but just in case
+        self._save_failed_audio(audio_data, sample_rate, "unknown")
+        return f"Failed after {max_retries + 1} attempts: {last_error}", False
 
     def transcribe_stream(
         self,
@@ -241,7 +353,8 @@ class TranscriptionClient:
                 f"{self.server_url}/transcribe/stream",
                 json=payload,
                 timeout=self.timeout,
-                stream=True
+                stream=True,
+                headers=self._get_headers()
             )
 
             if response.status_code != 200:
@@ -278,7 +391,11 @@ class TranscriptionClient:
     def get_status(self) -> dict:
         """Get server status."""
         try:
-            response = requests.get(f"{self.server_url}/status", timeout=2.0)
+            response = requests.get(
+                f"{self.server_url}/status",
+                timeout=2.0,
+                headers=self._get_headers()
+            )
             if response.status_code == 200:
                 return response.json()
         except requests.RequestException:
@@ -346,7 +463,8 @@ class TranscriptionClient:
             response = requests.post(
                 f"{self.server_url}/transcribe_meeting",
                 json=payload,
-                timeout=(self.connect_timeout, dynamic_timeout)
+                timeout=(self.connect_timeout, dynamic_timeout),
+                headers=self._get_headers()
             )
 
             if response.status_code == 200:
@@ -374,7 +492,8 @@ class TranscriptionClient:
         try:
             response = requests.post(
                 f"{self.server_url}/diarization/reset",
-                timeout=5.0
+                timeout=5.0,
+                headers=self._get_headers()
             )
             return response.status_code == 200
         except requests.RequestException:
@@ -385,7 +504,8 @@ class TranscriptionClient:
         try:
             response = requests.get(
                 f"{self.server_url}/speakers",
-                timeout=5.0
+                timeout=5.0,
+                headers=self._get_headers()
             )
             if response.status_code == 200:
                 data = response.json()
@@ -408,7 +528,8 @@ class TranscriptionClient:
         try:
             response = requests.get(
                 f"{self.server_url}/diarization/unenrolled",
-                timeout=5.0
+                timeout=15.0,  # Increased for slow networks
+                headers=self._get_headers()
             )
             if response.status_code == 200:
                 data = response.json()
@@ -424,6 +545,79 @@ class TranscriptionClient:
         except requests.RequestException:
             pass
         return {}
+
+    def get_failed_audio_files(self, max_age_minutes: int = 60) -> List[Path]:
+        """Get list of failed audio files that could be retried.
+
+        Args:
+            max_age_minutes: Only return files created within this many minutes
+
+        Returns:
+            List of Path objects for failed audio files
+        """
+        logs_dir = Path(__file__).parent.parent / "logs"
+        if not logs_dir.exists():
+            return []
+
+        # Find failed audio files
+        failed_files = list(logs_dir.glob("failed_audio_*.wav"))
+
+        # Filter by age
+        cutoff_time = time.time() - (max_age_minutes * 60)
+        recent_files = [
+            f for f in failed_files
+            if f.stat().st_mtime > cutoff_time
+        ]
+
+        # Sort by modification time (oldest first)
+        recent_files.sort(key=lambda f: f.stat().st_mtime)
+        return recent_files
+
+    def retry_failed_audio(self, audio_path: Path, language: Optional[str] = None,
+                          initial_prompt: Optional[str] = None) -> Tuple[str, bool]:
+        """Retry transcription of a failed audio file.
+
+        Args:
+            audio_path: Path to the failed audio WAV file
+            language: Language code for transcription
+            initial_prompt: Initial prompt for transcription
+
+        Returns:
+            Tuple of (result_text, success). On success, deletes the failed audio file.
+        """
+        import wave
+
+        try:
+            # Load the WAV file
+            with wave.open(str(audio_path), 'rb') as wf:
+                sample_rate = wf.getframerate()
+                n_frames = wf.getnframes()
+                audio_bytes = wf.readframes(n_frames)
+                audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+
+            _debug(f"Retrying failed audio: {audio_path.name} ({len(audio_data)/sample_rate:.1f}s)")
+
+            # Try to transcribe
+            result, success = self.transcribe(
+                audio_data, sample_rate=sample_rate,
+                language=language, initial_prompt=initial_prompt
+            )
+
+            if success:
+                # Delete the failed audio file on success
+                try:
+                    audio_path.unlink()
+                    _debug(f"  Retry SUCCESS - deleted {audio_path.name}")
+                except Exception as e:
+                    _debug(f"  Retry succeeded but failed to delete file: {e}")
+                return result, True
+            else:
+                _debug(f"  Retry FAILED: {result}")
+                return result, False
+
+        except Exception as e:
+            _debug(f"  Retry ERROR: {e}")
+            return f"Failed to load audio: {e}", False
 
 
 # Convenience function for simple usage

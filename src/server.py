@@ -43,12 +43,43 @@ def _setup_cuda_dlls():
 
 _setup_cuda_dlls()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import Optional, AsyncGenerator
 import uvicorn
 import json
+
+
+# API Token Authentication Middleware
+class APITokenMiddleware(BaseHTTPMiddleware):
+    """Middleware to check API token if KOE_API_TOKEN is set."""
+
+    # Endpoints that don't require authentication
+    PUBLIC_ENDPOINTS = {"/health", "/status", "/docs", "/openapi.json"}
+
+    async def dispatch(self, request: Request, call_next):
+        api_token = os.environ.get("KOE_API_TOKEN")
+
+        # If no token configured, allow all requests (backward compatibility)
+        if not api_token:
+            return await call_next(request)
+
+        # Allow public endpoints without auth
+        if request.url.path in self.PUBLIC_ENDPOINTS:
+            return await call_next(request)
+
+        # Check for token in header
+        provided_token = request.headers.get("X-API-Token")
+        if not provided_token or provided_token != api_token:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API token"}
+            )
+
+        return await call_next(request)
 
 # Import engine factory (lazy loads actual engines)
 from engines import create_engine, get_available_engines, is_engine_available, TranscriptionEngine
@@ -103,6 +134,9 @@ class ServerStatus(BaseModel):
     device: str
     ready: bool
     diarization_available: bool = False
+    supports_long_audio: bool = True  # False if Parakeet without local attention
+    busy: bool = False  # True if any transcription requests are active
+    active_requests: int = 0  # Number of in-flight transcription requests
 
 
 # Global engine instance
@@ -114,6 +148,30 @@ _engine_info = {"engine": "", "model": "", "device": ""}
 _diarizer = None
 _diarizer_lock = threading.Lock()
 _diarizer_available = False
+
+# Request tracking for busy detection
+_active_requests = 0
+_active_requests_lock = threading.Lock()
+
+
+def _increment_requests():
+    """Increment active request counter."""
+    global _active_requests
+    with _active_requests_lock:
+        _active_requests += 1
+
+
+def _decrement_requests():
+    """Decrement active request counter."""
+    global _active_requests
+    with _active_requests_lock:
+        _active_requests = max(0, _active_requests - 1)
+
+
+def get_active_requests() -> int:
+    """Get current number of active requests."""
+    with _active_requests_lock:
+        return _active_requests
 
 
 def get_diarizer():
@@ -201,6 +259,12 @@ def get_model():
     return get_engine()
 
 
+def _load_diarizer_async():
+    """Load diarizer in background thread."""
+    print("[Server] Loading diarization model in background...")
+    get_diarizer()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load engine on startup."""
@@ -211,6 +275,11 @@ async def lifespan(app: FastAPI):
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 
     load_engine(engine_id, model, device, compute_type)
+
+    # Start loading diarizer in background (don't block startup)
+    diarizer_thread = threading.Thread(target=_load_diarizer_async, daemon=True)
+    diarizer_thread.start()
+
     yield
     # Cleanup if needed
     print("[Server] Shutting down...")
@@ -223,16 +292,28 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Add API token authentication middleware
+app.add_middleware(APITokenMiddleware)
+
 
 @app.get("/status", response_model=ServerStatus)
 async def status():
     """Check server status and engine readiness."""
+    # Check if engine supports long audio (Parakeet needs local attention)
+    supports_long = True
+    if _engine is not None:
+        supports_long = _engine.supports_long_audio
+
+    active = get_active_requests()
     return ServerStatus(
         status="running",
         model=_engine_info.get("model", "not loaded"),
         device=_engine_info.get("device", "unknown"),
         ready=_engine is not None,
-        diarization_available=_diarizer_available
+        diarization_available=_diarizer_available,
+        supports_long_audio=supports_long,
+        busy=active > 0,
+        active_requests=active
     )
 
 
@@ -267,6 +348,13 @@ async def transcribe(request: TranscribeRequest):
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine not loaded")
 
+    # Limit audio size to prevent DoS (50MB ~= 25 min at 16kHz mono int16)
+    MAX_AUDIO_BYTES = 50 * 1024 * 1024
+    estimated_size = len(request.audio_base64) * 3 // 4
+    if estimated_size > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail=f"Audio too large (max {MAX_AUDIO_BYTES // 1024 // 1024}MB)")
+
+    _increment_requests()
     try:
         # Decode base64 audio
         audio_bytes = base64.b64decode(request.audio_base64)
@@ -337,7 +425,11 @@ async def transcribe(request: TranscribeRequest):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()  # Log full error server-side
+        raise HTTPException(status_code=500, detail="Internal transcription error")
+    finally:
+        _decrement_requests()
 
 
 @app.post("/transcribe/stream")
@@ -394,7 +486,9 @@ async def transcribe_stream(request: TranscribeRequest):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()  # Log full error server-side
+        raise HTTPException(status_code=500, detail="Internal transcription error")
 
 
 @app.post("/transcribe_meeting", response_model=MeetingTranscribeResponse)
@@ -413,6 +507,13 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
     if diarizer is None:
         raise HTTPException(status_code=503, detail="Diarization model not available. Check HF_TOKEN and pyannote installation.")
 
+    # Limit audio size to prevent DoS (50MB ~= 25 min at 16kHz mono int16)
+    MAX_AUDIO_BYTES = 50 * 1024 * 1024
+    estimated_size = len(request.audio_base64) * 3 // 4
+    if estimated_size > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail=f"Audio too large (max {MAX_AUDIO_BYTES // 1024 // 1024}MB)")
+
+    _increment_requests()
     try:
         # Decode base64 audio
         audio_bytes = base64.b64decode(request.audio_base64)
@@ -495,8 +596,10 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
 
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        traceback.print_exc()  # Log full error server-side
+        raise HTTPException(status_code=500, detail="Internal transcription error")
+    finally:
+        _decrement_requests()
 
 
 @app.post("/diarization/reset")
@@ -553,6 +656,10 @@ def run_server(host: str = "0.0.0.0", port: int = 9876):
 
 
 if __name__ == "__main__":
+    # Load .env when run directly
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+
     import argparse
     parser = argparse.ArgumentParser(description="Koe Transcription Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")

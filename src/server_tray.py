@@ -10,6 +10,10 @@ import os
 import sys
 from pathlib import Path
 
+# Load .env file for HF_TOKEN and other settings
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 # Setup CUDA DLLs before any CUDA imports (PATH modification more reliable than os.add_dll_directory)
 def _setup_cuda_dlls():
     try:

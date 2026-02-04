@@ -7,6 +7,7 @@ sounddevice
 pyaudiowpatch
 webrtcvad-wheels
 numpy
+scipy
 soundfile
 
 # UI

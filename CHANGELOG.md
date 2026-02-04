@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 ### Added
+- **Crash Recovery & Data Loss Prevention (2026-02-05)**:
+  - **Transcript crash recovery**: Scribe now saves entries incrementally to `.transcript_recovery.jsonl` as they arrive. If app crashes mid-meeting, recovery dialog on next startup offers to save the recovered transcript.
+  - **Server busy tracking**: Server tracks `busy` and `active_requests` in `/status` endpoint. Launcher waits up to 2 minutes for active transcriptions to complete before stopping.
+  - **Empty transcription audio backup**: If transcription >2 seconds returns empty (silent engine failure), audio is saved to `logs/failed_audio_empty_result_*.wav`.
+  - **Safe server restart**: `python src/server_launcher.py restart` waits for idle before stopping.
+  - **Session state persistence**: Speaker embeddings saved to `.session_state.npz`, survives server restarts (1 hour TTL).
+  - **Failed chunk retry**: Scribe automatically retries `failed_audio_*.wav` files when meeting stops.
 - **Parakeet Engine (2026-02-01)**: NVIDIA NeMo-based transcription ~50x faster than Whisper
   - Engine abstraction with factory pattern (`src/engines/`)
   - WSL integration with systemd service for Parakeet

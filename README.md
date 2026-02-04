@@ -375,6 +375,8 @@ C:\dev\koe\
 │   └── generate_icon.py           # Generate icon files
 │
 ├── .setup_complete                    # Marker file (created after setup wizard)
+├── .session_state.npz                 # Diarization session (survives server restarts, 1hr TTL)
+├── .transcript_recovery.jsonl         # Crash recovery (auto-deleted on save)
 │
 ├── src/
 │   ├── main.py                    # Koe application
@@ -430,7 +432,10 @@ C:\dev\koe\
 │       └── ...
 │
 ├── logs/
-│   └── koe_errors.log             # Application error log
+│   ├── koe_errors.log             # Application error log
+│   ├── debug.log                  # Koe hotkey debug log (rotates at 1MB)
+│   ├── meeting_debug.log          # Scribe meeting debug log
+│   └── failed_audio_*.wav         # Failed transcriptions (retried on meeting stop)
 │
 └── .summary_status/               # Temporary summarization status (auto-cleaned)
 ```
@@ -789,9 +794,18 @@ Server status and capabilities.
   "model": "large-v3",
   "device": "cuda",
   "ready": true,
-  "diarization_available": true
+  "diarization_available": true,
+  "supports_long_audio": true,
+  "busy": false,
+  "active_requests": 0
 }
 ```
+
+| Field | Description |
+|-------|-------------|
+| `busy` | `true` if any transcription requests are in progress |
+| `active_requests` | Number of in-flight transcription requests |
+| `supports_long_audio` | `true` if server can handle >60 second audio |
 
 #### POST /transcribe
 
@@ -1093,6 +1107,22 @@ In a 2-person meeting, if you see "Speaker 1", "Speaker 2", "Speaker 3"...:
 1. Verify `ANTHROPIC_API_KEY` in `.env`
 2. Check for errors in `logs/koe_errors.log`
 3. Ensure API key has sufficient credits
+
+#### Scribe Crashed Mid-Meeting
+
+If Scribe crashes while recording:
+1. **Recovery on startup**: Next time you open Scribe, a dialog will appear asking to save recovered transcript
+2. **Click "Save"**: Recovered transcript saved with "_recovered" suffix
+3. **Manual recovery**: Check if `.transcript_recovery.jsonl` exists in koe folder
+
+**Note**: Recovery saves transcript text only - speaker embeddings may be incomplete.
+
+#### Server Crashed/Restarted Mid-Meeting
+
+If the server crashes during a Scribe meeting:
+1. **Session state persists**: Speaker embeddings saved to `.session_state.npz` (1 hour TTL)
+2. **Failed chunks retried**: When meeting stops, Scribe retries failed audio files
+3. **Safe restart**: Use `python src/server_launcher.py restart` which waits for active transcriptions
 
 ### General Issues
 

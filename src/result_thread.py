@@ -137,6 +137,19 @@ class ResultThread(QThread):
             _debug(f"  Transcription done in {transcription_time:.2f}s, result length={len(result)}")
             ConfigManager.console_print(f'Transcription completed in {transcription_time:.2f} seconds. Post-processed line: {result}')
 
+            # If transcription returned empty/whitespace but we had substantial audio,
+            # save the audio as a backup (possible silent engine failure)
+            audio_duration = len(audio_data) / (self.sample_rate or 16000)
+            if (not result or not result.strip()) and audio_duration > 2.0:
+                _debug(f"  WARNING: Empty transcription for {audio_duration:.1f}s audio - saving backup")
+                try:
+                    failed_audio_path = _DEBUG_LOG.parent / f"failed_audio_empty_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                    import scipy.io.wavfile as wav
+                    wav.write(str(failed_audio_path), self.sample_rate or 16000, audio_data)
+                    _debug(f"  Saved empty-result audio to {failed_audio_path}")
+                except Exception as save_err:
+                    _debug(f"  Failed to save audio: {save_err}")
+
             # Always emit result after transcription completes, even if cancelled
             # (Snippet was already saved, user deserves the clipboard copy and beep)
             _debug("  Emitting result signal")

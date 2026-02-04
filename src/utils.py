@@ -1,5 +1,6 @@
 import yaml
 import os
+from pathlib import Path
 
 class ConfigManager:
     _instance = None
@@ -116,7 +117,7 @@ class ConfigManager:
         if expected_type in type_map:
             expected_python_type = type_map[expected_type]
             if not isinstance(value, expected_python_type):
-                print(f"⚠ Config validation warning: '{path}' should be {expected_type}, got {type(value).__name__}. Using default.")
+                print(f"[!] Config validation warning: '{path}' should be {expected_type}, got {type(value).__name__}. Using default.")
                 return False
 
         # Check if value is in allowed options
@@ -169,11 +170,14 @@ class ConfigManager:
 
     @classmethod
     def save_config(cls, config_path=os.path.join('src', 'config.yaml')):
-        """Save the current configuration to a YAML file."""
+        """Save the current configuration to a YAML file (atomic write)."""
         if cls._instance is None:
             raise RuntimeError("ConfigManager not initialized")
-        with open(config_path, 'w') as file:
+        filepath = Path(config_path)
+        temp_path = filepath.with_suffix('.tmp')
+        with open(temp_path, 'w', encoding='utf-8') as file:
             yaml.dump(cls._instance.config, file, default_flow_style=False)
+        temp_path.replace(filepath)  # Atomic rename
 
     @classmethod
     def reload_config(cls):

@@ -155,6 +155,10 @@ meeting_debug.log
 summarization_errors.log
 capture_debug.log
 
+# Crash recovery files (contain sensitive meeting data)
+.transcript_recovery.jsonl
+.session_state.npz
+
 # Sync folders
 .stfolder/
 
