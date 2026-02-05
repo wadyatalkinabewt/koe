@@ -13,10 +13,22 @@ import time
 import requests
 import yaml
 from pathlib import Path
+from datetime import datetime
 
 SERVER_URL = "http://localhost:9876"
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR.parent / "config.yaml"
+LOG_PATH = SCRIPT_DIR.parent / "logs" / "server_launcher.log"
+
+def _log(msg: str):
+    """Write log message to file."""
+    try:
+        LOG_PATH.parent.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {msg}\n")
+    except:
+        pass
 
 
 def get_engine_config():
@@ -210,54 +222,74 @@ def stop_server(force: bool = False, wait_for_idle: bool = True):
         force: If True, stop even if busy (not recommended)
         wait_for_idle: If True, wait for active requests to complete before stopping
     """
+    _log("stop_server() called")
+
     if not is_server_running():
+        _log("Server not running, nothing to stop")
         print("[Launcher] Server not running")
         return True
 
     # Don't kill the server if it's still loading the model
     if not is_server_ready():
+        _log("Server is loading model, not stopping")
         print("[Launcher] Server is loading model, not stopping")
         return True
 
     # Check if server is busy
     status = get_server_status()
     active_requests = status.get("active_requests", 0)
+    _log(f"Server status: {status}")
+
     if active_requests > 0:
         if force:
+            _log(f"Force stopping with {active_requests} active request(s)")
             print(f"[Launcher] WARNING: Force stopping with {active_requests} active request(s)")
         elif wait_for_idle:
+            _log(f"Server busy ({active_requests} active), waiting...")
             print(f"[Launcher] Server busy ({active_requests} active request(s)), waiting...")
             for i in range(120):  # Wait up to 2 minutes
                 time.sleep(1)
                 status = get_server_status()
                 active_requests = status.get("active_requests", 0)
                 if active_requests == 0:
+                    _log("Server idle, proceeding")
                     print("[Launcher] Server idle, proceeding with shutdown")
                     break
                 if i % 10 == 9:
                     print(f"[Launcher] Still waiting... ({active_requests} active request(s))")
             else:
+                _log("Timeout waiting for idle, aborting")
                 print("[Launcher] Timeout waiting for idle, aborting stop")
                 return False
         else:
+            _log(f"Server busy, not stopping (no wait)")
             print(f"[Launcher] Server busy ({active_requests} active request(s)), not stopping")
             print("[Launcher] Use --force to stop anyway, or --wait to wait for idle")
             return False
 
     try:
+        _log("Sending POST /shutdown...")
         print("[Launcher] Sending shutdown request...")
         response = requests.post(f"{SERVER_URL}/shutdown", timeout=5)
+        _log(f"Shutdown response: {response.status_code}")
         if response.status_code == 200:
             print("[Launcher] Server shutting down...")
             # Wait for it to actually stop
-            for _ in range(10):
+            for i in range(10):
                 time.sleep(0.5)
                 if not is_server_running():
+                    _log("Server stopped successfully")
                     print("[Launcher] Server stopped")
                     return True
+                _log(f"Still running after {(i+1)*0.5}s...")
+            _log("WARNING: Server may still be running after 5s wait")
             print("[Launcher] Warning: Server may still be running")
             return False
+        else:
+            _log(f"Unexpected response code: {response.status_code}")
+            return False
     except Exception as e:
+        _log(f"Error stopping server: {e}")
         print(f"[Launcher] Error stopping server: {e}")
         return False
 
