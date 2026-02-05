@@ -273,6 +273,9 @@ class KoeApp(QObject):
 
     def restart_app(self):
         self.cleanup()
+        # Stop the server so new instance can start with updated config (e.g., engine change)
+        from server_launcher import stop_server
+        stop_server()
         QApplication.quit()
         QProcess.startDetached(sys.executable, sys.argv)
 
