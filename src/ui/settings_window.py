@@ -352,63 +352,67 @@ class SettingsWindow(BaseWindow):
         content_layout.addWidget(output_group)
 
         # ===== TRANSCRIPTION ENGINE SECTION =====
-        engine_group = self._create_section("Transcription Engine")
-        engine_layout = QVBoxLayout()
-        engine_layout.setSpacing(12)
+        # Only show engine settings in local mode (not when using remote server)
+        is_remote_mode = bool(os.environ.get('WHISPER_SERVER_URL'))
 
-        engine_help = QLabel("// engine used by the transcription server")
-        engine_help.setObjectName("helpText")
-        engine_layout.addWidget(engine_help)
+        if not is_remote_mode:
+            engine_group = self._create_section("Transcription Engine")
+            engine_layout = QVBoxLayout()
+            engine_layout.setSpacing(12)
 
-        # Engine dropdown
-        engine_label = QLabel("Engine")
-        engine_layout.addWidget(engine_label)
+            engine_help = QLabel("// engine used by the transcription server")
+            engine_help.setObjectName("helpText")
+            engine_layout.addWidget(engine_help)
 
-        self.engine_dropdown = QComboBox()
-        self.engine_dropdown.setFocusPolicy(Qt.StrongFocus)
-        self.engine_dropdown.wheelEvent = lambda e: e.ignore()
-        self._populate_engine_dropdown()
-        self.engine_dropdown.currentIndexChanged.connect(self._on_engine_changed)
-        engine_layout.addWidget(self.engine_dropdown)
+            # Engine dropdown
+            engine_label = QLabel("Engine")
+            engine_layout.addWidget(engine_label)
 
-        # Model dropdown (changes based on engine)
-        model_label = QLabel("Model")
-        engine_layout.addWidget(model_label)
+            self.engine_dropdown = QComboBox()
+            self.engine_dropdown.setFocusPolicy(Qt.StrongFocus)
+            self.engine_dropdown.wheelEvent = lambda e: e.ignore()
+            self._populate_engine_dropdown()
+            self.engine_dropdown.currentIndexChanged.connect(self._on_engine_changed)
+            engine_layout.addWidget(self.engine_dropdown)
 
-        self.model_dropdown = QComboBox()
-        self.model_dropdown.setFocusPolicy(Qt.StrongFocus)
-        self.model_dropdown.wheelEvent = lambda e: e.ignore()
-        self._populate_model_dropdown()
-        engine_layout.addWidget(self.model_dropdown)
+            # Model dropdown (changes based on engine)
+            model_label = QLabel("Model")
+            engine_layout.addWidget(model_label)
 
-        # Model info label
-        self.model_info_label = QLabel("")
-        self.model_info_label.setObjectName("helpText")
-        self.model_info_label.setWordWrap(True)
-        engine_layout.addWidget(self.model_info_label)
-        self._update_model_info()
+            self.model_dropdown = QComboBox()
+            self.model_dropdown.setFocusPolicy(Qt.StrongFocus)
+            self.model_dropdown.wheelEvent = lambda e: e.ignore()
+            self._populate_model_dropdown()
+            engine_layout.addWidget(self.model_dropdown)
 
-        # Device dropdown
-        device_label = QLabel("Device")
-        engine_layout.addWidget(device_label)
+            # Model info label
+            self.model_info_label = QLabel("")
+            self.model_info_label.setObjectName("helpText")
+            self.model_info_label.setWordWrap(True)
+            engine_layout.addWidget(self.model_info_label)
+            self._update_model_info()
 
-        self.device_dropdown = QComboBox()
-        self.device_dropdown.setFocusPolicy(Qt.StrongFocus)
-        self.device_dropdown.wheelEvent = lambda e: e.ignore()
-        self._populate_device_dropdown()
-        engine_layout.addWidget(self.device_dropdown)
+            # Device dropdown
+            device_label = QLabel("Device")
+            engine_layout.addWidget(device_label)
 
-        device_help = QLabel("// auto detects GPU, use CPU if no NVIDIA GPU")
-        device_help.setObjectName("helpText")
-        engine_layout.addWidget(device_help)
+            self.device_dropdown = QComboBox()
+            self.device_dropdown.setFocusPolicy(Qt.StrongFocus)
+            self.device_dropdown.wheelEvent = lambda e: e.ignore()
+            self._populate_device_dropdown()
+            engine_layout.addWidget(self.device_dropdown)
 
-        # Restart warning
-        restart_label = QLabel("// changing engine/device requires server restart")
-        restart_label.setObjectName("helpText")
-        engine_layout.addWidget(restart_label)
+            device_help = QLabel("// auto detects GPU, use CPU if no NVIDIA GPU")
+            device_help.setObjectName("helpText")
+            engine_layout.addWidget(device_help)
 
-        engine_group.setLayout(engine_layout)
-        content_layout.addWidget(engine_group)
+            # Restart warning
+            restart_label = QLabel("// changing engine/device requires server restart")
+            restart_label.setObjectName("helpText")
+            engine_layout.addWidget(restart_label)
+
+            engine_group.setLayout(engine_layout)
+            content_layout.addWidget(engine_group)
 
         # ===== ENROLLED SPEAKERS SECTION =====
         speakers_group = self._create_section("Enrolled Speakers")
