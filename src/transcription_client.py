@@ -95,6 +95,7 @@ class TranscriptionClient:
         self.connect_timeout = 5.0  # Connection timeout (fail fast if server unreachable)
         self.api_token = api_token
         self._server_available: Optional[bool] = None
+        self._cached_supports_long_audio: bool = True  # Cache last known value (assume True until proven otherwise)
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for requests, including API token if configured."""
@@ -166,24 +167,23 @@ class TranscriptionClient:
     def supports_long_audio(self) -> bool:
         """Check if the server supports efficient long audio transcription.
 
-        Returns False if:
-        - Server is not available
-        - Server is running Parakeet without local attention enabled
-
-        Long audio (>60s) without local attention will be extremely slow.
+        Returns cached value if server is unreachable (e.g. busy processing).
+        Only returns False when server explicitly reports supports_long_audio=false.
         """
         try:
             response = requests.get(
                 f"{self.server_url}/status",
-                timeout=2.0,
+                timeout=5.0,
                 headers=self._get_headers()
             )
             if response.status_code == 200:
                 data = response.json()
-                return data.get("supports_long_audio", True)
+                self._cached_supports_long_audio = data.get("supports_long_audio", True)
+                return self._cached_supports_long_audio
         except requests.RequestException:
             pass
-        return False
+        # Server unreachable (possibly busy) - use last known value instead of assuming False
+        return self._cached_supports_long_audio
 
     def transcribe(
         self,

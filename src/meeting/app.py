@@ -1044,6 +1044,11 @@ class MeetingTranscriberApp(QObject):
         self._chunks_processed = 0
         self._server_diarization_available = False  # For remote mode fallback
 
+        # Concurrency control: only allow 1 chunk to be transcribed at a time
+        # Prevents request storms that overwhelm the GPU and freeze the PC
+        self._chunk_semaphore = threading.Semaphore(1)
+        self._consecutive_failures = 0  # Circuit breaker counter
+
         # Pre-meeting file state (for opening existing agenda files)
         self._opened_filepath: Optional[Path] = None
         self._existing_transcript_entries: list = []
@@ -2194,6 +2199,7 @@ class MeetingTranscriberApp(QObject):
                 self.client.reset_diarization()
             self._speaker_counter = 0
             self._speaker_map.clear()
+            self._consecutive_failures = 0  # Reset circuit breaker
 
             # Setup transcript
             self.transcript.start_meeting()
@@ -2556,11 +2562,43 @@ class MeetingTranscriberApp(QObject):
     def _on_chunk_ready(self, chunk: AudioChunk):
         """Handle a new audio chunk (runs in audio thread)."""
         thread = threading.Thread(
-            target=self._process_chunk,
+            target=self._process_chunk_serialized,
             args=(chunk,),
             daemon=True
         )
         thread.start()
+
+    def _process_chunk_serialized(self, chunk: AudioChunk):
+        """Serialize chunk processing to prevent request storms.
+
+        Only one chunk can be transcribed at a time. If the server is overwhelmed
+        (5+ consecutive failures), new chunks are saved directly as failed audio
+        instead of hammering the server.
+        """
+        # Circuit breaker: if server has failed 5+ times in a row, save audio and skip
+        if self._consecutive_failures >= 5:
+            _debug_log(f"[Meeting] Circuit breaker OPEN ({self._consecutive_failures} consecutive failures) - saving chunk as failed audio")
+            self._save_chunk_as_failed(chunk)
+            return
+
+        # Wait for previous chunk to finish (serialize transcription)
+        acquired = self._chunk_semaphore.acquire(timeout=120)
+        if not acquired:
+            _debug_log("[Meeting] Chunk timed out waiting for semaphore (120s) - saving as failed audio")
+            self._save_chunk_as_failed(chunk)
+            return
+
+        try:
+            self._process_chunk(chunk)
+        finally:
+            self._chunk_semaphore.release()
+
+    def _save_chunk_as_failed(self, chunk: AudioChunk):
+        """Save a chunk's audio to failed_audio files for later retry."""
+        if chunk.mic_audio is not None and len(chunk.mic_audio) > 0:
+            self.client._save_failed_audio(chunk.mic_audio, 16000, "circuit_breaker")
+        if chunk.loopback_audio is not None and len(chunk.loopback_audio) > 0:
+            self.client._save_failed_audio(chunk.loopback_audio, chunk.loopback_sample_rate, "circuit_breaker")
 
     def _retry_failed_chunks(self):
         """Retry transcription of any failed audio chunks from this session.
@@ -2610,66 +2648,86 @@ class MeetingTranscriberApp(QObject):
     def _process_chunk(self, chunk: AudioChunk):
         """Process an audio chunk through transcription."""
         timestamp = chunk.timestamp - self._meeting_start_time
+        chunk_had_success = False
 
-        # Get language from config (force English to prevent hallucinations)
-        model_options = ConfigManager.get_config_section('model_options')
-        language = model_options['common'].get('language') or 'en'  # Default to English
-        initial_prompt = model_options['common'].get('initial_prompt')
+        try:
+            # Get language from config (force English to prevent hallucinations)
+            model_options = ConfigManager.get_config_section('model_options')
+            language = model_options['common'].get('language') or 'en'  # Default to English
+            initial_prompt = model_options['common'].get('initial_prompt')
 
-        # Transcribe mic audio (user) - only if it has actual speech
-        if chunk.mic_audio is not None and len(chunk.mic_audio) > 0:
-            if check_audio_has_speech(chunk.mic_audio, threshold=300):
-                self._chunks_processed += 1
-                # Use diarization for mic audio when available (timing consistency + embedding extraction)
-                if self._diarization_available and self._diarizer:
-                    # Local diarization: run through same pipeline as loopback for timing consistency
-                    # Also extracts + updates user's embedding for adaptive learning
-                    _debug_log("[Mic] Using LOCAL diarization for timing consistency")
-                    self._process_mic_with_diarization(chunk.mic_audio, 16000, timestamp)
-                else:
-                    # No diarization: fall back to direct transcription
-                    _debug_log("[Mic] Using direct transcription (no diarization)")
-                    text, success = self.client.transcribe(chunk.mic_audio, sample_rate=16000, language=language, initial_prompt=initial_prompt)
-                    if success:
-                        text = post_process_text(text)
-                        if text:
-                            self.transcription_ready.emit(self.user_name, text, timestamp)
+            # Transcribe mic audio (user) - only if it has actual speech
+            if chunk.mic_audio is not None and len(chunk.mic_audio) > 0:
+                if check_audio_has_speech(chunk.mic_audio, threshold=300):
+                    self._chunks_processed += 1
+                    # Use diarization for mic audio when available (timing consistency + embedding extraction)
+                    if self._diarization_available and self._diarizer:
+                        # Local diarization: run through same pipeline as loopback for timing consistency
+                        # Also extracts + updates user's embedding for adaptive learning
+                        _debug_log("[Mic] Using LOCAL diarization for timing consistency")
+                        self._process_mic_with_diarization(chunk.mic_audio, 16000, timestamp)
+                        chunk_had_success = True
                     else:
-                        self.status_changed.emit(f"Mic error: {text[:30]}")
+                        # No diarization: fall back to direct transcription
+                        _debug_log("[Mic] Using direct transcription (no diarization)")
+                        text, success = self.client.transcribe(chunk.mic_audio, sample_rate=16000, language=language, initial_prompt=initial_prompt)
+                        if success:
+                            chunk_had_success = True
+                            text = post_process_text(text)
+                            if text:
+                                self.transcription_ready.emit(self.user_name, text, timestamp)
+                        else:
+                            self.status_changed.emit(f"Mic error: {text[:30]}")
 
-        # Transcribe loopback audio (others) - only if it has actual speech
-        if chunk.loopback_audio is not None and len(chunk.loopback_audio) > 0:
-            target_rate = 16000
+            # Transcribe loopback audio (others) - only if it has actual speech
+            if chunk.loopback_audio is not None and len(chunk.loopback_audio) > 0:
+                target_rate = 16000
 
-            # High-quality preprocessing: stereo→mono, resample, normalize
-            loopback = preprocess_loopback_audio(
-                audio=chunk.loopback_audio,
-                channels=chunk.loopback_channels,
-                source_rate=chunk.loopback_sample_rate,
-                target_rate=target_rate,
-                target_rms=3000.0  # ~-20dB, optimal for Whisper
-            )
+                # High-quality preprocessing: stereo→mono, resample, normalize
+                loopback = preprocess_loopback_audio(
+                    audio=chunk.loopback_audio,
+                    channels=chunk.loopback_channels,
+                    source_rate=chunk.loopback_sample_rate,
+                    target_rate=target_rate,
+                    target_rms=3000.0  # ~-20dB, optimal for Whisper
+                )
 
-            # Only transcribe if there's actual speech in loopback
-            if check_audio_has_speech(loopback, threshold=300):
-                # Use diarization to identify speakers if available
-                _debug_log(f"[Loopback] _diarization_available={self._diarization_available}, _server_diarization_available={self._server_diarization_available}")
-                if self._diarization_available and self._diarizer:
-                    # Use local diarization (desktop mode)
-                    _debug_log("[Loopback] Using LOCAL diarization path")
-                    self._process_loopback_with_diarization(loopback, target_rate, timestamp)
-                elif self._server_diarization_available:
-                    # Use server-side diarization (remote mode)
-                    _debug_log("[Loopback] Using SERVER diarization path")
-                    self._process_loopback_with_server_diarization(loopback, target_rate, timestamp)
-                else:
-                    # Fallback: just label as "Other"
-                    _debug_log("[Loopback] Using fallback 'Other' path - NO DIARIZATION AVAILABLE")
-                    text, success = self.client.transcribe(loopback, sample_rate=target_rate, language=language, initial_prompt=initial_prompt)
-                    if success:
-                        text = post_process_text(text)
-                        if text:
-                            self.transcription_ready.emit("Other", text, timestamp)
+                # Only transcribe if there's actual speech in loopback
+                if check_audio_has_speech(loopback, threshold=300):
+                    # Use diarization to identify speakers if available
+                    _debug_log(f"[Loopback] _diarization_available={self._diarization_available}, _server_diarization_available={self._server_diarization_available}")
+                    if self._diarization_available and self._diarizer:
+                        # Use local diarization (desktop mode)
+                        _debug_log("[Loopback] Using LOCAL diarization path")
+                        self._process_loopback_with_diarization(loopback, target_rate, timestamp)
+                        chunk_had_success = True
+                    elif self._server_diarization_available:
+                        # Use server-side diarization (remote mode)
+                        _debug_log("[Loopback] Using SERVER diarization path")
+                        self._process_loopback_with_server_diarization(loopback, target_rate, timestamp)
+                        chunk_had_success = True
+                    else:
+                        # Fallback: just label as "Other"
+                        _debug_log("[Loopback] Using fallback 'Other' path - NO DIARIZATION AVAILABLE")
+                        text, success = self.client.transcribe(loopback, sample_rate=target_rate, language=language, initial_prompt=initial_prompt)
+                        if success:
+                            chunk_had_success = True
+                            text = post_process_text(text)
+                            if text:
+                                self.transcription_ready.emit("Other", text, timestamp)
+        except Exception as e:
+            _debug_log(f"[Meeting] Exception in _process_chunk: {e}")
+            chunk_had_success = False
+            # Save audio so it's not lost
+            self._save_chunk_as_failed(chunk)
+
+        # Update circuit breaker based on chunk outcome
+        if chunk_had_success:
+            self._consecutive_failures = 0
+        else:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= 5:
+                _debug_log(f"[Meeting] Circuit breaker OPENED after {self._consecutive_failures} consecutive failures - will save audio instead of sending to server")
 
     def _process_loopback_with_diarization(self, audio: np.ndarray, sample_rate: int, base_timestamp: float):
         """Process loopback audio with speaker diarization."""

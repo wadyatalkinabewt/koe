@@ -17,7 +17,7 @@ from datetime import datetime
 
 SERVER_URL = "http://localhost:9876"
 SCRIPT_DIR = Path(__file__).parent
-CONFIG_PATH = SCRIPT_DIR.parent / "config.yaml"
+CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 LOG_PATH = SCRIPT_DIR.parent / "logs" / "server_launcher.log"
 
 def _log(msg: str):
