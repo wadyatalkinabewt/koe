@@ -4,8 +4,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QRectF
-from PyQt5.QtGui import QFont, QPixmap, QIcon, QPainter, QBrush, QColor, QPainterPath, QPen, QKeyEvent, QMouseEvent
-from PyQt5.QtWidgets import QApplication, QLabel, QHBoxLayout, QVBoxLayout, QWidget, QMainWindow, QPushButton
+from PyQt5.QtGui import QFont, QPixmap, QIcon, QPainter, QBrush, QColor, QPainterPath, QPen, QMouseEvent
+from PyQt5.QtWidgets import QApplication, QLabel, QHBoxLayout, QVBoxLayout, QWidget, QMainWindow
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -26,7 +26,6 @@ def _debug(msg: str):
 
 class StatusWindow(QMainWindow):
     statusSignal = pyqtSignal(str)
-    cancelSignal = pyqtSignal()  # Separate signal for cancel - notifies external handlers only
     closeSignal = pyqtSignal()
 
     # Terminal color scheme (from centralized theme)
@@ -48,8 +47,6 @@ class StatusWindow(QMainWindow):
         self.blink_timer.timeout.connect(self.toggle_blink)
         self.blink_state = True
         self._drag_pos = None  # For window dragging
-        self._cancel_callback = None  # Callback for cancel action
-        self._is_recording = False  # Track if we're in recording (not transcribing) state
         self.initUI()
         self.statusSignal.connect(self.updateStatus)
 
@@ -94,57 +91,7 @@ class StatusWindow(QMainWindow):
 
         self.main_layout.addLayout(text_layout, 1)  # Stretch factor of 1 to center
 
-        # [ESC] button on the right
-        self.hint_label = QPushButton('[ESC]')
-        self.hint_label.setFont(QFont('Cascadia Code', 9))
-        self.hint_label.setStyleSheet("""
-            QPushButton {
-                color: #3a4a4a;
-                background: transparent;
-                border: none;
-                padding: 0px;
-            }
-            QPushButton:hover {
-                color: #ff6666;
-            }
-        """)
-        self.hint_label.setCursor(Qt.PointingHandCursor)
-        self.hint_label.clicked.connect(self._on_cancel_clicked)
-
-        self.main_layout.addWidget(self.hint_label)
-
         self.setCentralWidget(self.main_widget)
-
-    def set_cancel_callback(self, callback):
-        """Set callback function to be called on cancel."""
-        self._cancel_callback = callback
-
-    def _on_cancel_clicked(self):
-        """Handle cancel button click - only during recording."""
-        _debug(f"_on_cancel_clicked() - ESC button clicked, _is_recording={self._is_recording}")
-        if not self._is_recording:
-            _debug("_on_cancel_clicked() - ignoring, not in recording state")
-            return
-        self._handle_cancel()
-
-    def _handle_cancel(self):
-        """Handle cancel action - stop timers, notify external, close window."""
-        _debug("_handle_cancel() - stopping timers")
-        self.timer.stop()
-        self.blink_timer.stop()
-        self.recording_start_time = None
-
-        _debug("_handle_cancel() - calling cancel callback")
-        if self._cancel_callback:
-            try:
-                self._cancel_callback()
-                _debug("_handle_cancel() - callback completed")
-            except Exception as e:
-                _debug(f"_handle_cancel() - callback error: {e}")
-
-        _debug("_handle_cancel() - closing window")
-        self.close()
-        _debug("_handle_cancel() - done")
 
     def paintEvent(self, event):
         """
@@ -164,17 +111,6 @@ class StatusWindow(QMainWindow):
         painter.setBrush(Qt.NoBrush)
         painter.setPen(QPen(self.BORDER_COLOR, 1))
         painter.drawPath(path)
-
-    def keyPressEvent(self, event: QKeyEvent):
-        """Handle key press events - Escape to cancel (only during recording)."""
-        if event.key() == Qt.Key_Escape:
-            _debug(f"keyPressEvent() - Escape key pressed, _is_recording={self._is_recording}")
-            if self._is_recording:
-                self._handle_cancel()
-            else:
-                _debug("keyPressEvent() - ignoring, not in recording state")
-        else:
-            super().keyPressEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
         """Start dragging on left mouse button press."""
@@ -241,7 +177,6 @@ class StatusWindow(QMainWindow):
 
         if status == 'recording':
             _debug("updateStatus() handling 'recording'")
-            self._is_recording = True  # ESC cancel allowed
             self.indicator.setText("●")
             self.indicator.setStyleSheet(f"color: {self.RECORDING_COLOR};")
             self.status_label.setText('> Recording_')
@@ -253,7 +188,6 @@ class StatusWindow(QMainWindow):
             self.show()
         elif status == 'transcribing':
             _debug("updateStatus() handling 'transcribing'")
-            self._is_recording = False  # ESC cancel no longer allowed
             self.timer.stop()
             # Keep blinking during transcription
             self.indicator.setText("●")

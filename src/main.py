@@ -164,10 +164,6 @@ class KoeApp(QObject):
 
         if not ConfigManager.get_config_value("misc", "hide_status_window"):
             self.status_window = StatusWindow()
-            # Set cancel callback to stop the thread
-            self.status_window.set_cancel_callback(self.on_cancel_recording)
-            # Note: We intentionally do NOT connect closeSignal to stop_result_thread
-            # Closing the status window should not cancel ongoing transcription
 
         self.create_tray_icon()
         # Auto-start listening (skip main window, go straight to tray)
@@ -287,14 +283,6 @@ class KoeApp(QObject):
                 "Settings closed without saving. Default values are being used."
             )
             self.initialize_components()
-
-    def on_cancel_recording(self):
-        """Handle cancel action from the status window."""
-        _debug("on_cancel_recording() called")
-        # User clicked [ESC] or pressed Escape - stop the recording thread
-        _debug("  Calling stop_result_thread()")
-        self.stop_result_thread()
-        _debug("on_cancel_recording() done")
 
     def on_activation(self):
         if self.result_thread and self.result_thread.isRunning():
