@@ -686,7 +686,7 @@ Parakeet provides ~50x faster transcription but only supports English.
    - Text is copied to clipboard
 
 3. **Cancel recording**
-   - Click `[ESC]` on status window or press Escape (during recording only)
+   - Press the hotkey again to stop and discard
 
 4. **Access settings**
    - Right-click tray icon → Settings
