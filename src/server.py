@@ -14,6 +14,8 @@ import os
 import sys
 import io
 import base64
+import subprocess
+import tempfile
 import threading
 import numpy as np
 from pathlib import Path
@@ -24,26 +26,11 @@ from typing import Optional, List, Dict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Setup CUDA DLLs before any CUDA imports (PATH modification more reliable than os.add_dll_directory)
-def _setup_cuda_dlls():
-    try:
-        import site
-        paths_to_add = []
-        for sp in [site.getusersitepackages()] + site.getsitepackages():
-            cudnn_bin = os.path.join(sp, "nvidia", "cudnn", "bin")
-            cublas_bin = os.path.join(sp, "nvidia", "cublas", "bin")
-            if os.path.exists(cudnn_bin):
-                paths_to_add.append(cudnn_bin)
-            if os.path.exists(cublas_bin):
-                paths_to_add.append(cublas_bin)
-        if paths_to_add:
-            os.environ['PATH'] = os.pathsep.join(paths_to_add) + os.pathsep + os.environ.get('PATH', '')
-    except Exception:
-        pass
+# Platform-specific setup (CUDA DLLs on Windows, no-op on macOS)
+from compat import setup_cuda_dlls, find_ffmpeg as _find_ffmpeg_compat, IS_MACOS
+setup_cuda_dlls()
 
-_setup_cuda_dlls()
-
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
@@ -93,6 +80,8 @@ class TranscribeRequest(BaseModel):
     initial_prompt: Optional[str] = None
     vad_filter: bool = True
     filter_to_speaker: Optional[str] = None  # If set, only transcribe audio matching this enrolled speaker
+    apply_post_processing: bool = False  # Apply filler removal, name corrections, punctuation
+    apply_ai_cleanup: bool = False  # Apply Claude Haiku cleanup for grammar/punctuation
 
 
 class TranscribeResponse(BaseModel):
@@ -156,7 +145,8 @@ _active_requests_lock = threading.Lock()
 # CUDA cache clearing - track cumulative audio to prevent VRAM fragmentation
 _cumulative_audio_seconds = 0.0
 _cumulative_audio_lock = threading.Lock()
-CUDA_CACHE_CLEAR_THRESHOLD = 600.0  # Clear CUDA cache after 10 minutes of cumulative audio
+CUDA_CACHE_CLEAR_THRESHOLD = 180.0  # Clear CUDA cache after 3 minutes of cumulative audio
+MAX_QUEUED_REQUESTS = 2  # Reject requests if this many are already queued (prevents pile-up)
 
 
 def _increment_requests():
@@ -180,25 +170,68 @@ def get_active_requests() -> int:
 
 
 def _maybe_clear_cuda_cache(audio_duration: float):
-    """Clear CUDA cache if cumulative audio exceeds threshold.
+    """Clear CUDA cache if cumulative audio exceeds threshold or chunk was long.
 
     This prevents VRAM fragmentation that can cause freezes after many transcriptions.
-    Clearing the cache has minimal performance impact (~100-200ms on next transcription).
+    No-op on macOS (no CUDA).
     """
     global _cumulative_audio_seconds
 
     with _cumulative_audio_lock:
-        _cumulative_audio_seconds += audio_duration
+        from compat import maybe_clear_gpu_cache
+        _cumulative_audio_seconds = maybe_clear_gpu_cache(
+            audio_duration, _cumulative_audio_seconds, CUDA_CACHE_CLEAR_THRESHOLD
+        )
 
-        if _cumulative_audio_seconds >= CUDA_CACHE_CLEAR_THRESHOLD:
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    print(f"[Server] Cleared CUDA cache after {_cumulative_audio_seconds:.0f}s cumulative audio")
-                    _cumulative_audio_seconds = 0.0
-            except Exception as e:
-                print(f"[Server] Warning: failed to clear CUDA cache: {e}")
+
+def _apply_post_processing(text: str) -> str:
+    """Apply post-processing to transcription: filler removal, name corrections, punctuation."""
+    from utils import TextProcessor
+    return TextProcessor.process(text, add_trailing_space=False)
+
+
+def _apply_ai_cleanup(text: str) -> str:
+    """Use Claude Haiku to clean up grammar and punctuation.
+
+    Returns original text if cleanup fails or API key not set.
+    """
+    if not text or not text.strip():
+        return text
+
+    try:
+        import anthropic
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            print("[Server] AI cleanup skipped: no ANTHROPIC_API_KEY")
+            return text
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        prompt = (
+            "Clean up this voice transcription. Fix grammar, add proper punctuation, "
+            "and remove filler words (um, uh, like, you know, etc.).\n\n"
+            "IMPORTANT:\n"
+            "- Do NOT summarize or change the meaning\n"
+            "- Do NOT add any new information\n"
+            "- Keep the same speaking style and tone\n"
+            "- Output ONLY the cleaned text, nothing else (no quotes, no explanation)\n\n"
+            "Transcription:\n" + text.strip()
+        )
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        cleaned = response.content[0].text.strip()
+        print(f"[Server] AI cleanup: {len(text)} -> {len(cleaned)} chars")
+        return cleaned
+
+    except Exception as e:
+        print(f"[Server] AI cleanup failed: {e}")
+        return text
 
 
 def get_diarizer():
@@ -296,9 +329,10 @@ def _load_diarizer_async():
 async def lifespan(app: FastAPI):
     """Load engine on startup."""
     # Get config from environment or use defaults
-    engine_id = os.environ.get("WHISPER_ENGINE", "whisper")
+    from compat import get_default_device, get_default_engine
+    engine_id = os.environ.get("WHISPER_ENGINE", get_default_engine())
     model = os.environ.get("WHISPER_MODEL", "large-v3")
-    device = os.environ.get("WHISPER_DEVICE", "cuda")
+    device = os.environ.get("WHISPER_DEVICE", get_default_device())
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 
     load_engine(engine_id, model, device, compute_type)
@@ -375,6 +409,11 @@ async def transcribe(request: TranscribeRequest):
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine not loaded")
 
+    # Reject requests if too many are already queued (prevents pile-up that causes freezes)
+    current_active = get_active_requests()
+    if current_active >= MAX_QUEUED_REQUESTS:
+        raise HTTPException(status_code=503, detail=f"Server busy ({current_active} requests queued). Try again later.")
+
     # Limit audio size to prevent DoS (50MB ~= 25 min at 16kHz mono int16)
     MAX_AUDIO_BYTES = 50 * 1024 * 1024
     estimated_size = len(request.audio_base64) * 3 // 4
@@ -449,8 +488,18 @@ async def transcribe(request: TranscribeRequest):
         # Clear CUDA cache periodically to prevent VRAM fragmentation
         _maybe_clear_cuda_cache(duration)
 
+        text = result.text
+
+        # Apply post-processing if requested (filler removal, name corrections, punctuation)
+        if request.apply_post_processing and text:
+            text = _apply_post_processing(text)
+
+        # Apply AI cleanup if requested (Claude Haiku for grammar/punctuation)
+        if request.apply_ai_cleanup and text:
+            text = _apply_ai_cleanup(text)
+
         return TranscribeResponse(
-            text=result.text,
+            text=text,
             duration_seconds=duration
         )
 
@@ -460,6 +509,109 @@ async def transcribe(request: TranscribeRequest):
         raise HTTPException(status_code=500, detail="Internal transcription error")
     finally:
         _decrement_requests()
+
+
+def _find_ffmpeg() -> str:
+    """Find ffmpeg executable on the system (cross-platform)."""
+    return _find_ffmpeg_compat()
+
+
+def _convert_audio_to_pcm(input_path: str) -> np.ndarray:
+    """Convert any audio file to 16kHz mono int16 PCM using ffmpeg."""
+    ffmpeg = _find_ffmpeg()
+    with tempfile.NamedTemporaryFile(suffix='.raw', delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        result = subprocess.run(
+            [ffmpeg, '-y', '-i', input_path,
+             '-ar', '16000', '-ac', '1', '-f', 's16le', '-acodec', 'pcm_s16le',
+             tmp_path],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg conversion failed: {result.stderr[:200]}")
+        with open(tmp_path, 'rb') as f:
+            pcm_data = f.read()
+        if len(pcm_data) == 0:
+            raise RuntimeError("ffmpeg produced empty output")
+        return np.frombuffer(pcm_data, dtype=np.int16)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+@app.post("/transcribe_file")
+async def transcribe_file(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    initial_prompt: Optional[str] = Form(None),
+    vad_filter: bool = Form(True),
+    apply_post_processing: bool = Form(True),
+    apply_ai_cleanup: bool = Form(True),
+):
+    """
+    Transcribe an uploaded audio file (ogg, mp3, wav, m4a, etc.).
+
+    Handles audio conversion server-side via ffmpeg - the client only needs curl.
+    Applies post-processing and AI cleanup by default.
+    """
+    engine = get_engine()
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Engine not loaded")
+
+    # Save uploaded file to temp
+    suffix = Path(file.filename or "audio.ogg").suffix or ".ogg"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = tmp.name
+        content = await file.read()
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+        if len(content) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+        tmp.write(content)
+
+    _increment_requests()
+    try:
+        # Convert to PCM
+        print(f"[Server] transcribe_file: converting {file.filename} ({len(content)} bytes)")
+        audio_int16 = _convert_audio_to_pcm(tmp_path)
+        audio_float = audio_int16.astype(np.float32) / 32768.0
+        duration = len(audio_float) / 16000
+
+        # Transcribe
+        with _engine_lock:
+            result = engine.transcribe(
+                audio=audio_float,
+                sample_rate=16000,
+                language=language,
+                initial_prompt=initial_prompt,
+                vad_filter=vad_filter,
+                condition_on_previous_text=False,
+                hallucination_silence_threshold=0.5,
+            )
+
+        _maybe_clear_cuda_cache(duration)
+
+        text = result.text
+
+        if apply_post_processing and text:
+            text = _apply_post_processing(text)
+
+        if apply_ai_cleanup and text:
+            text = _apply_ai_cleanup(text)
+
+        return {"text": text, "duration_seconds": round(duration, 2)}
+
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal transcription error")
+    finally:
+        _decrement_requests()
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 @app.post("/transcribe/stream")
@@ -553,12 +705,19 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
         duration = len(audio_float) / request.sample_rate
 
         # Run diarization to get speaker segments
-        speaker_segments = diarizer.diarize(
-            audio_int16,
-            sample_rate=request.sample_rate,
-            min_speakers=request.min_speakers,
-            max_speakers=request.max_speakers
-        )
+        # Hold _engine_lock during diarization to prevent GPU contention with Whisper.
+        # Without this, pyannote and Whisper compete for VRAM on the RTX 3070 (8GB),
+        # causing CUDA memory fragmentation and 90+ second stalls.
+        with _engine_lock:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            speaker_segments = diarizer.diarize(
+                audio_int16,
+                sample_rate=request.sample_rate,
+                min_speakers=request.min_speakers,
+                max_speakers=request.max_speakers
+            )
 
         if not speaker_segments:
             # No speakers detected, transcribe as single segment
@@ -697,9 +856,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Koe Transcription Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=9876, help="Port to listen on")
-    parser.add_argument("--engine", default="whisper", help="Transcription engine (whisper/parakeet)")
+    from compat import get_default_device, get_default_engine
+    parser.add_argument("--engine", default=get_default_engine(), help="Transcription engine (whisper/parakeet/mlx)")
     parser.add_argument("--model", default="large-v3", help="Model to use")
-    parser.add_argument("--device", default="cuda", help="Device (cuda/cpu)")
+    parser.add_argument("--device", default=get_default_device(), help="Device (cuda/cpu/auto)")
     args = parser.parse_args()
 
     os.environ["WHISPER_ENGINE"] = args.engine

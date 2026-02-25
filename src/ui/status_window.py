@@ -91,6 +91,11 @@ class StatusWindow(QMainWindow):
 
         self.main_layout.addLayout(text_layout, 1)  # Stretch factor of 1 to center
 
+        # Right spacer to balance the indicator and keep text truly centered
+        right_spacer = QLabel("")
+        right_spacer.setFixedWidth(20)
+        self.main_layout.addWidget(right_spacer)
+
         self.setCentralWidget(self.main_widget)
 
     def paintEvent(self, event):

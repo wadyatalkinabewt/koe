@@ -10,6 +10,7 @@ Setup required:
 """
 
 import os
+import sys
 import time
 import numpy as np
 from typing import Optional, List, Dict, Tuple
@@ -112,8 +113,11 @@ class SpeakerDiarizer:
                 token=hf_token
             )
 
-            # Move to GPU if available
-            device = torch.device("cuda" if self._device == "cuda" and torch.cuda.is_available() else "cpu")
+            # Move to GPU if available (macOS: force CPU, MPS has timestamp bugs with pyannote)
+            if sys.platform == 'darwin':
+                device = torch.device("cpu")
+            else:
+                device = torch.device("cuda" if self._device == "cuda" and torch.cuda.is_available() else "cpu")
             self._pipeline.to(device)
             _dlog(f"[Diarization] Pipeline loaded on {'GPU' if device.type == 'cuda' else 'CPU'}")
 

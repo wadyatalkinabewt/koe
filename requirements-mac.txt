@@ -1,0 +1,68 @@
+# macOS (Apple Silicon) dependencies for Koe
+# Install: pip install -r requirements-mac.txt
+
+# Core (same as Windows)
+aiohttp==3.8.4
+annotated-types==0.6.0
+anyio==4.3.0
+audioplayer==0.6
+certifi==2023.5.7
+colorama==0.4.6
+filelock==3.12.0
+fsspec==2023.12.2
+h11==0.14.0
+httpcore==1.0.5
+httpx==0.27.0
+huggingface-hub==0.20.1
+idna==3.4
+Jinja2==3.1.2
+MarkupSafe==2.1.2
+networkx==3.1
+numpy==1.24.3
+packaging==23.2
+Pillow==9.5.0
+pydantic==2.7.1
+pydantic_core==2.18.2
+pynput==1.7.6
+pyperclip==1.8.2
+python-dotenv==1.0.0
+PyYAML==6.0.1
+regex==2023.5.5
+requests==2.31.0
+sounddevice==0.4.6
+soundfile==0.12.1
+tqdm==4.65.0
+typing_extensions==4.11.0
+urllib3==2.0.2
+webrtcvad-wheels==2.0.11.post1
+
+# Server
+fastapi==0.128.0
+uvicorn==0.40.0
+
+# AI summarization
+anthropic==0.76.0
+
+# Audio processing
+scipy==1.11.4
+
+# macOS-specific: MLX Whisper (Apple Silicon GPU acceleration)
+mlx-whisper
+
+# macOS-specific: PyQt5 via pip (or use brew install pyqt@5)
+PyQt5==5.15.10
+
+# GPU/ML packages for macOS:
+# pip install torch torchvision torchaudio (CPU/MPS, no CUDA)
+# pip install pyannote.audio
+
+# NOT needed on macOS (Windows-only):
+# PyAudioWPatch (WASAPI loopback)
+# nvidia-cudnn-cu12
+# nvidia-cublas-cu12
+# ctranslate2 (used by faster-whisper)
+# faster-whisper (use mlx-whisper instead)
+
+# System audio capture on macOS:
+# Install BlackHole: brew install blackhole-2ch
+# Then create Multi-Output Device in Audio MIDI Setup

@@ -1,8 +1,10 @@
 import yaml
 import os
+import re
 from pathlib import Path
 
 class ConfigManager:
+    """Manages application configuration settings."""
     _instance = None
 
     def __init__(self):
@@ -13,26 +15,36 @@ class ConfigManager:
     @classmethod
     def initialize(cls, schema_path=None):
         """Initialize the ConfigManager with the given schema path."""
-        if cls._instance is None:
+        if cls._instance is not None:
+            raise Exception("This class is a singleton!")
+        else:
             cls._instance = cls()
             cls._instance.schema = cls._instance.load_config_schema(schema_path)
             cls._instance.config = cls._instance.load_default_config()
             cls._instance.load_user_config()
 
     @classmethod
+    def get_instance(cls) -> 'ConfigManager':
+        if cls._instance is None:
+            cls.initialize()
+        if cls._instance.config is None:  # type: ignore
+            cls._instance.config = {}  # type: ignore
+        return cls._instance  # type: ignore
+
+    @classmethod
     def get_schema(cls):
         """Get the configuration schema."""
-        if cls._instance is None:
-            raise RuntimeError("ConfigManager not initialized")
-        return cls._instance.schema
+        instance = cls.get_instance()
+        return instance.schema
 
     @classmethod
     def get_config_section(cls, *keys):
         """Get a specific section of the configuration."""
-        if cls._instance is None:
-            raise RuntimeError("ConfigManager not initialized")
+        instance = cls.get_instance()
 
-        section = cls._instance.config
+        section = instance.config
+        if not section:
+            return {}
         for key in keys:
             if isinstance(section, dict) and key in section:
                 section = section[key]
@@ -43,10 +55,11 @@ class ConfigManager:
     @classmethod
     def get_config_value(cls, *keys):
         """Get a specific configuration value using nested keys."""
-        if cls._instance is None:
-            raise RuntimeError("ConfigManager not initialized")
+        instance = cls.get_instance()
 
-        value = cls._instance.config
+        value = instance.config
+        if not value:
+            return None
         for key in keys:
             if isinstance(value, dict) and key in value:
                 value = value[key]
@@ -57,17 +70,20 @@ class ConfigManager:
     @classmethod
     def set_config_value(cls, value, *keys):
         """Set a specific configuration value using nested keys."""
-        if cls._instance is None:
-            raise RuntimeError("ConfigManager not initialized")
+        instance = cls.get_instance()
 
-        config = cls._instance.config
+        config: dict = instance.config
+        if not config:
+            instance.config = {}
+            config = instance.config
+            
         for key in keys[:-1]:
             if key not in config:
                 config[key] = {}
-            elif not isinstance(config[key], dict):
+            elif getattr(config, "get", None) is None or not isinstance(config[key], dict):
                 config[key] = {}
-            config = config[key]
-        config[keys[-1]] = value
+            config = config[key]  # type: ignore
+        config[keys[-1]] = value  # type: ignore
 
     @staticmethod
     def load_config_schema(schema_path=None):
@@ -170,24 +186,50 @@ class ConfigManager:
 
     @classmethod
     def save_config(cls, config_path=os.path.join('src', 'config.yaml')):
-        """Save the current configuration to a YAML file (atomic write)."""
-        if cls._instance is None:
-            raise RuntimeError("ConfigManager not initialized")
+        """Save the current configuration to a YAML file (atomic write with retries)."""
+        instance = cls.get_instance()
+        # Create user config dict matching the current config
+        user_config = {}
+        for section, settings in instance.config.items():
+            user_config[section] = settings
+
+        import time
         filepath = Path(config_path)
         temp_path = filepath.with_suffix('.tmp')
+        
+        # Write to temp file first
         with open(temp_path, 'w', encoding='utf-8') as file:
-            yaml.dump(cls._instance.config, file, default_flow_style=False)
-        temp_path.replace(filepath)  # Atomic rename
+            yaml.dump(instance.config, file, default_flow_style=False)
+            file.flush()
+            os.fsync(file.fileno())  # Ensure it's on disk
+            
+        # Try to replace the original file, with retries for Windows file locks
+        max_retries = 3
+        retry_delay = 0.1
+        for attempt in range(max_retries):
+            try:
+                temp_path.replace(filepath)  # Atomic rename
+                break
+            except PermissionError as e:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    # If we fail after all retries, clean up temp file and raise
+                    try:
+                        temp_path.unlink()
+                    except:
+                        pass
+                    raise RuntimeError(f"Failed to save config due to file lock: {e}")
 
     @classmethod
     def reload_config(cls):
         """
         Reload the configuration from the file.
         """
-        if cls._instance is None:
-            raise RuntimeError("ConfigManager not initialized")
-        cls._instance.config = cls._instance.load_default_config()
-        cls._instance.load_user_config()
+        instance = cls.get_instance()
+        instance.config = instance.load_default_config()
+        instance.load_user_config()
 
     @classmethod
     def config_file_exists(cls):
@@ -200,3 +242,126 @@ class ConfigManager:
         """Print a message to the console if enabled in the configuration."""
         if cls._instance and cls._instance.config['misc']['print_to_terminal']:
             print(message)
+
+class TextProcessor:
+    """Centralized utility for processing and cleaning transcribed text."""
+
+    @staticmethod
+    def apply_name_replacements(text):
+        """Apply configured name spelling corrections."""
+        try:
+            replacements = ConfigManager.get_config_value('post_processing', 'name_replacements') or {}
+            for wrong, correct in replacements.items():
+                import re
+                # Case-insensitive word boundary replacement
+                pattern = r'\b' + re.escape(wrong) + r'\b'
+                text = re.sub(pattern, correct, text, flags=re.IGNORECASE)
+        except Exception:
+            pass  # Don't fail if config access fails
+        return text
+
+    @staticmethod
+    def remove_prompt_leak(text):
+        """Remove initial prompt if it leaked into transcription."""
+        try:
+            model_options = ConfigManager.get_config_section('model_options')
+            initial_prompt = model_options.get('common', {}).get('initial_prompt', '')
+            if initial_prompt:
+                # Split prompt into lines and sentences, filter each separately
+                prompt_parts = []
+                for line in initial_prompt.strip().split('\n'):
+                    line = line.strip()
+                    if line:
+                        prompt_parts.append(line)
+                        # Also split on periods for sentence-level matching
+                        for sentence in line.split('.'):
+                            sentence = sentence.strip()
+                            if len(sentence) > 10:  # Only match substantial sentences
+                                prompt_parts.append(sentence)
+
+                # Remove any prompt parts that appear in the text
+                for part in prompt_parts:
+                    if part in text:
+                        text = text.replace(part, '')
+        except Exception:
+            pass  # Don't fail transcription if config access fails
+        return text
+
+    @staticmethod
+    def remove_filler_words(text):
+        """Remove common filler words and hallucinated continuations/outros."""
+        import re
+
+        # Filler words to remove (case insensitive)
+        fillers = [
+            r'\bum+\b', r'\buh+\b', r'\bah+\b', r'\beh+\b',
+            r'\bhmm+\b', r'\bmm+\b', r'\bhm+\b',
+        ]
+
+        # Whisper hallucinations - ONLY remove at end of transcription
+        trailing_hallucinations = [
+            # YouTube outros
+            r"\s*we'?ll be right back\.?\s*$",
+            r"\s*thank(s| you)( for watching)?\.?\s*$",
+            r"\s*subscribe to (my|the|our) channel\.?\s*$",
+            r"\s*please (like and )?subscribe\.?\s*$",
+            r"\s*see you (in the )?next (one|video|time)\.?\s*$",
+            r"\s*don'?t forget to (like and )?subscribe\.?\s*$",
+            r"\s*like (and )?subscribe\.?\s*$",
+            r"\s*hit the (like|bell|subscribe)( button)?\.?\s*$",
+            # Common trailing phrases
+            r"\s*(so,?\s*)?that'?s (it|all)( for (today|now))?\.?\s*$",
+            r"\s*bye( bye)?\.?\s*$",
+            r"\s*goodbye\.?\s*$",
+            r"\s*take care\.?\s*$",
+            # Incomplete trailing sentences (hallucinated continuations)
+            r",?\s*and I'?ll\.?\s*$",
+            r",?\s*and we'?ll\.?\s*$",
+            r",?\s*and I'?m\.?\s*$",
+            r",?\s*so I'?ll\.?\s*$",
+            r",?\s*I'?ll see\.?\s*$",
+            # Music/sound descriptions
+            r"\s*\[music\]\s*$",
+            r"\s*\[applause\]\s*$",
+            r"\s*♪.*$",
+            r"\s*\u266a.*$", # Another form of the music note from server.py
+        ]
+        
+        for pattern in trailing_hallucinations:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+        for filler in fillers:
+            text = re.sub(filler, '', text, flags=re.IGNORECASE)
+
+        # Clean up resulting issues
+        text = re.sub(r'\s+', ' ', text)  # Multiple spaces to single
+        text = re.sub(r'\s+([,.?!])', r'\1', text)  # Space before punctuation
+        text = re.sub(r'([,.?!])\s*\1+', r'\1', text)  # Duplicate punctuation
+        text = re.sub(r',\s*\.', '.', text)  # Comma followed by period
+        text = re.sub(r'^\s*,\s*', '', text)  # Leading comma
+        return text.strip()
+
+    @staticmethod
+    def ensure_ending_punctuation(text):
+        """Ensure text ends with proper punctuation."""
+        text = text.strip()
+        if text and text[-1] not in '.?!':
+            text += '.'
+        return text
+
+    @classmethod
+    def process(cls, transcription, add_trailing_space=False):
+        """Apply all post-processing steps to the transcription."""
+        if not transcription or not transcription.strip():
+            return transcription
+
+        text = transcription.strip()
+        text = cls.remove_prompt_leak(text)
+        text = cls.remove_filler_words(text)
+        text = cls.apply_name_replacements(text)
+        text = cls.ensure_ending_punctuation(text)
+        
+        if add_trailing_space:
+            text += ' '  # Trailing space for easy pasting in some apps
+            
+        return text

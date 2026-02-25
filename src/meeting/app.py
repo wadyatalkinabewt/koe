@@ -8,7 +8,6 @@ Uses the shared Whisper transcription server.
 import os
 import sys
 import time
-import socket
 import threading
 import re
 from datetime import datetime
@@ -327,8 +326,8 @@ class SpeakerEnrollmentDialog(QMainWindow):
         base_height = 100  # Header + footer
         per_speaker_height = 180  # Each speaker row (more space for samples)
         total_height = base_height + (num_unknown * per_speaker_height)
-        # Larger dialog for better readability
-        self.setFixedSize(650, min(total_height, 600))
+        # Larger dialog for better readability (taller to accommodate expanded transcripts)
+        self.setFixedSize(700, min(total_height, 800))
 
         main_widget = QWidget(self)
         main_layout = QVBoxLayout(main_widget)
@@ -395,15 +394,56 @@ class SpeakerEnrollmentDialog(QMainWindow):
         speaker_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
         row_layout.addWidget(speaker_label)
 
-        # Sample text area (scrollable for long content)
+        # Sample text - compact preview
         sample_text = self._format_samples(samples)
         sample_label = QLabel(sample_text)
         sample_label.setFont(QFont('Cascadia Code', 9))
         sample_label.setStyleSheet("color: #888; padding-left: 8px;")
         sample_label.setWordWrap(True)
         sample_label.setTextFormat(Qt.PlainText)
-        sample_label.setMinimumHeight(40)  # Ensure visibility
+        sample_label.setMinimumHeight(40)
         row_layout.addWidget(sample_label)
+
+        # "Show all" toggle + full transcript area (only if more than 5 entries)
+        if len(samples) > 5:
+            from PyQt5.QtWidgets import QTextEdit
+            full_text_area = QTextEdit()
+            full_text_area.setReadOnly(True)
+            full_text_area.setFont(QFont('Cascadia Code', 9))
+            full_text_area.setPlainText(self._format_samples(samples, full=True))
+            full_text_area.setStyleSheet("""
+                QTextEdit {
+                    color: #888;
+                    background: rgba(0, 0, 0, 0.2);
+                    border: 1px solid #2a3a3a;
+                    border-radius: 3px;
+                    padding: 6px 8px;
+                }
+            """)
+            full_text_area.setMaximumHeight(200)
+            full_text_area.setVisible(False)
+
+            toggle_btn = QPushButton(f"▸ Show all {len(samples)} entries")
+            toggle_btn.setFont(QFont('Cascadia Code', 8))
+            toggle_btn.setStyleSheet("""
+                QPushButton { color: #00ff88; background: transparent; border: none; padding: 2px 8px; text-align: left; }
+                QPushButton:hover { color: #33ffaa; }
+            """)
+            toggle_btn.setCursor(Qt.PointingHandCursor)
+
+            def _toggle(checked, btn=toggle_btn, preview=sample_label, full_area=full_text_area, count=len(samples)):
+                if full_area.isVisible():
+                    full_area.setVisible(False)
+                    preview.setVisible(True)
+                    btn.setText(f"▸ Show all {count} entries")
+                else:
+                    full_area.setVisible(True)
+                    preview.setVisible(False)
+                    btn.setText(f"▾ Show preview")
+
+            toggle_btn.clicked.connect(_toggle)
+            row_layout.addWidget(toggle_btn)
+            row_layout.addWidget(full_text_area)
 
         # Name input row
         input_row = QHBoxLayout()
@@ -449,26 +489,31 @@ class SpeakerEnrollmentDialog(QMainWindow):
         row_layout.addLayout(input_row)
         return row
 
-    def _format_samples(self, samples: list) -> str:
+    def _format_samples(self, samples: list, full: bool = False) -> str:
         """Format sample transcriptions for display.
 
-        Shows up to 5 samples with full text for better speaker identification.
+        Args:
+            samples: List of sample transcription strings.
+            full: If True, show all samples without truncation.
         """
         if not samples:
             return "(no text samples)"
 
-        # Show up to 5 samples, each on its own line
+        if full:
+            # Show everything, no truncation
+            lines = [f"• {sample}" for sample in samples]
+            return "\n".join(lines)
+
+        # Preview mode: show up to 5 samples, truncated
         display_samples = samples[:5]
         lines = []
         for sample in display_samples:
-            # Truncate very long individual samples
             if len(sample) > 120:
                 sample = sample[:120] + "..."
             lines.append(f"• {sample}")
 
         result = "\n".join(lines)
 
-        # Add count if there are more
         if len(samples) > 5:
             result += f"\n... and {len(samples) - 5} more entries"
 
@@ -993,11 +1038,20 @@ class MeetingTranscriberApp(QObject):
     def __init__(self, user_name: str = "Bryce", server_url: str = DEFAULT_SERVER_URL, use_diarization: bool = True):
         super().__init__()
 
-        # Single-instance check: bind to a specific port as a lock
-        self._lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Single-instance check: use a reliable named Mutex on Windows
+        import ctypes
+        from ctypes.wintypes import HANDLE, BOOL, DWORD
+        
+        ERROR_ALREADY_EXISTS = 183
+        self._mutex_name = "KoeMeetingAppMutex_v1"
         try:
-            self._lock_socket.bind(('127.0.0.1', 9878))
-        except OSError:
+            self._mutex = ctypes.windll.kernel32.CreateMutexW(None, False, self._mutex_name)  # type: ignore
+            last_error = ctypes.windll.kernel32.GetLastError()  # type: ignore
+        except AttributeError:
+            self._mutex = None
+            last_error = 0
+            
+        if last_error == ERROR_ALREADY_EXISTS:
             # Another instance is already running
             print("[Scribe] Another instance is already running. Exiting.")
             sys.exit(0)
@@ -2234,8 +2288,8 @@ class MeetingTranscriberApp(QObject):
         # Setup audio processor
         self.processor = AudioProcessor(
             sample_rate=16000,
-            min_chunk_duration=30.0,
-            max_chunk_duration=60.0,
+            min_chunk_duration=15.0,
+            max_chunk_duration=30.0,
             silence_duration_ms=800,
             on_chunk_ready=self._on_chunk_ready
         )
@@ -2604,6 +2658,7 @@ class MeetingTranscriberApp(QObject):
         """Retry transcription of any failed audio chunks from this session.
 
         Called when stopping a meeting - the server may have recovered from earlier failures.
+        Bails out early if the first retry fails (server is still down).
         """
         # Get failed audio files from the last 60 minutes
         failed_files = self.client.get_failed_audio_files(max_age_minutes=60)
@@ -2621,6 +2676,7 @@ class MeetingTranscriberApp(QObject):
 
         retried = 0
         succeeded = 0
+        consecutive_failures = 0
 
         for audio_path in failed_files:
             retried += 1
@@ -2632,6 +2688,7 @@ class MeetingTranscriberApp(QObject):
 
             if success and result.strip():
                 succeeded += 1
+                consecutive_failures = 0
                 # Add to transcript as "Recovered" speaker (we don't know who it was)
                 # Use current time as timestamp since we don't know original timestamp
                 current_time = time.time() - self._meeting_start_time if self._meeting_start_time else 0
@@ -2639,6 +2696,14 @@ class MeetingTranscriberApp(QObject):
                 if text:
                     self.transcription_ready.emit("(Recovered)", text, current_time)
                     _debug_log(f"[Meeting] Recovered chunk: {text[:50]}...")
+            else:
+                consecutive_failures += 1
+                # Bail out early if server is still unresponsive (2 consecutive failures)
+                if consecutive_failures >= 2:
+                    remaining = len(failed_files) - retried
+                    _debug_log(f"[Meeting] Aborting retry - server still unresponsive after {consecutive_failures} consecutive failures ({remaining} files skipped)")
+                    self.summary_status_changed.emit("Server unresponsive, skipping retries")
+                    break
 
         if succeeded > 0:
             _debug_log(f"[Meeting] Recovered {succeeded}/{retried} failed chunks")
@@ -2732,7 +2797,7 @@ class MeetingTranscriberApp(QObject):
     def _process_loopback_with_diarization(self, audio: np.ndarray, sample_rate: int, base_timestamp: float):
         """Process loopback audio with speaker diarization."""
         # Hardcoded max_speakers - auto-merge handles speaker consolidation
-        max_speakers = 8
+        max_speakers = 4
 
         # Get language from config (force English to prevent hallucinations)
         model_options = ConfigManager.get_config_section('model_options')
@@ -2787,7 +2852,7 @@ class MeetingTranscriberApp(QObject):
     def _process_loopback_with_server_diarization(self, audio: np.ndarray, sample_rate: int, base_timestamp: float):
         """Process loopback audio using server-side diarization (for remote mode)."""
         # Hardcoded max_speakers - auto-merge handles speaker consolidation
-        max_speakers = 8
+        max_speakers = 4
 
         # Get language from config (force English to prevent hallucinations)
         model_options = ConfigManager.get_config_section('model_options')
@@ -3196,11 +3261,13 @@ class MeetingTranscriberApp(QObject):
 
     def cleanup(self):
         """Clean up resources before exit."""
-        # Release the single-instance lock
-        if hasattr(self, '_lock_socket'):
+        # Release the single-instance lock mutex if it exists
+        if hasattr(self, '_mutex') and self._mutex:
             try:
-                self._lock_socket.close()
-            except Exception:
+                import ctypes
+                ctypes.windll.kernel32.ReleaseMutex(self._mutex)  # type: ignore
+                ctypes.windll.kernel32.CloseHandle(self._mutex)  # type: ignore
+            except:
                 pass
 
     def run(self):

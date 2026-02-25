@@ -1,25 +1,9 @@
 import os
 import sys
 
-# Add NVIDIA cuDNN/cuBLAS DLL paths for GPU acceleration (must be before any CUDA imports)
-def _setup_cuda_dlls():
-    """Add cuDNN and cuBLAS DLL directories to PATH (more reliable than os.add_dll_directory)."""
-    try:
-        import site
-        paths_to_add = []
-        for sp in [site.getusersitepackages()] + site.getsitepackages():
-            cudnn_bin = os.path.join(sp, "nvidia", "cudnn", "bin")
-            cublas_bin = os.path.join(sp, "nvidia", "cublas", "bin")
-            if os.path.exists(cudnn_bin):
-                paths_to_add.append(cudnn_bin)
-            if os.path.exists(cublas_bin):
-                paths_to_add.append(cublas_bin)
-        if paths_to_add:
-            os.environ['PATH'] = os.pathsep.join(paths_to_add) + os.pathsep + os.environ.get('PATH', '')
-    except Exception:
-        pass  # Silently fail if not on Windows or DLLs not installed
-
-_setup_cuda_dlls()
+# Platform-specific setup (CUDA DLLs on Windows, no-op on macOS)
+from compat import setup_cuda_dlls
+setup_cuda_dlls()
 
 def preload_model():
     """Load the Whisper model.
@@ -88,29 +72,23 @@ class KoeApp(QObject):
         self.continuous_stopped = False
         super().__init__()
 
-        # Single-instance check: bind to a specific port as a lock
-        self._lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            self._lock_socket.bind(('127.0.0.1', 19877))
-        except OSError:
-            # Another instance is already running
-            print("[Koe] Another instance is already running. Exiting.")
-            sys.exit(0)
+        # Single-instance check (Windows mutex / macOS file lock)
+        from compat import acquire_single_instance_lock
+        self._instance_lock = acquire_single_instance_lock()
 
         self.preloaded_model = preloaded_model
         self.recording_start_time = None  # Track when recording started
         self.processing_result = False  # Prevent new recordings during result processing
+        import threading
+        self._thread_lock = threading.Lock()  # Guard thread creation
         self.app = qapp if qapp else QApplication(sys.argv)
         self.init_window = init_window
 
         # If no QApplication was passed, set it up now
         if not qapp:
-            # Set Windows AppUserModelID for proper taskbar icon
-            try:
-                import ctypes
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Koe.Transcription.App')
-            except:
-                pass
+            # Set app ID for taskbar grouping (Windows-only, no-op on macOS)
+            from compat import set_app_user_model_id
+            set_app_user_model_id()
 
             # Set app icon with absolute path
             from pathlib import Path
@@ -254,11 +232,9 @@ class KoeApp(QObject):
             self.key_listener.stop()
 
         # Release the single-instance lock
-        if hasattr(self, '_lock_socket'):
-            try:
-                self._lock_socket.close()
-            except:
-                pass
+        if hasattr(self, '_instance_lock') and self._instance_lock:
+            from compat import release_single_instance_lock
+            release_single_instance_lock(self._instance_lock)
 
     def exit_app(self):
         self.cleanup()
@@ -320,30 +296,31 @@ class KoeApp(QObject):
                 self.result_thread.stop_recording()
 
     def start_result_thread(self):
-        # Guard against rapid double-press: if we JUST set recording_start_time, don't create new thread
-        # (isRunning() may not be True yet if thread is still spinning up)
-        if self.recording_start_time is not None:
-            elapsed = time.time() - self.recording_start_time
-            if elapsed < 0.5:  # Thread was just started, don't create another
-                ConfigManager.console_print(f'Thread starting, ignoring duplicate press')
+        with self._thread_lock:
+            # Guard against rapid double-press: if we JUST set recording_start_time, don't create new thread
+            # (isRunning() may not be True yet if thread is still spinning up)
+            if self.recording_start_time is not None:
+                elapsed = time.time() - self.recording_start_time
+                if elapsed < 0.5:  # Thread was just started, don't create another
+                    ConfigManager.console_print(f'Thread starting, ignoring duplicate press')
+                    return
+
+            if self.result_thread and self.result_thread.isRunning():
                 return
 
-        if self.result_thread and self.result_thread.isRunning():
-            return
+            # Don't start a new recording if still processing previous result
+            if self.processing_result:
+                ConfigManager.console_print('Still processing previous transcription...')
+                return
 
-        # Don't start a new recording if still processing previous result
-        if self.processing_result:
-            ConfigManager.console_print('Still processing previous transcription...')
-            return
-
-        self.recording_start_time = time.time()  # Track when recording started (SET BEFORE creating thread)
-        self.result_thread = ResultThread(self.local_model)
-        if not ConfigManager.get_config_value("misc", "hide_status_window"):
-            self.result_thread.statusSignal.connect(self.status_window.updateStatus)
-            self.result_thread.errorSignal.connect(self.status_window.showError)
-        self.result_thread.errorSignal.connect(self.on_transcription_error)
-        self.result_thread.resultSignal.connect(self.on_transcription_complete)
-        self.result_thread.start()
+            self.recording_start_time = time.time()  # Track when recording started (SET BEFORE creating thread)
+            self.result_thread = ResultThread(self.local_model)
+            if not ConfigManager.get_config_value("misc", "hide_status_window"):
+                self.result_thread.statusSignal.connect(self.status_window.updateStatus)
+                self.result_thread.errorSignal.connect(self.status_window.showError)
+            self.result_thread.errorSignal.connect(self.on_transcription_error)
+            self.result_thread.resultSignal.connect(self.on_transcription_complete)
+            self.result_thread.start()
 
     def stop_result_thread(self):
         _debug("stop_result_thread() called")
@@ -368,15 +345,9 @@ class KoeApp(QObject):
                 pass
             time.sleep(0.1)
 
-        # Fallback: use Windows clip.exe directly
-        try:
-            process = subprocess.Popen(['clip'], stdin=subprocess.PIPE)
-            process.communicate(text.encode('utf-16le'))
-            return True
-        except Exception:
-            pass
-
-        return False
+        # Fallback: platform-specific clipboard command
+        from compat import clipboard_copy_fallback
+        return clipboard_copy_fallback(text)
 
     def on_transcription_error(self, error_msg):
         """Handle transcription errors with tray notification."""
@@ -420,13 +391,8 @@ class KoeApp(QObject):
                     _debug("  Playing beep...")
                     ConfigManager.console_print('Playing beep...')
                     beep_path = Path(__file__).parent.parent / "assets" / "beep.wav"
-                    # Use winsound on Windows for more reliable playback
-                    import sys
-                    if sys.platform == 'win32':
-                        import winsound
-                        winsound.PlaySound(str(beep_path), winsound.SND_FILENAME)
-                    else:
-                        AudioPlayer(str(beep_path)).play(block=True)
+                    from compat import play_sound_file
+                    play_sound_file(beep_path)
                     _debug("  Beep played")
                     ConfigManager.console_print('Beep played')
                 except Exception as e:
@@ -482,12 +448,9 @@ if __name__ == "__main__":
     # Create QApplication first so we can show initialization window
     qapp = QApplication(sys.argv)
 
-    # Set Windows AppUserModelID for proper taskbar icon
-    try:
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Koe.Transcription.App')
-    except:
-        pass
+    # Set app ID for taskbar grouping (Windows-only, no-op on macOS)
+    from compat import set_app_user_model_id
+    set_app_user_model_id()
 
     # Set app icon with absolute path
     from pathlib import Path

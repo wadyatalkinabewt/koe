@@ -113,6 +113,17 @@ class ResultThread(QThread):
 
             if not self.is_running:
                 _debug("  Early exit after recording: is_running=False")
+                # Save audio if recording was substantial (>2s) so it's not lost
+                if audio_data is not None and audio_data.size > 0:
+                    duration_sec = audio_data.size / (self.sample_rate or 16000)
+                    if duration_sec > 2.0:
+                        try:
+                            import scipy.io.wavfile as wav
+                            cancelled_path = _DEBUG_LOG.parent / f"failed_audio_cancelled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                            wav.write(str(cancelled_path), self.sample_rate or 16000, audio_data)
+                            _debug(f"  Saved cancelled recording ({duration_sec:.1f}s) to {cancelled_path}")
+                        except Exception as save_err:
+                            _debug(f"  Failed to save cancelled audio: {save_err}")
                 # Emit empty result so status window gets closed properly
                 self.resultSignal.emit('')
                 return

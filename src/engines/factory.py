@@ -179,6 +179,11 @@ def _register_engines():
     except ImportError:
         pass
 
+    try:
+        from . import mlx_engine
+    except ImportError:
+        pass
+
 
 # Register engines on module load
 _register_engines()

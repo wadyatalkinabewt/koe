@@ -26,6 +26,7 @@ model_options:
     options:
       - whisper
       - parakeet
+      - mlx
 
   # Common configuration options (shared by all engines)
   common:
@@ -143,6 +144,19 @@ model_options:
         - auto
         - cuda
         - cpu
+
+  # MLX Whisper engine (Apple Silicon only)
+  mlx:
+    model:
+      value: mlx-community/whisper-large-v3-turbo
+      type: str
+      description: "MLX Whisper model. Apple Silicon only, uses unified memory GPU."
+      options:
+        - mlx-community/whisper-large-v3-turbo
+        - mlx-community/whisper-large-v3-mlx
+        - mlx-community/whisper-medium-mlx
+        - mlx-community/whisper-small-mlx
+        - mlx-community/whisper-base-mlx
 
 # Configuration options for activation and recording
 recording_options:

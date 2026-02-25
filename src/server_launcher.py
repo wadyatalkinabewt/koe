@@ -15,10 +15,32 @@ import yaml
 from pathlib import Path
 from datetime import datetime
 
-SERVER_URL = "http://localhost:9876"
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 LOG_PATH = SCRIPT_DIR.parent / "logs" / "server_launcher.log"
+
+def get_server_port():
+    """Get the configured server port."""
+    port = os.environ.get("KOE_SERVER_PORT")
+    if port:
+        return port
+        
+    try:
+        if CONFIG_PATH.exists():
+            with open(CONFIG_PATH) as f:
+                config = yaml.safe_load(f) or {}
+            # Allow configuring port in misc section
+            misc = config.get("misc", {})
+            config_port = misc.get("server_port")
+            if config_port:
+                return str(config_port)
+    except:
+        pass
+        
+    return "9876"  # Default fallback
+
+SERVER_PORT = get_server_port()
+SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 
 def _log(msg: str):
     """Write log message to file."""
@@ -46,17 +68,25 @@ def get_engine_config():
             with open(CONFIG_PATH) as f:
                 config = yaml.safe_load(f) or {}
             model_options = config.get("model_options", {})
-            engine = model_options.get("engine", "whisper")
+            if isinstance(model_options, dict):
+                engine = model_options.get("engine", "whisper")
 
-            # Get engine-specific model and device
-            if engine == "whisper":
-                whisper_opts = model_options.get("whisper", {})
-                model = whisper_opts.get("model", "large-v3")
-                device = whisper_opts.get("device", "auto")
-            elif engine == "parakeet":
-                parakeet_opts = model_options.get("parakeet", {})
-                model = parakeet_opts.get("model", "nvidia/parakeet-ctc-0.6b")
-                device = parakeet_opts.get("device", "auto")
+                # Get engine-specific model and device
+                if engine == "whisper":
+                    whisper_opts = model_options.get("whisper", {})
+                    if isinstance(whisper_opts, dict):
+                        model = whisper_opts.get("model", "large-v3")
+                        device = whisper_opts.get("device", "auto")
+                elif engine == "parakeet":
+                    parakeet_opts = model_options.get("parakeet", {})
+                    if isinstance(parakeet_opts, dict):
+                        model = parakeet_opts.get("model", "nvidia/parakeet-ctc-0.6b")
+                        device = parakeet_opts.get("device", "auto")
+                elif engine == "mlx":
+                    mlx_opts = model_options.get("mlx", {})
+                    if isinstance(mlx_opts, dict):
+                        model = mlx_opts.get("model", "mlx-community/whisper-large-v3-turbo")
+                    device = "cpu"  # MLX handles its own GPU via unified memory
     except Exception as e:
         print(f"[Launcher] Warning: Could not read config: {e}")
 
@@ -164,6 +194,8 @@ def start_server_background():
     if engine == "parakeet":
         start_parakeet_server(model, device)
     else:
+        # Set engine env var so server uses correct engine (whisper or mlx)
+        os.environ["WHISPER_ENGINE"] = engine
         start_whisper_server(model, device)
 
     # Wait for server to be ready

@@ -71,60 +71,95 @@ class SystemCheckThread(QThread):
 
         time.sleep(0.3)
 
-        # Check for NVIDIA GPU
-        self.progress.emit("Checking for NVIDIA GPU...", True)
-        time.sleep(0.3)
-        try:
-            result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
-                                  capture_output=True, text=True, timeout=10)
-            if result.returncode == 0 and result.stdout.strip():
-                gpu_info = result.stdout.strip().split(',')
-                gpu_name = gpu_info[0].strip()
-                gpu_memory = gpu_info[1].strip() if len(gpu_info) > 1 else "Unknown"
+        # Check for GPU
+        if sys.platform == 'darwin':
+            self.progress.emit("Checking for Apple Silicon...", True)
+            time.sleep(0.3)
+            import platform
+            if platform.machine() == 'arm64':
                 results['gpu'] = True
-                results['gpu_name'] = gpu_name
-                results['gpu_memory'] = gpu_memory
-                self.progress.emit(f"✓ {gpu_name} ({gpu_memory})", True)
+                results['gpu_name'] = f"Apple Silicon ({platform.machine()})"
+                results['gpu_memory'] = "Unified Memory"
+                self.progress.emit("✓ Apple Silicon detected", True)
             else:
-                results['errors'].append("No NVIDIA GPU detected")
-                self.progress.emit("✗ No NVIDIA GPU detected", False)
-        except FileNotFoundError:
-            results['errors'].append("nvidia-smi not found - NVIDIA drivers not installed")
-            self.progress.emit("✗ NVIDIA drivers not installed", False)
-        except Exception as e:
-            results['errors'].append(f"GPU check failed: {e}")
-            self.progress.emit(f"✗ GPU check failed", False)
+                results['gpu'] = True
+                results['gpu_name'] = "Intel Mac (CPU only)"
+                results['gpu_memory'] = "N/A"
+                self.progress.emit("⚠ Intel Mac detected (CPU mode, slower)", True)
+        else:
+            self.progress.emit("Checking for NVIDIA GPU...", True)
+            time.sleep(0.3)
+            try:
+                result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
+                                      capture_output=True, text=True, timeout=10)
+                if result.returncode == 0 and result.stdout.strip():
+                    gpu_info = result.stdout.strip().split(',')
+                    gpu_name = gpu_info[0].strip()
+                    gpu_memory = gpu_info[1].strip() if len(gpu_info) > 1 else "Unknown"
+                    results['gpu'] = True
+                    results['gpu_name'] = gpu_name
+                    results['gpu_memory'] = gpu_memory
+                    self.progress.emit(f"✓ {gpu_name} ({gpu_memory})", True)
+                else:
+                    results['errors'].append("No NVIDIA GPU detected")
+                    self.progress.emit("✗ No NVIDIA GPU detected", False)
+            except FileNotFoundError:
+                results['errors'].append("nvidia-smi not found - NVIDIA drivers not installed")
+                self.progress.emit("✗ NVIDIA drivers not installed", False)
+            except Exception as e:
+                results['errors'].append(f"GPU check failed: {e}")
+                self.progress.emit(f"✗ GPU check failed", False)
 
         time.sleep(0.3)
 
-        # Check CUDA availability via PyTorch
-        self.progress.emit("Checking CUDA support...", True)
-        time.sleep(0.3)
-        try:
-            import torch
-            if torch.cuda.is_available():
-                cuda_version = torch.version.cuda
+        # Check GPU acceleration framework
+        if sys.platform == 'darwin':
+            self.progress.emit("Checking MLX support...", True)
+            time.sleep(0.3)
+            try:
+                import mlx_whisper
                 results['cuda'] = True
-                results['cuda_version'] = cuda_version
-                self.progress.emit(f"✓ CUDA {cuda_version} available", True)
-            else:
-                results['errors'].append("CUDA not available in PyTorch")
-                self.progress.emit("✗ CUDA not available", False)
-        except ImportError:
-            results['errors'].append("PyTorch not installed")
-            self.progress.emit("✗ PyTorch not installed", False)
+                results['cuda_version'] = "MLX"
+                self.progress.emit("✓ MLX Whisper available (Apple Silicon GPU)", True)
+            except ImportError:
+                results['errors'].append("mlx-whisper not installed")
+                self.progress.emit("✗ mlx-whisper not installed (pip install mlx-whisper)", False)
+        else:
+            self.progress.emit("Checking CUDA support...", True)
+            time.sleep(0.3)
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    cuda_version = torch.version.cuda
+                    results['cuda'] = True
+                    results['cuda_version'] = cuda_version
+                    self.progress.emit(f"✓ CUDA {cuda_version} available", True)
+                else:
+                    results['errors'].append("CUDA not available in PyTorch")
+                    self.progress.emit("✗ CUDA not available", False)
+            except ImportError:
+                results['errors'].append("PyTorch not installed")
+                self.progress.emit("✗ PyTorch not installed", False)
 
         time.sleep(0.3)
 
         # Check key packages
         self.progress.emit("Checking required packages...", True)
         time.sleep(0.3)
-        required_packages = [
-            ('faster_whisper', 'faster-whisper'),
-            ('pyannote.audio', 'pyannote-audio'),
-            ('sounddevice', 'sounddevice'),
-            ('PyQt5', 'PyQt5')
-        ]
+        if sys.platform == 'darwin':
+            required_packages = [
+                ('mlx_whisper', 'mlx-whisper'),
+                ('pyannote.audio', 'pyannote-audio'),
+                ('sounddevice', 'sounddevice'),
+                ('PyQt5', 'PyQt5')
+            ]
+        else:
+            required_packages = [
+                ('faster_whisper', 'faster-whisper'),
+                ('pyannote.audio', 'pyannote-audio'),
+                ('sounddevice', 'sounddevice'),
+                ('PyQt5', 'PyQt5')
+            ]
 
         missing = []
         for module, package in required_packages:
@@ -158,16 +193,31 @@ class ModelDownloadThread(QThread):
             # Set HF token in environment
             os.environ['HF_TOKEN'] = self.hf_token
 
-            self.progress.emit("Loading Whisper model (this may take a few minutes)...", 10)
+            self.progress.emit("Loading transcription model (this may take a few minutes)...", 10)
 
-            # Load Whisper model
-            from faster_whisper import WhisperModel
+            if sys.platform == 'darwin':
+                # macOS: download MLX Whisper model
+                import mlx_whisper
+                import numpy as np
+                self.progress.emit("Downloading MLX Whisper large-v3-turbo...", 20)
 
-            self.progress.emit("Downloading Whisper large-v3 (~3GB)...", 20)
+                # Trigger download by running a tiny transcription
+                try:
+                    mlx_whisper.transcribe(
+                        np.zeros(16000, dtype=np.float32),
+                        path_or_hf_repo="mlx-community/whisper-large-v3-turbo"
+                    )
+                except Exception:
+                    pass  # Errors on silence are expected
+            else:
+                # Windows: download faster-whisper model
+                from faster_whisper import WhisperModel
 
-            # This will download if not cached
-            model = WhisperModel("large-v3", device="cuda", compute_type="float16")
-            del model
+                self.progress.emit("Downloading Whisper large-v3 (~3GB)...", 20)
+
+                # This will download if not cached
+                model = WhisperModel("large-v3", device="cuda", compute_type="float16")
+                del model
 
             self.progress.emit("✓ Whisper model ready", 50)
             time.sleep(0.5)
@@ -1224,6 +1274,12 @@ class SetupWizard(QMainWindow):
                 'print_to_terminal': True
             }
         }
+
+        # Set appropriate engine for platform
+        if sys.platform == 'darwin':
+            config['model_options'] = {
+                'engine': 'mlx'
+            }
 
         config_path = koe_dir / "src" / "config.yaml"
         with open(config_path, 'w') as f:
