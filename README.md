@@ -1,6 +1,6 @@
 # Koe
 
-**Koe** (声 *"koh-eh"* - Japanese for "voice") is a local, privacy-focused speech-to-text application for Windows with GPU-accelerated transcription and intelligent speaker identification.
+**Koe** (声 *"koh-eh"* - Japanese for "voice") is a local, privacy-focused speech-to-text application for Windows and macOS with GPU-accelerated transcription and intelligent speaker identification.
 
 ---
 
@@ -33,7 +33,8 @@ Koe provides two primary modes of operation:
 ### Key Capabilities
 
 - **Local Processing**: All speech recognition runs locally on your GPU - no cloud services required for transcription
-- **Dual Engine Support**: Choose between Whisper (99 languages) or Parakeet (~50x faster, English-only)
+- **Multi-Engine Support**: Choose between Whisper (99 languages), Parakeet (~50x faster, English-only), or MLX Whisper (Apple Silicon)
+- **Cross-Platform**: Windows (NVIDIA CUDA) and macOS (Apple Silicon MLX) with platform-specific GPU acceleration
 - **Speaker Diarization**: Identifies who said what using voice fingerprinting
 - **AI Summarization**: Auto-generates meeting summaries using Claude API (~$0.04/meeting)
 - **Remote Support**: Use from a laptop by connecting to your desktop's GPU over Tailscale
@@ -41,18 +42,20 @@ Koe provides two primary modes of operation:
 
 ### Transcription Engines
 
-| Feature | Whisper | Parakeet |
-|---------|---------|----------|
-| Speed | 1x (baseline) | ~50x faster |
-| Languages | 99+ languages | English only |
-| VRAM | ~3GB (large-v3) | ~2GB |
-| Setup | Automatic | One-time NeMo install |
+| Feature | Whisper | Parakeet | MLX Whisper |
+|---------|---------|----------|-------------|
+| Speed | 1x (baseline) | ~50x faster | ~15-20x realtime |
+| Languages | 99+ languages | English only | 99+ languages |
+| Memory | ~3GB VRAM (large-v3) | ~2GB VRAM | ~3GB unified (large-v3-turbo) |
+| Platform | Windows (CUDA) | Windows (CUDA) | macOS (Apple Silicon) |
+| Setup | Automatic | One-time NeMo install | Automatic |
 
 ### Technical Foundation
 
 Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, extensively modified with:
 - Shared server architecture (single GPU model serves multiple clients)
-- Multi-engine support (Whisper and Parakeet)
+- Multi-engine support (Whisper, Parakeet, and MLX Whisper)
+- macOS Apple Silicon support via MLX framework
 - Speaker diarization with pyannote-audio
 - Meeting transcription with category organization
 - Remote transcription over Tailscale
@@ -107,7 +110,7 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
 
 ## System Requirements
 
-### Desktop (Server)
+### Windows Desktop (Server)
 
 | Component | Requirement |
 |-----------|-------------|
@@ -119,24 +122,34 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
 | **Storage** | ~5GB for models and dependencies |
 | **Python** | Python 3.10 or higher |
 
+### macOS (Apple Silicon)
+
+| Component | Requirement |
+|-----------|-------------|
+| **Operating System** | macOS 13+ (Ventura or later) |
+| **Chip** | Apple M1/M2/M3/M4 (Apple Silicon required) |
+| **RAM** | 16GB+ unified memory (64GB recommended for large models + diarization) |
+| **Storage** | ~5GB for models and dependencies |
+| **Python** | Python 3.10 or higher |
+| **System Audio** | [BlackHole](https://github.com/ExistentialAudio/BlackHole) for Scribe mode |
+
 ### Laptop (Remote Client)
 
 | Component | Requirement |
 |-----------|-------------|
-| **Operating System** | Windows 10/11 (64-bit) |
+| **Operating System** | Windows 10/11 or macOS |
 | **Network** | Tailscale installed and connected |
 | **Storage** | ~100MB for dependencies |
 | **Python** | Python 3.10 or higher |
 
 ### GPU Memory Usage
 
-| Component | VRAM |
-|-----------|------|
-| Whisper large-v3 model | ~3GB |
-| Parakeet CTC 0.6B model | ~2GB |
-| Pyannote diarization (when active) | ~0.5-1GB |
-| **Total during meeting (Whisper)** | ~3.5-4GB |
-| **Total during meeting (Parakeet)** | ~2.5-3GB |
+| Component | Windows (VRAM) | macOS (Unified Memory) |
+|-----------|---------------|----------------------|
+| Whisper large-v3 / MLX large-v3-turbo | ~3GB | ~3GB |
+| Parakeet CTC 0.6B | ~2GB | N/A (Windows only) |
+| Pyannote diarization | ~0.5-1GB (GPU) | ~0.5-1GB (CPU) |
+| **Total during meeting** | ~3.5-4GB | ~3.5-4GB |
 
 ---
 
@@ -145,37 +158,38 @@ Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, 
 ### System Overview
 
 ```
-    DESKTOP (GPU Server)                        LAPTOP (Remote Client)
-    ════════════════════                        ════════════════════════
+    WINDOWS DESKTOP (NVIDIA GPU)              LAPTOP (Remote Client)
+    ════════════════════════════              ════════════════════════
 
-         SYSTEM TRAY                                 SYSTEM TRAY
-    ┌─────────────────┐                         ┌─────────────────┐
-    │  Koe            │                         │  Koe            │
-    │  Scribe         │◄───── Tailscale ───────►│    (remote)     │
-    │  Settings       │      (100.x.x.x)        │  Scribe         │
-    └────────┬────────┘                         └─────────────────┘
+         SYSTEM TRAY                              SYSTEM TRAY
+    ┌─────────────────┐                      ┌─────────────────┐
+    │  Koe            │                      │  Koe            │
+    │  Scribe         │◄──── Tailscale ─────►│    (remote)     │
+    │  Settings       │     (100.x.x.x)      │  Scribe         │
+    └────────┬────────┘                      └─────────────────┘
              │
              ▼
     ┌─────────────────────────────────────────────────────────────────┐
     │                    Koe Server (Port 9876)                       │
     │                                                                 │
-    │  ENGINE: Whisper OR Parakeet (both native Windows)              │
+    │  ENGINE: Whisper OR Parakeet OR MLX Whisper                    │
     │  ─────────────────────────────────────────                     │
     │  ┌─────────────────────────────────────────────────────────┐   │
-    │  │  Whisper large-v3 (default)              (~3GB VRAM)    │   │
-    │  │  - faster-whisper optimized implementation              │   │
-    │  │  - Supports 99 languages                                │   │
+    │  │  Whisper large-v3 (Windows default)      (~3GB VRAM)    │   │
+    │  │  - faster-whisper (CTranslate2), 99 languages           │   │
     │  │  OR                                                     │   │
-    │  │  Parakeet CTC 0.6B                       (~2GB VRAM)    │   │
-    │  │  - NVIDIA NeMo toolkit                                  │   │
-    │  │  - ~50x faster, English only                            │   │
+    │  │  Parakeet CTC 0.6B (Windows)             (~2GB VRAM)    │   │
+    │  │  - NVIDIA NeMo toolkit, ~50x faster, English only       │   │
+    │  │  OR                                                     │   │
+    │  │  MLX Whisper large-v3-turbo (macOS)     (~3GB unified)  │   │
+    │  │  - Apple MLX framework, ~15-20x realtime on M2 Pro      │   │
     │  └─────────────────────────────────────────────────────────┘   │
     │                                                                 │
     │  ┌─────────────────────────────────────────────────────────┐   │
-    │  │  Pyannote Diarization                 (~0.5-1GB VRAM)   │   │
+    │  │  Pyannote Diarization          (~0.5-1GB GPU or CPU)    │   │
     │  │  - Speaker segmentation (who speaks when)               │   │
     │  │  - Voice embedding extraction (wespeaker)               │   │
-    │  │  - Cross-chunk speaker tracking                         │   │
+    │  │  - GPU on Windows, CPU on macOS (MPS has timestamp bugs)│   │
     │  └─────────────────────────────────────────────────────────┘   │
     │                                                                 │
     │  ┌─────────────────────────────────────────────────────────┐   │
@@ -304,8 +318,8 @@ User starts Scribe
          ▼                                       ▼
 ┌─────────────────┐                   ┌─────────────────┐
 │   Microphone    │                   │  System Audio   │
-│   (16kHz)       │                   │  (WASAPI loop)  │
-│   → Your voice  │                   │  → Others       │
+│   (16kHz)       │                   │  (WASAPI/       │
+│   → Your voice  │                   │   BlackHole)    │
 └────────┬────────┘                   └────────┬────────┘
          │                                     │
          └──────────────┬──────────────────────┘
@@ -356,7 +370,8 @@ C:\dev\koe\
 ├── config_schema.yaml              # Configuration schema with defaults
 ├── .env                            # Environment variables (API keys, server URL)
 │
-├── requirements.txt                # Desktop dependencies (~3GB)
+├── requirements.txt                # Windows desktop dependencies (~3GB)
+├── requirements-mac.txt            # macOS Apple Silicon dependencies
 ├── requirements-remote.txt         # Laptop dependencies (~50MB)
 │
 ├── assets/
@@ -386,6 +401,7 @@ C:\dev\koe\
 │   ├── result_thread.py           # Recording thread with VAD
 │   ├── key_listener.py            # Global hotkey detection
 │   ├── utils.py                   # ConfigManager singleton
+│   ├── compat.py                  # Platform abstraction (Windows/macOS)
 │   ├── logger.py                  # Centralized error logging
 │   │
 │   ├── server.py                  # FastAPI transcription server
@@ -403,6 +419,13 @@ C:\dev\koe\
 │   │   ├── summarizer.py          # Claude API client
 │   │   ├── summarize_detached.py  # Background summarization
 │   │   └── summary_status.py      # Status file management
+│   │
+│   ├── engines/
+│   │   ├── base.py                # Engine abstract base class
+│   │   ├── factory.py             # Engine registry and creation
+│   │   ├── whisper_engine.py      # Whisper (faster-whisper, Windows)
+│   │   ├── parakeet_engine.py     # Parakeet (NVIDIA NeMo, Windows)
+│   │   └── mlx_engine.py          # MLX Whisper (Apple Silicon, macOS)
 │   │
 │   └── ui/
 │       ├── base_window.py         # Base window class
@@ -444,7 +467,7 @@ C:\dev\koe\
 
 ## Installation
 
-### Desktop Setup (Server)
+### Windows Desktop Setup
 
 #### Prerequisites
 
@@ -467,7 +490,7 @@ The setup wizard guides you through the entire setup process automatically:
 
 ```powershell
 # 1. Clone or download the repository
-git clone https://github.com/your-repo/koe.git C:\dev\koe
+git clone https://github.com/wadyatalkinabewt/koe.git C:\dev\koe
 
 # 2. Install dependencies
 cd C:\dev\koe
@@ -496,7 +519,7 @@ If you prefer manual setup or the wizard doesn't work:
 
 1. **Clone or download the repository**
    ```powershell
-   git clone https://github.com/your-repo/koe.git C:\dev\koe
+   git clone https://github.com/wadyatalkinabewt/koe.git C:\dev\koe
    # Or download and extract ZIP to C:\dev\koe
    ```
 
@@ -557,6 +580,59 @@ If you prefer manual setup or the wizard doesn't work:
    # Create marker file
    echo. > .setup_complete
    ```
+
+### macOS Setup (Apple Silicon)
+
+#### Prerequisites
+
+1. **Apple Silicon Mac** (M1/M2/M3/M4)
+2. **Python 3.10+** (via Homebrew recommended: `brew install python`)
+3. **BlackHole** (for Scribe system audio capture):
+   ```bash
+   brew install blackhole-2ch
+   ```
+4. **ffmpeg** (for audio file processing):
+   ```bash
+   brew install ffmpeg
+   ```
+
+#### Quick Install
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/wadyatalkinabewt/koe.git ~/dev/koe
+
+# 2. Install macOS dependencies
+cd ~/dev/koe
+pip install -r requirements-mac.txt
+
+# 3. Install PyTorch (CPU/MPS) and pyannote
+pip install torch torchvision torchaudio
+pip install pyannote.audio
+
+# 4. Run Koe - setup wizard launches automatically
+python run.py
+```
+
+The setup wizard detects Apple Silicon and configures MLX Whisper automatically.
+
+#### BlackHole Setup (for Scribe)
+
+To capture system audio on macOS, you need a virtual audio device:
+
+1. Install BlackHole: `brew install blackhole-2ch`
+2. Open **Audio MIDI Setup** (Spotlight → "Audio MIDI Setup")
+3. Click `+` → **Create Multi-Output Device**
+4. Check both your speakers/headphones AND **BlackHole 2ch**
+5. Set the Multi-Output Device as your system output
+6. Koe will automatically detect BlackHole as the loopback input
+
+#### macOS Notes
+
+- **Transcription engine**: MLX Whisper uses Apple's MLX framework for GPU-accelerated transcription via unified memory (~15-20x realtime on M2 Pro)
+- **Speaker diarization**: Runs on CPU (pyannote MPS has known timestamp bugs). Works correctly but is slower than GPU (~5-15 min per hour of audio)
+- **Hotkeys**: macOS requires granting Accessibility permissions (System Settings → Privacy & Security → Accessibility) for `pynput` to capture global hotkeys
+- **PyQt5**: Install via `pip install PyQt5` or `brew install pyqt@5`
 
 ### Laptop Setup (Remote Client)
 
@@ -654,7 +730,7 @@ Parakeet provides ~50x faster transcription but only supports English.
 | **Filter snippets to my voice** | Only transcribe your voice in Snippet mode (adds latency) |
 | **Meetings Root Folder** | Where meeting transcripts are saved |
 | **Snippets Folder** | Where rolling hotkey snippets are saved |
-| **Engine** | Transcription engine: Whisper (default) or Parakeet (~50x faster) |
+| **Engine** | Transcription engine: Whisper (Windows default), Parakeet (~50x faster), or MLX (macOS default) |
 | **Model** | Model to use (e.g., large-v3 for Whisper, parakeet-ctc-0.6b for Parakeet) |
 | **Device** | Auto (detect GPU), CUDA (NVIDIA GPU), or CPU (no GPU required) |
 | **Toggle Hotkey** | Global hotkey (default: `Ctrl+Shift+Space`) |
@@ -892,7 +968,7 @@ List enrolled speakers available for matching.
 
 ## Dependencies
 
-### Desktop Dependencies (requirements.txt)
+### Windows Desktop Dependencies (requirements.txt)
 
 #### Core ML/Audio Stack
 
@@ -951,6 +1027,29 @@ List enrolled speakers available for matching.
 | `Pillow` | 9.5.0 | Image processing (icons) |
 | `tqdm` | 4.65.0 | Progress bars |
 | `colorama` | 0.4.6 | Colored console output |
+
+### macOS Dependencies (requirements-mac.txt)
+
+| Package | Purpose |
+|---------|---------|
+| `mlx-whisper` | MLX Whisper for Apple Silicon GPU transcription |
+| `sounddevice` | Audio capture (mic + BlackHole loopback) |
+| `webrtcvad-wheels` | Voice activity detection |
+| `numpy` | Audio processing |
+| `soundfile` | Audio file I/O |
+| `scipy` | High-quality audio resampling |
+| `PyQt5` | GUI framework |
+| `pynput` | Hotkey detection |
+| `pyperclip` | Clipboard access |
+| `fastapi` / `uvicorn` | Server |
+| `anthropic` | AI summarization |
+| `requests` | HTTP client |
+| `pyyaml` | Configuration |
+| `python-dotenv` | Environment variables |
+
+**Not needed on macOS:** `PyAudioWPatch`, `nvidia-cudnn-cu12`, `nvidia-cublas-cu12`, `ctranslate2`, `faster-whisper`
+
+**Also install separately:** `torch`, `pyannote.audio` (for speaker diarization)
 
 ### Remote Dependencies (requirements-remote.txt)
 
@@ -1019,6 +1118,42 @@ nvcc --version
 #### Multiple Tray Icons
 
 Koe has single-instance protection. If multiple icons appear, exit via tray icon → Exit (server stops automatically) and restart.
+
+### macOS Issues
+
+#### MLX Whisper Not Detected
+
+```bash
+# Verify MLX is installed
+python -c "import mlx_whisper; print('OK')"
+
+# Verify Apple Silicon
+python -c "import platform; print(platform.machine())"  # Should print "arm64"
+```
+
+**Solutions:**
+- Install mlx-whisper: `pip install mlx-whisper`
+- Ensure you're on Apple Silicon (Intel Macs are not supported)
+
+#### No System Audio in Scribe (macOS)
+
+BlackHole must be installed and configured:
+1. Install: `brew install blackhole-2ch`
+2. Open Audio MIDI Setup
+3. Create Multi-Output Device (speakers + BlackHole)
+4. Set as system output
+5. Restart Koe
+
+#### Hotkey Not Working (macOS)
+
+macOS requires Accessibility permissions for global hotkeys:
+1. System Settings → Privacy & Security → Accessibility
+2. Add your terminal app or Python to the list
+3. Restart Koe
+
+#### Diarization Slow on macOS
+
+This is expected - pyannote runs on CPU on macOS (MPS/Metal has timestamp bugs). Diarization of a 1-hour meeting takes ~5-15 minutes on CPU. The 64GB unified memory ensures no memory constraints.
 
 ### Parakeet Engine Issues
 
@@ -1151,6 +1286,7 @@ Get-Content logs\koe_errors.log -Tail 50
 ```
 src/
 ├── main.py              # Application entry, tray menu, settings
+├── compat.py            # Platform abstraction (Windows/macOS)
 ├── transcription.py     # Core transcription logic
 ├── key_listener.py      # Global hotkey capture
 ├── result_thread.py     # Recording thread with VAD
@@ -1160,12 +1296,19 @@ src/
 ├── server.py            # FastAPI transcription server
 ├── server_launcher.py   # Server process management
 │
+├── engines/             # Transcription engine backends
+│   ├── base.py          # Abstract base class
+│   ├── factory.py       # Engine registry
+│   ├── whisper_engine.py    # Whisper (Windows, CUDA)
+│   ├── parakeet_engine.py   # Parakeet (Windows, CUDA)
+│   └── mlx_engine.py       # MLX Whisper (macOS, Apple Silicon)
+│
 ├── meeting/             # Scribe module
 │   ├── app.py           # Main Scribe application
-│   ├── capture.py       # Audio capture (mic + loopback)
+│   ├── capture.py       # Audio capture (mic + loopback, cross-platform)
 │   ├── processor.py     # Audio chunking
 │   ├── transcript.py    # Markdown output
-│   ├── diarization.py   # Speaker identification
+│   ├── diarization.py   # Speaker identification (GPU on Windows, CPU on macOS)
 │   └── summarizer.py    # AI summaries
 │
 └── ui/                  # PyQt5 UI components
@@ -1180,6 +1323,8 @@ src/
 - **Signal/Slot (PyQt5)**: Thread-safe UI updates
 - **Background Threads**: Heavy operations don't block UI
 - **Detached Subprocess**: AI summarization continues after window closes
+- **Platform Abstraction**: `src/compat.py` provides cross-platform helpers (locks, sound, clipboard, GPU). All platform-specific code uses `sys.platform` guards
+- **Engine Factory**: `@register_engine` decorator pattern for pluggable transcription backends (Whisper, Parakeet, MLX)
 
 ### Running from Source
 
@@ -1216,6 +1361,8 @@ Based on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell.
 ## Acknowledgments
 
 - [OpenAI Whisper](https://github.com/openai/whisper) - Speech recognition model
-- [faster-whisper](https://github.com/guillaumekln/faster-whisper) - Optimized implementation
+- [faster-whisper](https://github.com/guillaumekln/faster-whisper) - Optimized Whisper implementation (Windows)
+- [mlx-whisper](https://github.com/ml-explore/mlx-examples) - Apple MLX Whisper implementation (macOS)
 - [pyannote-audio](https://github.com/pyannote/pyannote-audio) - Speaker diarization
 - [Anthropic Claude](https://anthropic.com) - AI summarization
+- [BlackHole](https://github.com/ExistentialAudio/BlackHole) - macOS virtual audio driver
