@@ -36,6 +36,27 @@ _setup_cuda_dlls()
 # Load model BEFORE uvicorn to avoid issues
 from server import load_model, app
 import uvicorn
+import yaml
+
+def get_server_port():
+    """Get the configured server port."""
+    port = os.environ.get("KOE_SERVER_PORT")
+    if port:
+        return int(port)
+        
+    try:
+        config_path = Path(__file__).parent / "config.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+            misc = config.get("misc", {})
+            config_port = misc.get("server_port")
+            if config_port:
+                return int(config_port)
+    except:
+        pass
+        
+    return 9876  # Default fallback
 
 
 def main():
@@ -51,11 +72,12 @@ def main():
     print("[Server] Model loaded!")
 
     # Start server
-    print("[Server] Starting on http://0.0.0.0:9876")
+    port = get_server_port()
+    print(f"[Server] Starting on http://0.0.0.0:{port}")
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
-        port=9876,
+        port=port,
         log_level="warning"
     )
     server = uvicorn.Server(config)

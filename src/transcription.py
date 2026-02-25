@@ -168,103 +168,10 @@ def transcribe_local(audio_data, local_engine=None):
 
     return result.text
 
-def apply_name_replacements(text):
-    """Apply configured name spelling corrections."""
-    try:
-        from utils import ConfigManager
-        replacements = ConfigManager.get_config_value('post_processing', 'name_replacements') or {}
-        for wrong, correct in replacements.items():
-            # Case-insensitive word boundary replacement
-            pattern = r'\b' + re.escape(wrong) + r'\b'
-            text = re.sub(pattern, correct, text, flags=re.IGNORECASE)
-    except Exception:
-        pass  # Don't fail if config access fails
-    return text
-
-
-def remove_filler_words(text):
-    """Remove common filler words and clean up the result."""
-
-    # Remove initial prompt if it leaked into transcription
-    # (Whisper sometimes hallucinates the prompt when audio is unclear)
-    try:
-        from utils import ConfigManager
-        model_options = ConfigManager.get_config_section('model_options')
-        initial_prompt = model_options.get('common', {}).get('initial_prompt', '')
-        if initial_prompt:
-            # Split prompt into lines and sentences, filter each separately
-            prompt_parts = []
-            for line in initial_prompt.strip().split('\n'):
-                line = line.strip()
-                if line:
-                    prompt_parts.append(line)
-                    # Also split on periods for sentence-level matching
-                    for sentence in line.split('.'):
-                        sentence = sentence.strip()
-                        if len(sentence) > 10:  # Only match substantial sentences
-                            prompt_parts.append(sentence)
-
-            # Remove any prompt parts that appear in the text
-            for part in prompt_parts:
-                if part in text:
-                    text = text.replace(part, '')
-    except Exception:
-        pass  # Don't fail transcription if config access fails
-
-    # Filler words to remove (case insensitive)
-    fillers = [
-        r'\bum+\b', r'\buh+\b', r'\bah+\b', r'\beh+\b',
-        r'\bhmm+\b', r'\bmm+\b', r'\bhm+\b',
-    ]
-
-    # Whisper hallucinations - ONLY remove at end of transcription
-    # (model hallucinates YouTube outros when audio trails off)
-    trailing_hallucinations = [
-        # YouTube outros
-        r"\s*we'?ll be right back\.?\s*$",
-        r"\s*thank(s| you)( for watching)?\.?\s*$",
-        r"\s*subscribe to (my|the|our) channel\.?\s*$",
-        r"\s*please (like and )?subscribe\.?\s*$",
-        r"\s*see you (in the )?next (one|video|time)\.?\s*$",
-        r"\s*don'?t forget to (like and )?subscribe\.?\s*$",
-        r"\s*like (and )?subscribe\.?\s*$",
-        r"\s*hit the (like|bell|subscribe)( button)?\.?\s*$",
-        # Common trailing phrases
-        r"\s*(so,?\s*)?that'?s (it|all)( for (today|now))?\.?\s*$",
-        r"\s*bye( bye)?\.?\s*$",
-        r"\s*goodbye\.?\s*$",
-        r"\s*take care\.?\s*$",
-        # Incomplete trailing sentences (hallucinated continuations)
-        r",?\s*and I'?ll\.?\s*$",
-        r",?\s*and we'?ll\.?\s*$",
-        r",?\s*and I'?m\.?\s*$",
-        r",?\s*so I'?ll\.?\s*$",
-        r",?\s*I'?ll see\.?\s*$",
-        # Music/sound descriptions
-        r"\s*\[music\]\s*$",
-        r"\s*\[applause\]\s*$",
-        r"\s*♪.*$",
-    ]
-    for pattern in trailing_hallucinations:
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-
-    for filler in fillers:
-        text = re.sub(filler, '', text, flags=re.IGNORECASE)
-
-    # Clean up resulting issues
-    text = re.sub(r'\s+', ' ', text)  # Multiple spaces to single
-    text = re.sub(r'\s+([,.?!])', r'\1', text)  # Space before punctuation
-    text = re.sub(r'([,.?!])\s*\1+', r'\1', text)  # Duplicate punctuation
-    text = re.sub(r',\s*\.', '.', text)  # Comma followed by period
-    text = re.sub(r'^\s*,\s*', '', text)  # Leading comma
-    return text.strip()
-
-def ensure_ending_punctuation(text):
-    """Ensure text ends with proper punctuation."""
-    text = text.strip()
-    if text and text[-1] not in '.?!':
-        text += '.'
-    return text
+def post_process_transcription(transcription):
+    """Apply post-processing to the transcription using the centralized TextProcessor."""
+    from utils import TextProcessor
+    return TextProcessor.process(transcription, add_trailing_space=True)
 
 def post_process_transcription(transcription):
     """Apply post-processing to the transcription."""

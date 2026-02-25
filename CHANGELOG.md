@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
+
+## [2.0.0] - 2026-02-26
 ### Added
+- **macOS Apple Silicon Support (2026-02-26)**: Full cross-platform support for M-series Macs
+  - MLX Whisper engine (`src/engines/mlx_engine.py`) - GPU-accelerated transcription via Apple's MLX framework (~15-20x realtime on M2 Pro)
+  - Platform abstraction module (`src/compat.py`) - single-instance locks (fcntl), sound (afplay), clipboard (pbcopy), ffmpeg (Homebrew), device/engine detection
+  - BlackHole virtual audio capture for Scribe mode (replaces WASAPI loopback)
+  - Dual-platform audio capture in `capture.py` - sounddevice on macOS, PyAudioWPatch on Windows
+  - pyannote diarization forced to CPU on macOS (MPS has known timestamp bugs)
+  - Setup wizard detects Apple Silicon, checks MLX, downloads turbo model
+  - `requirements-mac.txt` with macOS-specific dependencies
+  - MLX engine config in `config_schema.yaml` with 5 model options
+  - All changes use `sys.platform` branching - zero Windows behavior changes
 - **Crash Recovery & Data Loss Prevention (2026-02-05)**:
   - **Transcript crash recovery**: Scribe now saves entries incrementally to `.transcript_recovery.jsonl` as they arrive. If app crashes mid-meeting, recovery dialog on next startup offers to save the recovered transcript.
   - **Server busy tracking**: Server tracks `busy` and `active_requests` in `/status` endpoint. Launcher waits up to 2 minutes for active transcriptions to complete before stopping.
@@ -202,6 +214,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - Updated Whisper Python package; the local model is now compatible with Python 3.11.
 
-[Unreleased]: https://github.com/savbell/whisper-writer/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/savbell/whisper-writer/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/savbell/whisper-writer/compare/v1.0.1...v2.0.0
 [1.0.1]: https://github.com/savbell/whisper-writer/releases/tag/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/savbell/whisper-writer/releases/tag/v1.0.0

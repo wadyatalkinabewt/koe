@@ -50,8 +50,30 @@ class MeetingSegment:
     end: float
 
 
+def get_server_port():
+    """Get the configured server port."""
+    port = os.environ.get("KOE_SERVER_PORT")
+    if port:
+        return port
+        
+    try:
+        import yaml
+        config_path = Path(__file__).parent / "config.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+            misc = config.get("misc", {})
+            config_port = misc.get("server_port")
+            if config_port:
+                return str(config_port)
+    except:
+        pass
+        
+    return "9876"  # Default fallback
+
 # Support remote server via environment variable
-DEFAULT_SERVER_URL = os.environ.get("WHISPER_SERVER_URL", "http://localhost:9876")
+SERVER_PORT = get_server_port()
+DEFAULT_SERVER_URL = os.environ.get("WHISPER_SERVER_URL", f"http://127.0.0.1:{SERVER_PORT}")
 
 # API token for authentication (optional - if not set, no auth sent)
 DEFAULT_API_TOKEN = os.environ.get("KOE_API_TOKEN")
