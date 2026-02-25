@@ -4,7 +4,7 @@ This guide gets you up and running quickly. For comprehensive documentation, see
 
 ---
 
-## Desktop Setup (5 minutes)
+## Windows Desktop Setup (5 minutes)
 
 ### Prerequisites
 
@@ -63,6 +63,45 @@ python run.py
 - First startup takes 30-60 seconds (loading models)
 - Look for the Koe tray icon
 - Press `Ctrl+Shift+Space` to test
+
+---
+
+## macOS Setup (Apple Silicon) (5 minutes)
+
+### Prerequisites
+
+- macOS 13+ (Ventura or later)
+- Apple Silicon (M1/M2/M3/M4)
+- Python 3.10+ (`brew install python`)
+
+### Quick Setup
+
+```bash
+# 1. Install system dependencies
+brew install blackhole-2ch ffmpeg
+
+# 2. Install Python dependencies
+cd ~/dev/koe
+pip install -r requirements-mac.txt
+pip install torch torchvision torchaudio
+pip install pyannote.audio
+
+# 3. Run Koe - wizard detects Apple Silicon automatically
+python run.py
+```
+
+### BlackHole Setup (for Scribe system audio)
+
+1. Open **Audio MIDI Setup** (Spotlight → "Audio MIDI Setup")
+2. Click `+` → **Create Multi-Output Device**
+3. Check both your speakers/headphones AND **BlackHole 2ch**
+4. Set Multi-Output Device as system output
+
+### macOS Notes
+
+- Grant Accessibility permission for hotkeys (System Settings → Privacy & Security)
+- MLX Whisper is auto-selected (~15-20x realtime on M2 Pro)
+- Speaker diarization runs on CPU (slower but accurate)
 
 ---
 
@@ -137,9 +176,10 @@ misc:
 | Problem | Solution |
 |---------|----------|
 | First startup slow | Normal - models loading into GPU (~30-60s) |
-| Hotkey not working | Check tray icon exists, restart Koe |
+| Hotkey not working | Check tray icon exists, restart Koe. On macOS: grant Accessibility permission |
 | "Server Not Available" | Check Tailscale connected, desktop running |
 | Model download fails | Verify HF_TOKEN, accept model licenses on HuggingFace |
+| No system audio (macOS) | Install BlackHole + create Multi-Output Device in Audio MIDI Setup |
 
 ---
 
