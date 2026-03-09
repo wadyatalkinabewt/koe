@@ -2513,10 +2513,54 @@ class MeetingTranscriberApp(QObject):
                         self.transcript.save(filename=filename, notes_markdown=notes_md)
                         _debug_log(f"[Meeting] Transcript re-saved with consolidated speakers")
 
+                # Auto-identify session speakers against enrolled speakers
+                _debug_log("[Meeting] Auto-identifying session speakers against enrolled...")
+                auto_identified = self._diarizer.auto_identify_session_speakers()
+                if auto_identified:
+                    id_count = 0
+                    for entry in self.transcript.entries:
+                        if entry.speaker in auto_identified:
+                            entry.speaker = auto_identified[entry.speaker]
+                            id_count += 1
+                    if id_count > 0:
+                        _debug_log(f"[Meeting] Auto-identified {id_count} transcript entries: {auto_identified}")
+                        self.transcript.save(filename=filename, notes_markdown=notes_md)
+                        _debug_log(f"[Meeting] Transcript re-saved with identified speakers")
+
                 # Now get remaining unenrolled speakers
                 unknown_speakers = self._diarizer.get_unenrolled_session_speakers()
             elif self._server_diarization_available:
-                # Server diarization mode - fetch from server
+                # Server diarization mode - consolidate + auto-identify on server first
+                _debug_log("[Meeting] Consolidating session speakers on server...")
+                speaker_merges = self.client.consolidate_session_speakers()
+
+                # Rewrite transcript entries with merged speaker names
+                if speaker_merges:
+                    merged_count = 0
+                    for entry in self.transcript.entries:
+                        if entry.speaker in speaker_merges:
+                            entry.speaker = speaker_merges[entry.speaker]
+                            merged_count += 1
+                    if merged_count > 0:
+                        _debug_log(f"[Meeting] Rewrote {merged_count} transcript entries after server consolidation")
+                        self.transcript.save(filename=filename, notes_markdown=notes_md)
+                        _debug_log(f"[Meeting] Transcript re-saved with consolidated speakers")
+
+                # Auto-identify session speakers against enrolled speakers on server
+                _debug_log("[Meeting] Auto-identifying session speakers on server...")
+                auto_identified = self.client.auto_identify_session_speakers()
+                if auto_identified:
+                    id_count = 0
+                    for entry in self.transcript.entries:
+                        if entry.speaker in auto_identified:
+                            entry.speaker = auto_identified[entry.speaker]
+                            id_count += 1
+                    if id_count > 0:
+                        _debug_log(f"[Meeting] Auto-identified {id_count} transcript entries: {auto_identified}")
+                        self.transcript.save(filename=filename, notes_markdown=notes_md)
+                        _debug_log(f"[Meeting] Transcript re-saved with identified speakers")
+
+                # Now get remaining unenrolled speakers
                 _debug_log("[Meeting] Fetching unenrolled speakers from server...")
                 unknown_speakers = self.client.get_unenrolled_speakers()
 

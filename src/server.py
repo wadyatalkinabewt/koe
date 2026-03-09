@@ -816,6 +816,35 @@ async def list_speakers():
     return {"speakers": speakers, "available": True}
 
 
+@app.post("/diarization/consolidate")
+async def consolidate_speakers():
+    """Consolidate similar session speakers (call after meeting ends, before enrollment).
+
+    Merges session speakers with similar embeddings to reduce fragmentation.
+    """
+    diarizer = get_diarizer()
+    if diarizer is None:
+        return {"merges": {}, "available": False}
+
+    merges = diarizer.consolidate_session_speakers(similarity_threshold=0.40)
+    return {"merges": merges, "available": True}
+
+
+@app.post("/diarization/auto_identify")
+async def auto_identify_speakers():
+    """Auto-identify session speakers against enrolled speakers.
+
+    Call after consolidation. Returns mapping of session labels to enrolled names
+    for transcript rewriting.
+    """
+    diarizer = get_diarizer()
+    if diarizer is None:
+        return {"identified": {}, "available": False}
+
+    identified = diarizer.auto_identify_session_speakers()
+    return {"identified": identified, "available": True}
+
+
 @app.get("/diarization/unenrolled")
 async def get_unenrolled_speakers():
     """Get unenrolled session speakers with their embeddings for enrollment.
