@@ -70,6 +70,7 @@ class SpeakerDiarizer:
         self._session_embedding_counts: Dict[str, int] = {}  # Track how many embeddings contributed
         self._enrolled_seen_this_session: set = set()  # Track which enrolled speakers have been seen
         self._last_active_session_speaker: Optional[str] = None  # Most recently assigned session speaker
+        self._unembedded_session_labels: set = set()  # Labels created from fallback (no embedding)
 
         # Session persistence (survives server restarts)
         self._session_state_file = Path(__file__).parent.parent.parent / ".session_state.npz"
@@ -161,8 +162,16 @@ class SpeakerDiarizer:
             name = emb_file.stem
             try:
                 embedding = np.load(emb_file)
+                norm = np.linalg.norm(embedding)
+                if norm < 0.1:
+                    _dlog(f"[Diarization] SKIPPING corrupted embedding: {name} (norm={norm:.4f}) - deleting file")
+                    try:
+                        emb_file.unlink()
+                    except Exception:
+                        pass
+                    continue
                 self._known_speakers[name] = embedding
-                _dlog(f"[Diarization] Loaded speaker embedding: {name} (shape={embedding.shape}, norm={np.linalg.norm(embedding):.4f})")
+                _dlog(f"[Diarization] Loaded speaker embedding: {name} (shape={embedding.shape}, norm={norm:.4f})")
             except Exception as e:
                 _dlog(f"[Diarization] Failed to load {name}: {e}")
 
@@ -284,6 +293,21 @@ class SpeakerDiarizer:
                     # Update session embedding with running average for better matching
                     self._update_session_embedding(matched_session, emb)
                 else:
+                    # Check if there's an unembedded session label we can claim
+                    # (from earlier fallback when audio was too short)
+                    unembedded = getattr(self, '_unembedded_session_labels', set())
+                    if unembedded:
+                        # Claim the first unembedded label and give it a real embedding
+                        claimed_label = next(iter(unembedded))
+                        self._unembedded_session_labels.discard(claimed_label)
+                        self._session_speakers[claimed_label] = emb
+                        self._session_embedding_counts[claimed_label] = 1
+                        chunk_to_session[chunk_label] = claimed_label
+                        self._last_active_session_speaker = claimed_label
+                        self._save_session_state()
+                        _dlog(f"[Diarization] {chunk_label} -> CLAIMED unembedded: {claimed_label}")
+                        continue
+
                     # Enforce max_speakers: count BOTH enrolled and unknown speakers
                     total_speakers = len(self._enrolled_seen_this_session) + len(self._session_speakers)
                     if total_speakers >= max_speakers:
@@ -315,12 +339,35 @@ class SpeakerDiarizer:
                 consistent_label = chunk_to_session.get(speaker)
 
                 if consistent_label is None:
-                    # Unmapped speaker (embedding extraction failed) - assign to existing session speaker
-                    # This prevents raw SPEAKER_XX labels leaking through AND prevents speaker fragmentation
+                    # Unmapped speaker (embedding extraction failed) - try to assign intelligently
+                    # Priority: use process-of-elimination within this chunk
 
-                    # Prefer: last active session speaker > any session speaker > new speaker
-                    if self._last_active_session_speaker and self._last_active_session_speaker in self._session_speakers:
-                        # Assign to last active (most likely the same person speaking)
+                    # Find which labels in this chunk ARE already identified
+                    identified_in_chunk = set(chunk_to_session.values())
+
+                    # Find session speakers NOT already used in this chunk (candidates for this speaker)
+                    available_session = [
+                        lbl for lbl in self._session_speakers
+                        if lbl not in identified_in_chunk and np.linalg.norm(self._session_speakers[lbl]) > 0.1
+                    ]
+                    # Also check unembedded labels not used in this chunk
+                    available_unembedded = [
+                        lbl for lbl in self._unembedded_session_labels
+                        if lbl not in identified_in_chunk
+                    ]
+
+                    if available_session:
+                        # Assign to an available session speaker not used in this chunk
+                        consistent_label = available_session[0]
+                        chunk_to_session[speaker] = consistent_label
+                        _dlog(f"[Diarization] {speaker} -> fallback EXCLUSION: {consistent_label} (not in chunk yet)")
+                    elif available_unembedded:
+                        # Reuse an existing unembedded label
+                        consistent_label = available_unembedded[0]
+                        chunk_to_session[speaker] = consistent_label
+                        _dlog(f"[Diarization] {speaker} -> fallback EXCLUSION (unembedded): {consistent_label}")
+                    elif self._last_active_session_speaker and self._last_active_session_speaker in self._session_speakers:
+                        # Assign to last active (fallback)
                         consistent_label = self._last_active_session_speaker
                         chunk_to_session[speaker] = consistent_label
                         _dlog(f"[Diarization] {speaker} -> fallback REUSE (last_active): {consistent_label}")
@@ -330,19 +377,18 @@ class SpeakerDiarizer:
                         chunk_to_session[speaker] = consistent_label
                         _dlog(f"[Diarization] {speaker} -> fallback REUSE (first): {consistent_label}")
                     else:
-                        # No session speakers exist yet - must create first one
+                        # No session speakers exist yet - create one but WITHOUT zero embedding
+                        # Use the label for output but don't pollute session embedding space
                         self._session_speaker_counter += 1
                         consistent_label = f"Speaker {self._session_speaker_counter}"
-                        self._session_speakers[consistent_label] = np.zeros(256)  # Placeholder embedding
-                        self._session_embedding_counts[consistent_label] = 0
+                        # Don't add to _session_speakers with zeros - track as unembedded
+                        self._unembedded_session_labels.add(consistent_label)
                         chunk_to_session[speaker] = consistent_label
                         self._last_active_session_speaker = consistent_label
                         # Set session start time on first speaker
                         if self._session_start_time is None:
                             self._session_start_time = time.time()
-                        # Save session state for crash recovery
-                        self._save_session_state()
-                        _dlog(f"[Diarization] {speaker} -> fallback NEW (first): {consistent_label}")
+                        _dlog(f"[Diarization] {speaker} -> fallback NEW (unembedded): {consistent_label}")
 
                 segments.append(SpeakerSegment(
                     start=turn.start,
@@ -411,6 +457,10 @@ class SpeakerDiarizer:
         # Log all similarity scores for debugging
         scores = []
         for name, known_emb in self._known_speakers.items():
+            # Skip corrupted embeddings with zero/near-zero norm
+            if np.linalg.norm(known_emb) < 0.1:
+                scores.append(f"{name}=SKIP(zero)")
+                continue
             similarity = np.dot(embedding, known_emb)
             scores.append(f"{name}={similarity:.3f}")
             if similarity > best_similarity:
@@ -572,16 +622,79 @@ class SpeakerDiarizer:
 
         return merges
 
+    def auto_identify_session_speakers(self) -> Dict[str, str]:
+        """
+        Try to match session speakers against enrolled speakers.
+
+        Should be called AFTER consolidate_session_speakers() and BEFORE
+        get_unenrolled_session_speakers(). Removes identified session speakers
+        from the session and returns a mapping for transcript rewriting.
+
+        Returns:
+            Dict mapping session labels to enrolled speaker names
+            e.g., {"Speaker 1": "Calum", "Speaker 3": "Sritam"}
+        """
+        if not self._session_speakers or not self._known_speakers:
+            return {}
+
+        identified = {}
+
+        for label, emb in list(self._session_speakers.items()):
+            # Skip zero/near-zero embeddings (from fallback path)
+            norm = np.linalg.norm(emb)
+            if norm < 0.1:
+                _dlog(f"[AutoID] Skipping {label}: zero/near-zero embedding (norm={norm:.4f})")
+                continue
+
+            # Match against enrolled speakers
+            best_match = None
+            best_similarity = self._similarity_threshold
+
+            scores = []
+            for name, known_emb in self._known_speakers.items():
+                known_norm = np.linalg.norm(known_emb)
+                if known_norm < 0.1:
+                    continue  # Skip corrupted enrolled embeddings
+                similarity = np.dot(emb, known_emb)
+                scores.append(f"{name}={similarity:.3f}")
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = name
+
+            _dlog(f"[AutoID] {label}: {', '.join(scores)} -> {'IDENTIFIED as ' + best_match if best_match else 'UNKNOWN'}")
+
+            if best_match:
+                identified[label] = best_match
+                # Remove from session speakers (they're enrolled)
+                del self._session_speakers[label]
+                self._session_embedding_counts.pop(label, None)
+                self._enrolled_seen_this_session.add(best_match)
+
+        if identified:
+            _dlog(f"[AutoID] Auto-identified {len(identified)} speakers: {identified}")
+        else:
+            _dlog(f"[AutoID] No session speakers matched enrolled speakers")
+
+        return identified
+
     def get_unenrolled_session_speakers(self) -> Dict[str, np.ndarray]:
         """
         Get session speakers that are not enrolled (e.g., "Speaker 1", "Speaker 2").
 
         Call this BEFORE reset_session() to get embeddings for enrollment.
+        Filters out speakers with zero/near-zero embeddings (useless for enrollment).
 
         Returns:
             Dict mapping speaker labels to their embeddings (running averages from session)
         """
-        return dict(self._session_speakers)  # Return a copy
+        result = {}
+        for label, emb in self._session_speakers.items():
+            norm = np.linalg.norm(emb)
+            if norm < 0.1:
+                _dlog(f"[Unenrolled] Skipping {label}: zero/near-zero embedding (norm={norm:.4f})")
+                continue
+            result[label] = emb
+        return result
 
     def get_enrolled_speakers_seen(self) -> Dict[str, np.ndarray]:
         """
@@ -684,6 +797,12 @@ class SpeakerDiarizer:
             True if enrollment succeeded, False otherwise
         """
         _dlog(f"[Enroll] enroll_speaker_with_embedding: name='{name}', embedding shape={embedding.shape}")
+
+        # Validate embedding - reject zero/near-zero embeddings
+        norm = np.linalg.norm(embedding)
+        if norm < 0.1:
+            _dlog(f"[Enroll] REJECTED: embedding for '{name}' has zero/near-zero norm ({norm:.4f}) - would be useless for matching")
+            return False
 
         # Save to file
         self._embeddings_dir.mkdir(parents=True, exist_ok=True)
@@ -806,6 +925,7 @@ class SpeakerDiarizer:
         self._enrolled_updated.clear()
         self._enrolled_seen_this_session.clear()  # Clear enrolled speaker tracking
         self._last_active_session_speaker = None  # Clear last active speaker
+        self._unembedded_session_labels.clear()  # Clear unembedded labels
         self._session_start_time = None
         # Delete session state file on reset
         self._delete_session_state()

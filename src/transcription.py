@@ -173,14 +173,6 @@ def post_process_transcription(transcription):
     from utils import TextProcessor
     return TextProcessor.process(transcription, add_trailing_space=True)
 
-def post_process_transcription(transcription):
-    """Apply post-processing to the transcription."""
-    transcription = transcription.strip()
-    transcription = remove_filler_words(transcription)
-    transcription = apply_name_replacements(transcription)
-    transcription = ensure_ending_punctuation(transcription)
-    transcription += ' '  # Trailing space for easy pasting
-    return transcription
 
 
 def ai_cleanup_transcription(text):

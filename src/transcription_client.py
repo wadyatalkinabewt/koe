@@ -587,6 +587,49 @@ class TranscriptionClient:
         status = self.get_status()
         return status.get("diarization_available", False)
 
+    def consolidate_session_speakers(self) -> Dict[str, str]:
+        """Consolidate similar session speakers on the server.
+
+        Call after meeting ends, before fetching unenrolled speakers.
+
+        Returns:
+            Dict mapping old speaker labels to new labels (for transcript rewriting)
+        """
+        try:
+            response = requests.post(
+                f"{self.server_url}/diarization/consolidate",
+                timeout=15.0,
+                headers=self._get_headers()
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("merges", {})
+        except requests.RequestException:
+            pass
+        return {}
+
+    def auto_identify_session_speakers(self) -> Dict[str, str]:
+        """Auto-identify session speakers against enrolled speakers on the server.
+
+        Call after consolidation, before fetching unenrolled speakers.
+
+        Returns:
+            Dict mapping session labels to enrolled speaker names
+            e.g., {"Speaker 1": "Calum"}
+        """
+        try:
+            response = requests.post(
+                f"{self.server_url}/diarization/auto_identify",
+                timeout=15.0,
+                headers=self._get_headers()
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("identified", {})
+        except requests.RequestException:
+            pass
+        return {}
+
     def get_unenrolled_speakers(self) -> Dict[str, np.ndarray]:
         """Get unenrolled session speakers with their embeddings from the server.
 
