@@ -10,6 +10,7 @@ import sys
 import time
 import threading
 import re
+import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -36,7 +37,7 @@ from PyQt5.QtCore import QObject, pyqtSignal, QTimer, Qt
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QMessageBox, QLineEdit, QComboBox, QFileDialog, QInputDialog,
-    QMainWindow
+    QMainWindow, QCheckBox
 )
 from PyQt5.QtGui import QIcon, QFont, QColor, QPainter, QBrush, QPainterPath
 
@@ -138,10 +139,12 @@ def post_process_text(text: str) -> str:
         r"^\.+$",  # Just periods
         r"^thank you\.?$",
         r"^thanks\.?$",
-        r"^thank you for watching\.?$",
-        r"^thanks for watching\.?$",
+        r"^thank you for [\w\s]+\.?$",  # "Thank you for watching/listening/having me/your guidance/using me"
+        r"^thanks for [\w\s]+\.?$",  # "Thanks for watching/listening"
         r"^merci\.?$",
         r"^take care\.?$",
+        r"^bye[\s\-]*bye\.?$",  # "Bye-bye", "Bye bye"
+        r"^bye\.?\s*now\.?$",  # "Bye now"
         r"^bye\.?$",
         r"^goodbye\.?$",
         r"^see you\.?$",
@@ -166,6 +169,11 @@ def post_process_text(text: str) -> str:
         r"^\.{2,}$",  # Multiple periods
         r"^-+$",  # Just dashes
         r"^Угу\.?.*$",  # Russian "uh huh" hallucination
+        r"^and\.?$",  # Standalone "And."
+        r"^so\.?$",  # Standalone "So."
+        r"^but\.?$",  # Standalone "But."
+        r"^-\w+\.?$",  # "-huh.", "-oh." (fragment artifacts)
+        r"^\.[\w\s]+$",  # ".to match what's..." (leading period artifacts)
     ]
 
     for pattern in hallucination_phrases:
@@ -177,12 +185,16 @@ def post_process_text(text: str) -> str:
         r"\s*we'?ll be right back\.?\s*$",
         r"\s*thanks for watching\.?\s*$",
         r"\s*thank you for watching\.?\s*$",
+        r"\s*thank you for listening\.?\s*$",
         r"\s*subscribe to (my|the) channel\.?\s*$",
         r"\s*please like and subscribe\.?\s*$",
         r"\s*see you (in the )?next (one|video|time)\.?\s*$",
         r"\s*don'?t forget to subscribe\.?\s*$",
         r"\s*thank you\.?\s*$",
         r"\s*thanks\.?\s*$",
+        r"\s*bye[\s\-]*bye\.?\s*$",
+        r"\s*bye\.?\s*$",
+        r"\s*goodbye\.?\s*$",
     ]
 
     for pattern in trailing_hallucinations:
@@ -279,9 +291,10 @@ def preprocess_loopback_audio(
     if current_rms > 10:  # Avoid division by zero / boosting silence
         gain = target_rms / current_rms
         # Limit gain to avoid excessive amplification of noise
-        gain = min(gain, 20.0)
+        # (gains >5x mostly amplify background noise, causing Whisper hallucinations)
+        gain = min(gain, 5.0)
         audio_float = audio_float * gain
-        _debug_log(f"[Preprocess] Normalized RMS: {current_rms:.1f} → {target_rms:.1f} (gain: {gain:.2f}x)")
+        _debug_log(f"[Preprocess] Normalized RMS: {current_rms:.1f} → {current_rms * gain:.1f} (gain: {gain:.2f}x, target: {target_rms:.1f})")
 
     # Clip to int16 range and convert back
     audio_float = np.clip(audio_float, -32768, 32767)
@@ -1093,6 +1106,7 @@ class MeetingTranscriberApp(QObject):
         self._recording = False
         self._meeting_start_time: float = 0
         self._timer: Optional[QTimer] = None
+        self._audio_wav_writer: Optional[wave.Wave_write] = None  # Raw audio save
         # ===== REMOVED: self._debug_timer (no longer used for buffer status updates) =====
         self._server_checked = False
         self._chunks_processed = 0
@@ -1270,6 +1284,25 @@ class MeetingTranscriberApp(QObject):
             }
             QPushButton#subtleButton:hover {
                 color: #00ff88;
+                border-color: #00ff88;
+            }
+            QCheckBox {
+                color: #4a7a6a;
+                font-size: 12px;
+                spacing: 6px;
+            }
+            QCheckBox:hover {
+                color: #00ff88;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #2a4a3a;
+                border-radius: 2px;
+                background-color: #0d1117;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #1a3a2a;
                 border-color: #00ff88;
             }
             QMenu {
@@ -1474,6 +1507,11 @@ class MeetingTranscriberApp(QObject):
         # Buttons - compact, right-aligned
         button_layout = QHBoxLayout()
         button_layout.setSpacing(12)
+
+        self.save_audio_checkbox = QCheckBox("Save audio")
+        self.save_audio_checkbox.setToolTip("Save raw loopback audio to WAV file alongside transcript (useful for debugging)")
+        button_layout.addWidget(self.save_audio_checkbox)
+
         button_layout.addStretch()  # Push buttons to the right
 
         self.record_button = QPushButton("● REC")
@@ -2306,6 +2344,32 @@ class MeetingTranscriberApp(QObject):
             )
             return
 
+        # Open WAV file for raw audio saving if requested
+        self._audio_wav_writer = None
+        if self.save_audio_checkbox.isChecked():
+            try:
+                transcripts_dir = self._get_transcripts_dir()
+                selected_category = self.category_combo.currentData()
+                selected_subcategory = self.subcategory_combo.currentData() if self.subcategory_combo.isEnabled() else ""
+                if selected_category:
+                    audio_dir = transcripts_dir / selected_category
+                    if selected_subcategory:
+                        audio_dir = audio_dir / selected_subcategory
+                    audio_dir.mkdir(parents=True, exist_ok=True)
+                else:
+                    audio_dir = transcripts_dir
+                safe_name = sanitize_filename(self.meeting_name_input.text().strip())
+                date_prefix = datetime.now().strftime("%y_%m_%d")
+                audio_path = audio_dir / f"{date_prefix}_{safe_name}_loopback.wav"
+                self._audio_wav_writer = wave.open(str(audio_path), 'wb')
+                self._audio_wav_writer.setnchannels(1)
+                self._audio_wav_writer.setsampwidth(2)  # 16-bit
+                self._audio_wav_writer.setframerate(16000)
+                _debug_log(f"[Meeting] Saving loopback audio to: {audio_path}")
+            except Exception as e:
+                _debug_log(f"[Meeting] Failed to open audio save file: {e}")
+                self._audio_wav_writer = None
+
         # Success - update UI to recording state
         self._recording = True
         self.record_button.setText("■ STOP")
@@ -2382,6 +2446,7 @@ class MeetingTranscriberApp(QObject):
                 widget = layout.itemAt(i).widget()
                 if widget:
                     widget.hide()
+        self.save_audio_checkbox.hide()
 
     def _show_form_fields(self):
         """Show form fields again when not recording."""
@@ -2391,6 +2456,7 @@ class MeetingTranscriberApp(QObject):
                 widget = layout.itemAt(i).widget()
                 if widget:
                     widget.show()
+        self.save_audio_checkbox.show()
 
     def stop_recording(self):
         """Stop recording (with async heavy work)."""
@@ -2452,6 +2518,14 @@ class MeetingTranscriberApp(QObject):
                 if final_chunk:
                     self._process_chunk(final_chunk)
                 self.processor = None
+
+            # Close WAV file if we were saving raw audio
+            if self._audio_wav_writer:
+                try:
+                    self._audio_wav_writer.close()
+                except Exception:
+                    pass
+                self._audio_wav_writer = None
 
             _debug_log("[Meeting] Final audio processed")
 
@@ -2792,17 +2866,28 @@ class MeetingTranscriberApp(QObject):
             if chunk.loopback_audio is not None and len(chunk.loopback_audio) > 0:
                 target_rate = 16000
 
-                # High-quality preprocessing: stereo→mono, resample, normalize
-                loopback = preprocess_loopback_audio(
-                    audio=chunk.loopback_audio,
-                    channels=chunk.loopback_channels,
-                    source_rate=chunk.loopback_sample_rate,
-                    target_rate=target_rate,
-                    target_rms=3000.0  # ~-20dB, optimal for Whisper
-                )
+                # Check for speech BEFORE normalization - normalization boosts
+                # everything to RMS ~3000, making post-normalization checks useless
+                if check_audio_has_speech(chunk.loopback_audio, threshold=300):
 
-                # Only transcribe if there's actual speech in loopback
-                if check_audio_has_speech(loopback, threshold=300):
+                    # High-quality preprocessing: resample, normalize
+                    # loopback_audio is already mono (get_loopback_audio converts it),
+                    # so pass channels=1 to skip the stereo→mono step in preprocess
+                    loopback = preprocess_loopback_audio(
+                        audio=chunk.loopback_audio,
+                        channels=1,
+                        source_rate=chunk.loopback_sample_rate,
+                        target_rate=target_rate,
+                        target_rms=3000.0  # ~-20dB, optimal for Whisper
+                    )
+
+                    # Write to WAV file if raw audio saving is enabled
+                    if self._audio_wav_writer:
+                        try:
+                            self._audio_wav_writer.writeframes(loopback.tobytes())
+                        except Exception as e:
+                            _debug_log(f"[Meeting] WAV write error: {e}")
+
                     # Use diarization to identify speakers if available
                     _debug_log(f"[Loopback] _diarization_available={self._diarization_available}, _server_diarization_available={self._server_diarization_available}")
                     if self._diarization_available and self._diarizer:
@@ -2874,8 +2959,8 @@ class MeetingTranscriberApp(QObject):
             speaker_name = segment.speaker
             _debug_log(f"[Segment {i}] {speaker_name} ({segment.start:.1f}s-{segment.end:.1f}s)")
 
-            if len(segment_audio) < sample_rate * 0.5:  # Skip segments < 0.5s
-                _debug_log(f"[Segment {i}] Skipping - too short")
+            if len(segment_audio) < sample_rate * 1.0:  # Skip segments < 1.0s (Whisper hallucinates on shorter clips)
+                _debug_log(f"[Segment {i}] Skipping - too short ({len(segment_audio)/sample_rate:.1f}s)")
                 continue
 
             # Transcribe segment

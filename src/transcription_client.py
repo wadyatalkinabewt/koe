@@ -234,7 +234,7 @@ class TranscriptionClient:
 
         # Convert to int16 if needed
         if audio_data.dtype == np.float32:
-            audio_int16 = (audio_data * 32768).astype(np.int16)
+            audio_int16 = np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
         elif audio_data.dtype == np.int16:
             audio_int16 = audio_data
         else:
@@ -397,7 +397,7 @@ class TranscriptionClient:
         """
         # Convert to int16 if needed
         if audio_data.dtype == np.float32:
-            audio_int16 = (audio_data * 32768).astype(np.int16)
+            audio_int16 = np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
         elif audio_data.dtype == np.int16:
             audio_int16 = audio_data
         else:
@@ -499,7 +499,7 @@ class TranscriptionClient:
         """
         # Convert to int16 if needed
         if audio_data.dtype == np.float32:
-            audio_int16 = (audio_data * 32768).astype(np.int16)
+            audio_int16 = np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
         elif audio_data.dtype == np.int16:
             audio_int16 = audio_data
         else:

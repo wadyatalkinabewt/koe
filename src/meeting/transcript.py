@@ -6,6 +6,7 @@ Includes crash recovery via incremental saves to .transcript_recovery.jsonl
 
 import os
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -68,6 +69,7 @@ class TranscriptWriter:
     def __post_init__(self):
         self.output_dir = Path(self.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._recovery_lock = threading.Lock()
 
     def start_meeting(self):
         """Mark the start of a new meeting."""
@@ -98,8 +100,9 @@ class TranscriptWriter:
         if not self._recovery_enabled:
             return
         try:
-            with open(RECOVERY_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry.to_dict()) + "\n")
+            with self._recovery_lock:
+                with open(RECOVERY_FILE, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry.to_dict()) + "\n")
         except Exception as e:
             print(f"[Transcript] Warning: Failed to append to recovery: {e}")
 

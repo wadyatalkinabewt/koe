@@ -95,6 +95,7 @@ class ResultThread(QThread):
     def run(self):
         """Main execution method for the thread."""
         _debug("ResultThread.run() STARTED")
+        audio_data = None  # Initialize before try so except handler can always reference it
         try:
             if not self.is_running:
                 _debug("  Early exit: is_running=False")
