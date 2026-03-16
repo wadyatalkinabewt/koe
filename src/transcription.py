@@ -263,7 +263,7 @@ def transcribe_server(audio_data, retry_count=0):
         client = _server_client
 
     model_options = ConfigManager.get_config_section('model_options')
-    language = model_options['common'].get('language')
+    language = model_options.get('common', {}).get('language')
 
     # Check if voice filtering is enabled
     filter_to_speaker = None
@@ -277,7 +277,7 @@ def transcribe_server(audio_data, retry_count=0):
         audio_data,
         sample_rate=16000,
         language=language,
-        vad_filter=model_options['local'].get('vad_filter', True),
+        vad_filter=model_options.get('local', {}).get('vad_filter', True),
         filter_to_speaker=filter_to_speaker
     )
 

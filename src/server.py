@@ -754,18 +754,21 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
 
             segment_audio = audio_float[start_sample:end_sample]
 
-            # Skip very short segments (< 0.3 seconds)
-            if len(segment_audio) < request.sample_rate * 0.3:
+            # Skip very short segments (< 1.0 seconds)
+            # Whisper hallucinates badly on sub-second clips (e.g. "Thank you", "Bye")
+            if len(segment_audio) < request.sample_rate * 1.0:
                 continue
 
             # Transcribe this segment
+            # Use VAD to filter silence/noise within diarized segments -
+            # diarizer detects speakers but segments can still contain non-speech audio
             with _engine_lock:
                 result = engine.transcribe(
                     audio=segment_audio,
                     sample_rate=request.sample_rate,
                     language=request.language,
                     initial_prompt=request.initial_prompt,
-                    vad_filter=False,  # Already segmented by diarizer
+                    vad_filter=True,
                     condition_on_previous_text=False,
                     hallucination_silence_threshold=0.5,
                 )

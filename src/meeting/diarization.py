@@ -167,8 +167,8 @@ class SpeakerDiarizer:
                     _dlog(f"[Diarization] SKIPPING corrupted embedding: {name} (norm={norm:.4f}) - deleting file")
                     try:
                         emb_file.unlink()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _dlog(f"[Diarization] Failed to delete corrupted {name}.npy: {e}")
                     continue
                 self._known_speakers[name] = embedding
                 _dlog(f"[Diarization] Loaded speaker embedding: {name} (shape={embedding.shape}, norm={norm:.4f})")
@@ -396,12 +396,52 @@ class SpeakerDiarizer:
                     speaker=consistent_label
                 ))
 
-            _dlog(f"[Diarization] Returning {len(segments)} segments")
+            # Merge adjacent segments from same speaker (pyannote often fragments
+            # one person's speech into many tiny tracks, e.g. 9 segments in 10s)
+            segments = self._merge_adjacent_segments(segments, gap_tolerance=0.5)
+            _dlog(f"[Diarization] Returning {len(segments)} segments (after merge)")
             return segments
 
         except Exception as e:
             _dlog(f"[Diarization] Error: {e}")
             return []
+
+    @staticmethod
+    def _merge_adjacent_segments(segments: List['SpeakerSegment'], gap_tolerance: float = 0.5) -> List['SpeakerSegment']:
+        """Merge adjacent segments from the same speaker.
+
+        Pyannote often splits one person's continuous speech into many short tracks.
+        This merges segments that are from the same speaker and within gap_tolerance seconds.
+
+        Args:
+            segments: List of SpeakerSegment sorted by start time
+            gap_tolerance: Maximum gap (seconds) between segments to merge
+        """
+        if len(segments) <= 1:
+            return segments
+
+        # Sort by start time
+        segments = sorted(segments, key=lambda s: s.start)
+
+        merged = [segments[0]]
+        for seg in segments[1:]:
+            prev = merged[-1]
+            # Merge if same speaker and gap is small enough
+            if seg.speaker == prev.speaker and (seg.start - prev.end) <= gap_tolerance:
+                # Extend the previous segment
+                merged[-1] = SpeakerSegment(
+                    start=prev.start,
+                    end=seg.end,
+                    speaker=prev.speaker,
+                    confidence=min(prev.confidence, seg.confidence)
+                )
+            else:
+                merged.append(seg)
+
+        if len(merged) < len(segments):
+            _dlog(f"[Diarization] Merged {len(segments)} segments -> {len(merged)}")
+
+        return merged
 
     def _extract_embedding(self, audio: np.ndarray, sample_rate: int = 16000) -> Optional[np.ndarray]:
         """
@@ -438,9 +478,13 @@ class SpeakerDiarizer:
                 embedding = embedding.cpu().numpy()
 
             # Normalize to unit length for cosine similarity
-            embedding = embedding / np.linalg.norm(embedding)
+            embedding = embedding.flatten()
+            norm = np.linalg.norm(embedding)
+            if norm < 1e-6:
+                return None  # Zero-norm embedding is unusable
+            embedding = embedding / norm
 
-            return embedding.flatten()
+            return embedding
 
         except Exception as e:
             _dlog(f"[Diarization] Error extracting embedding: {e}")
@@ -488,8 +532,9 @@ class SpeakerDiarizer:
 
         # Weighted average: 95% old + 5% new (very conservative)
         updated = (old_embedding * (1 - self._adaptive_rate) + new_embedding * self._adaptive_rate)
-        # Re-normalize to unit length
-        updated = updated / np.linalg.norm(updated)
+        # Re-normalize to unit length (guard against near-zero norm from cancelling embeddings)
+        norm = np.linalg.norm(updated)
+        updated = updated / norm if norm > 1e-6 else updated
 
         self._known_speakers[name] = updated
         self._enrolled_updated[name] = True
@@ -526,8 +571,9 @@ class SpeakerDiarizer:
 
         # Running average: new_avg = (old_avg * count + new_emb) / (count + 1)
         updated = (old_embedding * count + new_embedding) / (count + 1)
-        # Re-normalize to unit length
-        updated = updated / np.linalg.norm(updated)
+        # Re-normalize to unit length (guard against near-zero norm from cancelling embeddings)
+        norm = np.linalg.norm(updated)
+        updated = updated / norm if norm > 1e-6 else updated
 
         self._session_speakers[label] = updated
         self._session_embedding_counts[label] = count + 1
@@ -603,7 +649,9 @@ class SpeakerDiarizer:
                     # Update label1's embedding with combined average
                     total_count = count1 + count2
                     combined_emb = (emb1 * count1 + emb2 * count2) / total_count
-                    combined_emb = combined_emb / np.linalg.norm(combined_emb)  # Re-normalize
+                    norm = np.linalg.norm(combined_emb)
+                    if norm > 1e-6:
+                        combined_emb = combined_emb / norm  # Re-normalize
 
                     self._session_speakers[label1] = combined_emb
                     self._session_embedding_counts[label1] = total_count
@@ -883,7 +931,9 @@ class SpeakerDiarizer:
                     # Use slightly higher learning rate for mic audio (we're certain it's them)
                     rate = 0.10  # 10% new, 90% old
                     updated = (old_emb * (1 - rate) + emb * rate)
-                    updated = updated / np.linalg.norm(updated)
+                    # Re-normalize to unit length (guard against near-zero norm)
+                    norm = np.linalg.norm(updated)
+                    updated = updated / norm if norm > 1e-6 else updated
                     self._known_speakers[user_name] = updated
                     self._enrolled_updated[user_name] = True
                     _dlog(f"[UserMic] Updated {user_name}'s embedding (forced)")
@@ -976,7 +1026,8 @@ class SpeakerDiarizer:
                 return False
 
             # Restore session state
-            labels = list(data['labels'])
+            # Use str() conversion to handle bytes vs str differences across numpy versions
+            labels = [str(x) for x in data['labels']]
             embeddings = data['embeddings']
             counts = data['counts']
 
