@@ -12,6 +12,7 @@ Setup required:
 import os
 import sys
 import time
+import threading
 import numpy as np
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
@@ -220,16 +221,40 @@ class SpeakerDiarizer:
                 "sample_rate": sample_rate
             }
 
-            # Run diarization
+            # Run diarization with timeout protection
+            # Pyannote pipeline intermittently hangs for 100-200+ seconds on normal chunks.
+            # If it takes >30s for a 15-30s chunk, something is wrong — abort and skip diarization.
+            PIPELINE_TIMEOUT = 30  # seconds
             _dlog(f"[Diarization] Running pipeline with min_speakers={min_speakers}, max_speakers={max_speakers}")
-            if num_speakers:
-                diarization = self._pipeline(input_dict, num_speakers=num_speakers)
-            else:
-                diarization = self._pipeline(
-                    input_dict,
-                    min_speakers=min_speakers,
-                    max_speakers=max_speakers
-                )
+
+            pipeline_result = [None]
+            pipeline_error = [None]
+
+            def _run_pipeline():
+                try:
+                    if num_speakers:
+                        pipeline_result[0] = self._pipeline(input_dict, num_speakers=num_speakers)
+                    else:
+                        pipeline_result[0] = self._pipeline(
+                            input_dict,
+                            min_speakers=min_speakers,
+                            max_speakers=max_speakers
+                        )
+                except Exception as e:
+                    pipeline_error[0] = e
+
+            pipeline_thread = threading.Thread(target=_run_pipeline, daemon=True)
+            pipeline_thread.start()
+            pipeline_thread.join(timeout=PIPELINE_TIMEOUT)
+
+            if pipeline_thread.is_alive():
+                _dlog(f"[Diarization] TIMEOUT: Pipeline exceeded {PIPELINE_TIMEOUT}s - skipping diarization for this chunk")
+                return []
+
+            if pipeline_error[0]:
+                raise pipeline_error[0]
+
+            diarization = pipeline_result[0]
 
             _dlog(f"[Diarization] Pipeline result type: {type(diarization)}")
 
@@ -907,9 +932,31 @@ class SpeakerDiarizer:
             waveform = torch.from_numpy(audio_float).unsqueeze(0)
             input_dict = {"waveform": waveform, "sample_rate": sample_rate}
 
-            # Run diarization (for timing consistency)
+            # Run diarization with timeout (for timing consistency)
+            PIPELINE_TIMEOUT = 30
             _dlog(f"[UserMic] Running diarization for timing ({len(audio)/sample_rate:.1f}s)")
-            diarization = self._pipeline(input_dict, min_speakers=1, max_speakers=2)
+
+            pipeline_result = [None]
+            pipeline_error = [None]
+
+            def _run_mic_pipeline():
+                try:
+                    pipeline_result[0] = self._pipeline(input_dict, min_speakers=1, max_speakers=2)
+                except Exception as e:
+                    pipeline_error[0] = e
+
+            pipeline_thread = threading.Thread(target=_run_mic_pipeline, daemon=True)
+            pipeline_thread.start()
+            pipeline_thread.join(timeout=PIPELINE_TIMEOUT)
+
+            if pipeline_thread.is_alive():
+                _dlog(f"[UserMic] TIMEOUT: Pipeline exceeded {PIPELINE_TIMEOUT}s - skipping")
+                return []
+
+            if pipeline_error[0]:
+                raise pipeline_error[0]
+
+            diarization = pipeline_result[0]
 
             # Extract annotation
             annotation = getattr(diarization, 'speaker_diarization', diarization)
