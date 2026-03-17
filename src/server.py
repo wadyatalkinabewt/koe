@@ -745,6 +745,13 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
                 duration_seconds=duration
             )
 
+        # Clear CUDA cache after diarization, before switching to Whisper transcription.
+        # Pyannote and Whisper use different GPU memory patterns — clearing between them
+        # prevents VRAM fragmentation that causes intermittent 200s pipeline hangs.
+        import torch as _torch
+        if _torch.cuda.is_available():
+            _torch.cuda.empty_cache()
+
         # Transcribe each speaker segment
         result_segments = []
         for seg in speaker_segments:
@@ -784,8 +791,9 @@ async def transcribe_meeting(request: MeetingTranscribeRequest):
                     end=seg.end
                 ))
 
-        # Clear CUDA cache periodically to prevent VRAM fragmentation
-        _maybe_clear_cuda_cache(duration)
+        # Always clear CUDA cache after meeting chunk to prevent accumulation
+        if _torch.cuda.is_available():
+            _torch.cuda.empty_cache()
 
         return MeetingTranscribeResponse(
             segments=result_segments,
