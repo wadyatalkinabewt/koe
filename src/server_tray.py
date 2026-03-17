@@ -8,7 +8,43 @@ Controlled via the /shutdown endpoint or by killing the process.
 
 import os
 import sys
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+# --- Server logging setup (before any other imports) ---
+# Two log files:
+#   logs/server.log        - RotatingFileHandler for structured app logs (INFO+)
+#   logs/server_stderr.log - raw stderr redirect for CUDA/C-level crashes
+LOGS_DIR = Path(__file__).parent.parent / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+
+# 1. Structured logging with rotation
+_server_log = LOGS_DIR / "server.log"
+_handler = RotatingFileHandler(_server_log, maxBytes=1_000_000, backupCount=1, encoding='utf-8')
+_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
+_logger = logging.getLogger('koe.server')
+
+# 2. Raw stderr redirect for CUDA/C-level crashes
+_stderr_log = LOGS_DIR / "server_stderr.log"
+_stderr_file = open(_stderr_log, 'a', buffering=1, encoding='utf-8')
+sys.stderr = _stderr_file
+
+# Also redirect stdout so print() statements go to the structured log file
+class _StdoutToLogger:
+    """Redirect stdout print() calls to the logging system."""
+    def __init__(self, logger, level=logging.INFO):
+        self._logger = logger
+        self._level = level
+        self._buf = ''
+    def write(self, msg):
+        if msg and msg.strip():
+            self._logger.log(self._level, msg.rstrip())
+    def flush(self):
+        pass
+
+sys.stdout = _StdoutToLogger(_logger)
 
 # Load .env file for HF_TOKEN and other settings
 from dotenv import load_dotenv
@@ -74,11 +110,38 @@ def main():
     # Start server
     port = get_server_port()
     print(f"[Server] Starting on http://0.0.0.0:{port}")
+    # Configure uvicorn to log to our file handler instead of stdout
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "[%(asctime)s] %(levelname)s - %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+        },
+        "handlers": {
+            "file": {
+                "class": "logging.handlers.RotatingFileHandler",
+                "filename": str(_server_log),
+                "maxBytes": 1_000_000,
+                "backupCount": 1,
+                "formatter": "default",
+                "encoding": "utf-8",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["file"], "level": "WARNING"},
+            "uvicorn.error": {"handlers": ["file"], "level": "WARNING"},
+            "uvicorn.access": {"handlers": ["file"], "level": "WARNING"},
+        },
+    }
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
         port=port,
-        log_level="warning"
+        log_level="warning",
+        log_config=log_config,
     )
     server = uvicorn.Server(config)
     server.run()

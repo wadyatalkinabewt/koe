@@ -17,10 +17,13 @@ import base64
 import subprocess
 import tempfile
 import threading
+import logging
 import numpy as np
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict
+
+logger = logging.getLogger('koe.server')
 
 # Add parent directory and src directory for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -203,7 +206,7 @@ def _apply_ai_cleanup(text: str) -> str:
 
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
-            print("[Server] AI cleanup skipped: no ANTHROPIC_API_KEY")
+            logger.info("AI cleanup skipped: no ANTHROPIC_API_KEY")
             return text
 
         client = anthropic.Anthropic(api_key=api_key)
@@ -226,11 +229,11 @@ def _apply_ai_cleanup(text: str) -> str:
         )
 
         cleaned = response.content[0].text.strip()
-        print(f"[Server] AI cleanup: {len(text)} -> {len(cleaned)} chars")
+        logger.info(f"AI cleanup: {len(text)} -> {len(cleaned)} chars")
         return cleaned
 
     except Exception as e:
-        print(f"[Server] AI cleanup failed: {e}")
+        logger.warning(f"AI cleanup failed: {e}")
         return text
 
 
@@ -244,19 +247,19 @@ def get_diarizer():
 
         try:
             from meeting.diarization import SpeakerDiarizer
-            print("[Server] Loading diarization model...")
+            logger.info("Loading diarization model...")
             _diarizer = SpeakerDiarizer()
             if _diarizer.load():
                 _diarizer_available = True
-                print("[Server] Diarization model loaded successfully")
+                logger.info("Diarization model loaded successfully")
             else:
-                print("[Server] Diarization model failed to load")
+                logger.warning("Diarization model failed to load")
                 _diarizer = None
         except ImportError as e:
-            print(f"[Server] Diarization not available: {e}")
+            logger.warning(f"Diarization not available: {e}")
             _diarizer = None
         except Exception as e:
-            print(f"[Server] Diarization error: {e}")
+            logger.error(f"Diarization error: {e}", exc_info=True)
             _diarizer = None
 
         return _diarizer
@@ -278,7 +281,7 @@ def load_engine(
         # Use environment variable or default to whisper
         engine_id = engine_id or os.environ.get("WHISPER_ENGINE", "whisper")
 
-        print(f"[Server] Loading {engine_id} engine with model: {model_name} on {device}...")
+        logger.info(f"Loading {engine_id} engine with model: {model_name} on {device}...")
 
         try:
             _engine = create_engine(engine_id)
@@ -289,12 +292,12 @@ def load_engine(
                     "model": model_name,
                     "device": _engine.device or device
                 }
-                print(f"[Server] Engine loaded successfully")
+                logger.info("Engine loaded successfully")
             else:
-                print(f"[Server] Engine failed to load")
+                logger.error("Engine failed to load")
                 _engine = None
         except Exception as e:
-            print(f"[Server] Failed to load engine: {e}")
+            logger.error(f"Failed to load engine: {e}", exc_info=True)
             _engine = None
 
         return _engine
@@ -321,7 +324,7 @@ def get_model():
 
 def _load_diarizer_async():
     """Load diarizer in background thread."""
-    print("[Server] Loading diarization model in background...")
+    logger.info("Loading diarization model in background...")
     get_diarizer()
 
 
@@ -343,7 +346,7 @@ async def lifespan(app: FastAPI):
 
     yield
     # Cleanup if needed
-    print("[Server] Shutting down...")
+    logger.info("Shutting down...")
 
 
 app = FastAPI(
@@ -573,7 +576,7 @@ async def transcribe_file(
     _increment_requests()
     try:
         # Convert to PCM
-        print(f"[Server] transcribe_file: converting {file.filename} ({len(content)} bytes)")
+        logger.info(f"transcribe_file: converting {file.filename} ({len(content)} bytes)")
         audio_int16 = _convert_audio_to_pcm(tmp_path)
         audio_float = audio_int16.astype(np.float32) / 32768.0
         duration = len(audio_float) / 16000
@@ -873,9 +876,9 @@ async def get_unenrolled_speakers():
 
 def run_server(host: str = "0.0.0.0", port: int = 9876):
     """Run the server."""
-    print(f"[Server] Starting on http://{host}:{port}")
-    print(f"[Server] Local access: http://localhost:{port}")
-    print(f"[Server] Remote access: http://<your-tailscale-ip>:{port}")
+    logger.info(f"Starting on http://{host}:{port}")
+    logger.info(f"Local access: http://localhost:{port}")
+    logger.info(f"Remote access: http://<your-tailscale-ip>:{port}")
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
