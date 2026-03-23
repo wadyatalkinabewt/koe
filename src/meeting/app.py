@@ -2480,6 +2480,11 @@ class MeetingTranscriberApp(QObject):
         self._last_meeting_name = self.meeting_name_input.text().strip()
         self._last_meeting_duration = int(time.time() - self._meeting_start_time)
 
+        # Cache Qt widget values for background thread (widgets may be deleted if user closes window)
+        self._cached_category = self.category_combo.currentData()
+        self._cached_subcategory = self.subcategory_combo.currentData() if self.subcategory_combo.isEnabled() else ""
+        self._cached_notes_md = self._get_notes_markdown()
+
         # Hide main window and show summary window IMMEDIATELY
         self.live_window.hide()
 
@@ -2538,8 +2543,8 @@ class MeetingTranscriberApp(QObject):
 
             # Determine output directory
             transcripts_dir = self._get_transcripts_dir()
-            selected_category = self.category_combo.currentData()
-            selected_subcategory = self.subcategory_combo.currentData() if self.subcategory_combo.isEnabled() else ""
+            selected_category = self._cached_category
+            selected_subcategory = self._cached_subcategory
 
             if selected_category:
                 output_dir = transcripts_dir / selected_category
@@ -2552,8 +2557,8 @@ class MeetingTranscriberApp(QObject):
             self.transcript.output_dir = output_dir
 
             # Get notes and save
-            notes_md = self._get_notes_markdown()
-            meeting_name = self.meeting_name_input.text().strip()
+            notes_md = self._cached_notes_md
+            meeting_name = self._last_meeting_name
             date_prefix = self.transcript.meeting_start.strftime("%y_%m_%d") if self.transcript.meeting_start else datetime.now().strftime("%y_%m_%d")
 
             safe_name = sanitize_filename(meeting_name)
