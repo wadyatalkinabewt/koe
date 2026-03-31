@@ -470,8 +470,12 @@ if __name__ == "__main__":
     init_window.show()
     qapp.processEvents()  # Force UI update to show window
 
-    # Now load the model (window stays visible during loading)
-    preloaded_model = preload_model()
+    # Load model if using local engine (Groq doesn't need one)
+    engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
+    if engine == 'groq':
+        preloaded_model = None
+    else:
+        preloaded_model = preload_model()
 
     # Create KoeApp with the existing QApplication and initialization window
     app = KoeApp(qapp=qapp, init_window=init_window, preloaded_model=preloaded_model)
