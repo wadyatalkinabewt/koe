@@ -213,15 +213,6 @@ def post_process_text(text: str) -> str:
     if len(text) < 3:
         return ""
 
-    # Apply name spelling corrections
-    try:
-        replacements = ConfigManager.get_config_value('post_processing', 'name_replacements') or {}
-        for wrong, correct in replacements.items():
-            pattern = r'\b' + re.escape(wrong) + r'\b'
-            text = re.sub(pattern, correct, text, flags=re.IGNORECASE)
-    except Exception:
-        pass
-
     if text and text[-1] not in '.?!':
         text += '.'
 
@@ -2236,6 +2227,17 @@ class MeetingTranscriberApp(QObject):
     def start_recording(self):
         """Start recording a meeting (with async heavy work)."""
         if self._recording:
+            return
+
+        # Groq cloud engine doesn't support Scribe (no diarization)
+        engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
+        if engine == 'groq':
+            QMessageBox.warning(
+                self.live_window,
+                "Scribe Unavailable",
+                "Scribe requires a local transcription server.\n"
+                "Switch to Whisper or Parakeet in Settings to use Scribe."
+            )
             return
 
         # Validate inputs (instant - keep on main thread)

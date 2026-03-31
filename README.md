@@ -32,8 +32,8 @@ Koe provides two primary modes of operation:
 
 ### Key Capabilities
 
-- **Local Processing**: All speech recognition runs locally on your GPU - no cloud services required for transcription
-- **Multi-Engine Support**: Choose between Whisper (99 languages), Parakeet (~50x faster, English-only), or MLX Whisper (Apple Silicon)
+- **Flexible Processing**: Transcribe locally on your GPU or via Groq cloud API (no GPU required)
+- **Multi-Engine Support**: Choose between Groq (cloud, fast), Whisper (99 languages), Parakeet (~50x faster, English-only), or MLX Whisper (Apple Silicon)
 - **Cross-Platform**: Windows (NVIDIA CUDA) and macOS (Apple Silicon MLX) with platform-specific GPU acceleration
 - **Speaker Diarization**: Identifies who said what using voice fingerprinting
 - **AI Summarization**: Auto-generates meeting summaries using Claude API (~$0.04/meeting)
@@ -42,19 +42,20 @@ Koe provides two primary modes of operation:
 
 ### Transcription Engines
 
-| Feature | Whisper | Parakeet | MLX Whisper |
-|---------|---------|----------|-------------|
-| Speed | 1x (baseline) | ~50x faster | ~15-20x realtime |
-| Languages | 99+ languages | English only | 99+ languages |
-| Memory | ~3GB VRAM (large-v3) | ~2GB VRAM | ~3GB unified (large-v3-turbo) |
-| Platform | Windows (CUDA) | Windows (CUDA) | macOS (Apple Silicon) |
-| Setup | Automatic | One-time NeMo install | Automatic |
+| Feature | Groq (Cloud) | Whisper | Parakeet | MLX Whisper |
+|---------|-------------|---------|----------|-------------|
+| Speed | Very fast (cloud) | 1x (baseline) | ~50x faster | ~15-20x realtime |
+| Languages | 99+ languages | 99+ languages | English only | 99+ languages |
+| Memory | None (cloud) | ~3GB VRAM (large-v3) | ~2GB VRAM | ~3GB unified (large-v3-turbo) |
+| Platform | Any (needs internet) | Windows (CUDA) | Windows (CUDA) | macOS (Apple Silicon) |
+| Scribe | No | Yes | Yes | Yes |
+| Setup | GROQ_API_KEY in .env | Automatic | One-time NeMo install | Automatic |
 
 ### Technical Foundation
 
 Built on [WhisperWriter](https://github.com/savbell/whisper-writer) by savbell, extensively modified with:
 - Shared server architecture (single GPU model serves multiple clients)
-- Multi-engine support (Whisper, Parakeet, and MLX Whisper)
+- Multi-engine support (Groq cloud, Whisper, Parakeet, and MLX Whisper)
 - macOS Apple Silicon support via MLX framework
 - Speaker diarization with pyannote-audio
 - Meeting transcription with category organization

@@ -453,12 +453,17 @@ class SettingsWindow(BaseWindow):
         )
         speakers_layout.addWidget(self.filter_snippets_checkbox)
 
-        filter_help = QLabel("// adds ~0.5-1s latency; use in noisy environments")
-        filter_help.setObjectName("helpText")
-        speakers_layout.addWidget(filter_help)
+        self.filter_help_label = QLabel("// adds ~0.5-1s latency; use in noisy environments")
+        self.filter_help_label.setObjectName("helpText")
+        speakers_layout.addWidget(self.filter_help_label)
 
         # Update checkbox enabled state based on dropdown
         self._update_filter_checkbox_state()
+
+        # Hide filter widgets if Groq is currently selected
+        if ConfigManager.get_config_value('model_options', 'engine') == 'groq':
+            self.filter_snippets_checkbox.setVisible(False)
+            self.filter_help_label.setVisible(False)
 
         speakers_group.setLayout(speakers_layout)
         content_layout.addWidget(speakers_group)
@@ -749,6 +754,8 @@ class SettingsWindow(BaseWindow):
                     ConfigManager.set_config_value(current_values['model'], 'model_options', 'parakeet', 'model')
                 if 'device' in current_values:
                     ConfigManager.set_config_value(current_values['device'], 'model_options', 'parakeet', 'device')
+            elif engine == 'groq':
+                pass  # No model/device config for cloud API
 
         ConfigManager.save_config()
 
@@ -873,6 +880,9 @@ class SettingsWindow(BaseWindow):
 
     def _update_filter_checkbox_state(self):
         """Enable/disable filter checkbox based on whether a voice is selected."""
+        engine_id = self.engine_dropdown.currentData() if hasattr(self, 'engine_dropdown') else 'whisper'
+        if engine_id == 'groq':
+            return  # Filter hidden entirely for Groq
         has_voice = self.my_voice_dropdown.currentData() is not None
         self.filter_snippets_checkbox.setEnabled(has_voice)
         if not has_voice:
@@ -885,14 +895,20 @@ class SettingsWindow(BaseWindow):
         engines = [
             ("whisper", "Whisper (faster-whisper)", "Well-tested, multilingual"),
             ("parakeet", "Parakeet (NVIDIA NeMo)", "~50x faster, English only"),
+            ("groq", "Groq (Cloud API)", "No GPU required, fast"),
         ]
 
         current_engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
         selected_index = 0
 
         for i, (engine_id, name, description) in enumerate(engines):
-            # Check via server first (works around Qt/NeMo DLL conflict)
-            available = _check_engine_available_via_server(engine_id)
+            # Groq is always available (cloud API, no local deps)
+            if engine_id == 'groq':
+                available = True
+            else:
+                # Check via server first (works around Qt/NeMo DLL conflict)
+                available = _check_engine_available_via_server(engine_id)
+
             if available:
                 self.engine_dropdown.addItem(name, engine_id)
             else:
@@ -936,6 +952,11 @@ class SettingsWindow(BaseWindow):
                 ("nvidia/parakeet-ctc-1.1b", "Parakeet CTC 1.1B - Higher accuracy", 3000),
             ]
             current_model = ConfigManager.get_config_value('model_options', 'parakeet', 'model') or 'nvidia/parakeet-ctc-0.6b'
+        elif engine_id == 'groq':
+            models = [
+                ("whisper-large-v3", "Whisper Large v3 (cloud)", 0),
+            ]
+            current_model = "whisper-large-v3"
         else:
             models = []
             current_model = None
@@ -954,6 +975,15 @@ class SettingsWindow(BaseWindow):
         self._populate_model_dropdown()
         self._populate_device_dropdown()
         self._update_model_info()
+
+        # Hide voice filtering when using Groq (requires local server for diarization)
+        engine_id = self.engine_dropdown.currentData() if hasattr(self, 'engine_dropdown') else 'whisper'
+        is_groq = engine_id == 'groq'
+        if hasattr(self, 'filter_snippets_checkbox'):
+            self.filter_snippets_checkbox.setVisible(not is_groq)
+            self.filter_help_label.setVisible(not is_groq)
+            if is_groq:
+                self.filter_snippets_checkbox.setChecked(False)
 
     def _update_model_info(self):
         """Update the model info label based on current selection."""
@@ -978,6 +1008,8 @@ class SettingsWindow(BaseWindow):
                 self.model_info_label.setText("// pip install nemo_toolkit[asr]")
             else:
                 self.model_info_label.setText("// ~2GB VRAM, English only, ~50x faster")
+        elif engine_id == 'groq':
+            self.model_info_label.setText("// Cloud API, no local GPU needed. Requires GROQ_API_KEY in .env")
         else:
             self.model_info_label.setText("")
 
@@ -985,13 +1017,20 @@ class SettingsWindow(BaseWindow):
         """Populate the device dropdown with available options."""
         self.device_dropdown.clear()
 
+        engine_id = self.engine_dropdown.currentData() if hasattr(self, 'engine_dropdown') else 'whisper'
+
+        if engine_id == 'groq':
+            self.device_dropdown.addItem("Cloud", "cloud")
+            self.device_dropdown.setEnabled(False)
+            return
+
+        self.device_dropdown.setEnabled(True)
+
         devices = [
             ("auto", "Auto (detect GPU)"),
             ("cuda", "CUDA (NVIDIA GPU)"),
             ("cpu", "CPU (no GPU)"),
         ]
-
-        engine_id = self.engine_dropdown.currentData() if hasattr(self, 'engine_dropdown') else 'whisper'
 
         # Get current device from config
         if engine_id == 'whisper':

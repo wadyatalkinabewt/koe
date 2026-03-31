@@ -125,7 +125,11 @@ class KoeApp(QObject):
         self.key_listener.add_callback("on_activate", self.on_activation)
         self.key_listener.add_callback("on_deactivate", self.on_deactivation)
 
-        if self.preloaded_model is not None:
+        engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
+        if engine == 'groq':
+            # Groq cloud engine - no local model or server needed
+            self.local_model = None
+        elif self.preloaded_model is not None:
             self.local_model = self.preloaded_model
         elif check_server_available():
             # Using server, no local model needed
@@ -203,9 +207,11 @@ class KoeApp(QObject):
         self.tray_menu = QMenu()
         self.tray_menu.setStyleSheet(menu_style)
 
-        self.meeting_action = QAction("Start Scribe", self.app)
-        self.meeting_action.triggered.connect(self.start_meeting_mode)
-        self.tray_menu.addAction(self.meeting_action)
+        engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
+        if engine != 'groq':
+            self.meeting_action = QAction("Start Scribe", self.app)
+            self.meeting_action.triggered.connect(self.start_meeting_mode)
+            self.tray_menu.addAction(self.meeting_action)
 
         self.settings_action = QAction("Settings", self.app)
         self.settings_action.triggered.connect(self.settings_window.show)
@@ -248,8 +254,9 @@ class KoeApp(QObject):
         # Stop the server so new instance can start with updated config (e.g., engine change)
         from server_launcher import stop_server
         stop_server()
-        QApplication.quit()
+        # Start new instance before quitting (startDetached won't run after quit)
         QProcess.startDetached(sys.executable, sys.argv)
+        QApplication.quit()
 
     def on_settings_closed(self):
         if not os.path.exists(os.path.join("src", "config.yaml")):

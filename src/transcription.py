@@ -163,10 +163,90 @@ def transcribe_local(audio_data, local_engine=None):
         initial_prompt=initial_prompt,
         vad_filter=vad_filter,
         condition_on_previous_text=condition_on_previous,
-        hallucination_silence_threshold=0.5,
     )
 
     return result.text
+
+def transcribe_groq(audio_data):
+    """Transcribe audio using Groq cloud API (whisper-large-v3)."""
+    import wave
+    import requests as req
+
+    _debug("transcribe_groq() STARTED")
+
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        _debug("  ERROR: No GROQ_API_KEY in environment")
+        ConfigManager.console_print("Error: GROQ_API_KEY not set in .env file")
+        return ''
+
+    # Convert int16 PCM numpy array to WAV in-memory
+    if audio_data.dtype == np.float32:
+        audio_int16 = np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
+    else:
+        audio_int16 = audio_data.astype(np.int16)
+
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(16000)
+        wf.writeframes(audio_int16.tobytes())
+    buf.seek(0)
+
+    # Build request parameters
+    model_options = ConfigManager.get_config_section('model_options')
+    language = model_options.get('common', {}).get('language') or 'en'
+    initial_prompt = model_options.get('common', {}).get('initial_prompt')
+
+    data = {
+        "model": "whisper-large-v3",
+        "language": language,
+    }
+    if initial_prompt:
+        data["prompt"] = initial_prompt
+
+    _debug(f"  Sending to Groq API (language={language})")
+
+    # POST to Groq with single retry on 5xx
+    for attempt in range(2):
+        try:
+            response = req.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                files={"file": ("audio.wav", buf, "audio/wav")},
+                data=data,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                text = response.json().get("text", "")
+                _debug(f"  Groq response: {len(text)} chars")
+                return text
+
+            if response.status_code >= 500 and attempt == 0:
+                _debug(f"  Groq server error {response.status_code}, retrying...")
+                buf.seek(0)
+                continue
+
+            _debug(f"  Groq API error: {response.status_code} {response.text[:200]}")
+            ConfigManager.console_print(f"Groq API error: {response.status_code}")
+            return ''
+
+        except req.Timeout:
+            _debug(f"  Groq API timeout (attempt {attempt + 1})")
+            if attempt == 0:
+                buf.seek(0)
+                continue
+            ConfigManager.console_print("Groq API timeout")
+            return ''
+        except req.RequestException as e:
+            _debug(f"  Groq API request error: {e}")
+            ConfigManager.console_print(f"Groq API error: {e}")
+            return ''
+
+    return ''
+
 
 def post_process_transcription(transcription):
     """Apply post-processing to the transcription using the centralized TextProcessor."""
@@ -176,8 +256,10 @@ def post_process_transcription(transcription):
 
 
 def ai_cleanup_transcription(text):
-    """Use Claude Sonnet 4.5 to clean up grammar, punctuation, and filler words.
+    """Use Claude to clean up grammar, punctuation, and filler words.
 
+    Model and prompt configurable via post_processing.ai_cleanup_model and
+    post_processing.ai_cleanup_prompt in config.yaml.
     Returns the cleaned text, or the original text if cleanup fails.
     """
     _debug("ai_cleanup_transcription() STARTED")
@@ -198,20 +280,17 @@ def ai_cleanup_transcription(text):
 
         client = anthropic.Anthropic(api_key=api_key)
 
-        prompt = """Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words (um, uh, like, you know, etc.).
+        model = ConfigManager.get_config_value('post_processing', 'ai_cleanup_model') or 'claude-sonnet-4-6'
+        prompt_prefix = ConfigManager.get_config_value('post_processing', 'ai_cleanup_prompt') or (
+            "Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words (um, uh, like, you know, etc.).\n\n"
+            "IMPORTANT:\n- Do NOT summarize or change the meaning\n- Do NOT add any new information\n"
+            "- Keep the same speaking style and tone\n- Output ONLY the cleaned text, nothing else (no quotes, no explanation)\n\nTranscription:\n"
+        )
+        prompt = prompt_prefix + text.strip()
 
-IMPORTANT:
-- Do NOT summarize or change the meaning
-- Do NOT add any new information
-- Keep the same speaking style and tone
-- Output ONLY the cleaned text, nothing else (no quotes, no explanation)
-
-Transcription:
-""" + text.strip()
-
-        _debug("  Calling Claude Sonnet 4.5 API...")
+        _debug(f"  Calling Claude {model} API...")
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250514",
+            model=model,
             max_tokens=2048,
             messages=[
                 {"role": "user", "content": prompt}
@@ -314,25 +393,30 @@ def transcribe(audio_data, local_model=None):
     audio_duration_sec = len(audio_data) / sample_rate
     _debug(f"  Audio duration: {audio_duration_sec:.1f}s")
 
-    # Check if server is available
-    server_available = check_server_available()
-
     # Get configured engine
     engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
-    _debug(f"  Engine: {engine}, Server available: {server_available}")
+    _debug(f"  Engine: {engine}")
 
-    # Parakeet requires server (can't run locally on Windows)
-    if engine == 'parakeet' and not server_available:
-        _debug("  ERROR: Parakeet requires server but server not available")
-        raise RuntimeError("Parakeet is still loading - please wait.")
-
-    # Priority: 1) Server if running, 2) Local model
-    if server_available:
-        _debug("  Using server transcription")
-        transcription = transcribe_server(audio_data)
+    if engine == 'groq':
+        _debug("  Using Groq cloud transcription")
+        transcription = transcribe_groq(audio_data)
     else:
-        _debug("  Using local transcription")
-        transcription = transcribe_local(audio_data, local_model)
+        # Check if server is available
+        server_available = check_server_available()
+        _debug(f"  Server available: {server_available}")
+
+        # Parakeet requires server (can't run locally on Windows)
+        if engine == 'parakeet' and not server_available:
+            _debug("  ERROR: Parakeet requires server but server not available")
+            raise RuntimeError("Parakeet is still loading - please wait.")
+
+        # Priority: 1) Server if running, 2) Local model
+        if server_available:
+            _debug("  Using server transcription")
+            transcription = transcribe_server(audio_data)
+        else:
+            _debug("  Using local transcription")
+            transcription = transcribe_local(audio_data, local_model)
 
     _debug(f"  Raw transcription length: {len(transcription)}")
     result = post_process_transcription(transcription)

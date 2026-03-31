@@ -183,12 +183,17 @@ def start_parakeet_server(model: str = "nvidia/parakeet-ctc-0.6b", device: str =
 
 def start_server_background():
     """Start the server in background if not already running."""
+    # Get engine, model, and device from config
+    engine, model, device = get_engine_config()
+
+    # Groq cloud engine doesn't need a local server
+    if engine == 'groq':
+        print("[Launcher] Groq cloud engine selected - no local server needed")
+        return True
+
     if is_server_running():
         print("[Launcher] Server already running")
         return True
-
-    # Get engine, model, and device from config
-    engine, model, device = get_engine_config()
     print(f"[Launcher] Engine from config: {engine} (model={model}, device={device})")
 
     if engine == "parakeet":

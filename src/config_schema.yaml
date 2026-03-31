@@ -22,11 +22,12 @@ model_options:
   engine:
     value: whisper
     type: str
-    description: "Transcription engine to use. Whisper is well-tested; Parakeet is ~50x faster but English-only."
+    description: "Transcription engine to use. Whisper is well-tested; Parakeet is ~50x faster but English-only; Groq uses cloud API (no GPU required)."
     options:
       - whisper
       - parakeet
       - mlx
+      - groq
 
   # Common configuration options (shared by all engines)
   common:
@@ -204,10 +205,6 @@ recording_options:
 
 # Post-processing settings
 post_processing:
-  name_replacements:
-    value: {}
-    type: dict
-    description: "Dictionary of name corrections. Keys are incorrect spellings, values are correct spellings. Example: {'Callum': 'Jordan', 'Sasha': 'Sash'}"
   remove_fillers:
     value: true
     type: bool
@@ -220,6 +217,14 @@ post_processing:
     value: 30
     type: int
     description: "Minimum snippet duration in seconds before AI cleanup is applied. Set to 0 to apply to all snippets."
+  ai_cleanup_model:
+    value: claude-sonnet-4-6
+    type: str
+    description: "Claude model to use for AI cleanup. Default is claude-sonnet-4-6 (200k context)."
+  ai_cleanup_prompt:
+    value: "Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words (um, uh, like, you know, etc.).\n\nIMPORTANT:\n- Do NOT summarize or change the meaning\n- Do NOT add any new information\n- Keep the same speaking style and tone\n- Output ONLY the cleaned text, nothing else (no quotes, no explanation)\n\nTranscription:\n"
+    type: str
+    description: "Prompt prefix sent to Claude for AI cleanup. The transcription text is appended at the end."
 
 # Miscellaneous settings
 misc:

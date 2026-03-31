@@ -247,20 +247,6 @@ class TextProcessor:
     """Centralized utility for processing and cleaning transcribed text."""
 
     @staticmethod
-    def apply_name_replacements(text):
-        """Apply configured name spelling corrections."""
-        try:
-            replacements = ConfigManager.get_config_value('post_processing', 'name_replacements') or {}
-            for wrong, correct in replacements.items():
-                import re
-                # Case-insensitive word boundary replacement
-                pattern = r'\b' + re.escape(wrong) + r'\b'
-                text = re.sub(pattern, correct, text, flags=re.IGNORECASE)
-        except Exception:
-            pass  # Don't fail if config access fails
-        return text
-
-    @staticmethod
     def remove_prompt_leak(text):
         """Remove initial prompt if it leaked into transcription."""
         try:
@@ -358,7 +344,6 @@ class TextProcessor:
         text = transcription.strip()
         text = cls.remove_prompt_leak(text)
         text = cls.remove_filler_words(text)
-        text = cls.apply_name_replacements(text)
         text = cls.ensure_ending_punctuation(text)
         
         if add_trailing_space:

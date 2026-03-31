@@ -476,7 +476,9 @@ async def transcribe(request: TranscribeRequest):
         else:
             audio_to_transcribe = audio_float
 
-        # Transcribe with anti-hallucination settings
+        # Transcribe — no hallucination_silence_threshold for snippets, as it
+        # aggressively drops segments with natural pauses in speech.
+        # Meeting endpoints set their own threshold where hallucinations are more common.
         with _engine_lock:
             result = engine.transcribe(
                 audio=audio_to_transcribe,
@@ -485,7 +487,6 @@ async def transcribe(request: TranscribeRequest):
                 initial_prompt=request.initial_prompt,
                 vad_filter=request.vad_filter,
                 condition_on_previous_text=False,  # Prevents hallucination bleeding
-                hallucination_silence_threshold=0.5,  # Skip silent sections
             )
 
         # Clear CUDA cache periodically to prevent VRAM fragmentation
