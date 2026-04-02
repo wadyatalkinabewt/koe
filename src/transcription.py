@@ -167,48 +167,10 @@ def transcribe_local(audio_data, local_engine=None):
 
     return result.text
 
-def transcribe_groq(audio_data):
-    """Transcribe audio using Groq cloud API (whisper-large-v3)."""
-    import wave
+def _groq_transcribe_chunk(buf, data, api_key, timeout=30):
+    """Send a single WAV buffer to Groq API. Returns transcribed text or empty string."""
     import requests as req
 
-    _debug("transcribe_groq() STARTED")
-
-    api_key = os.environ.get('GROQ_API_KEY')
-    if not api_key:
-        _debug("  ERROR: No GROQ_API_KEY in environment")
-        ConfigManager.console_print("Error: GROQ_API_KEY not set in .env file")
-        return ''
-
-    # Convert int16 PCM numpy array to WAV in-memory
-    if audio_data.dtype == np.float32:
-        audio_int16 = np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
-    else:
-        audio_int16 = audio_data.astype(np.int16)
-
-    buf = io.BytesIO()
-    with wave.open(buf, 'wb') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(16000)
-        wf.writeframes(audio_int16.tobytes())
-    buf.seek(0)
-
-    # Build request parameters
-    model_options = ConfigManager.get_config_section('model_options')
-    language = model_options.get('common', {}).get('language') or 'en'
-    initial_prompt = model_options.get('common', {}).get('initial_prompt')
-
-    data = {
-        "model": "whisper-large-v3",
-        "language": language,
-    }
-    if initial_prompt:
-        data["prompt"] = initial_prompt
-
-    _debug(f"  Sending to Groq API (language={language})")
-
-    # POST to Groq with single retry on 5xx
     for attempt in range(2):
         try:
             response = req.post(
@@ -216,7 +178,7 @@ def transcribe_groq(audio_data):
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": ("audio.wav", buf, "audio/wav")},
                 data=data,
-                timeout=30,
+                timeout=timeout,
             )
 
             if response.status_code == 200:
@@ -246,6 +208,83 @@ def transcribe_groq(audio_data):
             return ''
 
     return ''
+
+
+# Groq file upload limit is 25MB. 16kHz mono int16 WAV = ~32KB/sec.
+# 10 minutes = ~19.2MB, safely under the limit.
+GROQ_CHUNK_MAX_SAMPLES = 10 * 60 * 16000  # 10 minutes at 16kHz
+
+
+def transcribe_groq(audio_data):
+    """Transcribe audio using Groq cloud API (whisper-large-v3)."""
+    import wave
+
+    _debug("transcribe_groq() STARTED")
+
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        _debug("  ERROR: No GROQ_API_KEY in environment")
+        ConfigManager.console_print("Error: GROQ_API_KEY not set in .env file")
+        return ''
+
+    # Convert int16 PCM numpy array to WAV in-memory
+    if audio_data.dtype == np.float32:
+        audio_int16 = np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
+    else:
+        audio_int16 = audio_data.astype(np.int16)
+
+    # Build request parameters
+    model_options = ConfigManager.get_config_section('model_options')
+    language = model_options.get('common', {}).get('language') or 'en'
+    initial_prompt = model_options.get('common', {}).get('initial_prompt')
+
+    data = {
+        "model": "whisper-large-v3",
+        "language": language,
+    }
+    if initial_prompt:
+        data["prompt"] = initial_prompt
+
+    # Split into chunks if audio exceeds Groq's 25MB file upload limit
+    total_samples = len(audio_int16)
+    if total_samples <= GROQ_CHUNK_MAX_SAMPLES:
+        # Short audio — single request
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(audio_int16.tobytes())
+        buf.seek(0)
+
+        _debug(f"  Sending to Groq API (language={language})")
+        return _groq_transcribe_chunk(buf, data, api_key, timeout=60)
+    else:
+        # Long audio — chunk and concatenate
+        num_chunks = (total_samples + GROQ_CHUNK_MAX_SAMPLES - 1) // GROQ_CHUNK_MAX_SAMPLES
+        _debug(f"  Audio too long for single request ({total_samples / 16000:.0f}s), splitting into {num_chunks} chunks")
+
+        all_text = []
+        for i in range(num_chunks):
+            start = i * GROQ_CHUNK_MAX_SAMPLES
+            end = min(start + GROQ_CHUNK_MAX_SAMPLES, total_samples)
+            chunk = audio_int16[start:end]
+            chunk_dur = len(chunk) / 16000
+
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(chunk.tobytes())
+            buf.seek(0)
+
+            _debug(f"  Chunk {i + 1}/{num_chunks} ({chunk_dur:.0f}s) sending to Groq API")
+            text = _groq_transcribe_chunk(buf, data, api_key, timeout=120)
+            if text:
+                all_text.append(text)
+
+        return ' '.join(all_text)
 
 
 def post_process_transcription(transcription):
