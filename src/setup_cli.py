@@ -1,32 +1,24 @@
 """
-Koe Setup CLI - Terminal-based first-time setup.
+Koe first-time setup — minimal terminal flow.
 
-Simple, reliable setup that works on any display.
+Asks for:
+  1. Groq API key (required, used for transcription)
+  2. OpenRouter key (optional, used for AI cleanup of long snippets and meeting summaries)
+  3. User name (labels your voice in Scribe transcripts)
+
+Writes .env and src/config.yaml, then exits. No model downloads, no GPU
+checks — Groq is cloud-only.
 """
 
 import os
 import sys
-import subprocess
-import time
 from pathlib import Path
 
-# Models with their approximate sizes and recommendations
-MODELS = [
-    ("tiny", "~75MB", "Fast, lower accuracy. Good for testing."),
-    ("base", "~150MB", "Good balance for CPU-only systems."),
-    ("small", "~500MB", "Better accuracy, still CPU-friendly."),
-    ("medium", "~1.5GB", "High accuracy. Needs ~2GB VRAM or good CPU."),
-    ("large-v3", "~3GB", "Best accuracy. Needs ~4GB VRAM (GPU recommended)."),
-]
+
+KOE_DIR = Path(__file__).parent.parent
 
 
-def clear_screen():
-    """Clear terminal screen."""
-    os.system('cls' if sys.platform == 'win32' else 'clear')
-
-
-def print_header(title: str):
-    """Print a section header."""
+def _print_header(title: str):
     print()
     print("=" * 50)
     print(f"  {title}")
@@ -34,225 +26,67 @@ def print_header(title: str):
     print()
 
 
-def print_box(lines: list[str], color: str = None):
-    """Print text in a simple box."""
-    width = max(len(line) for line in lines) + 4
-    print("+" + "-" * width + "+")
-    for line in lines:
-        print(f"|  {line.ljust(width - 2)}|")
-    print("+" + "-" * width + "+")
-
-
-def get_input(prompt: str, default: str = None) -> str:
-    """Get user input with optional default."""
+def _input(prompt: str, default: str = "") -> str:
     if default:
         prompt = f"{prompt} [{default}]: "
     else:
         prompt = f"{prompt}: "
-
-    value = input(prompt).strip()
-    return value if value else default
-
-
-def get_choice(prompt: str, options: list[str], default: int = None) -> int:
-    """Get numbered choice from user."""
-    print(prompt)
-    print()
-    for i, option in enumerate(options, 1):
-        print(f"  {i}) {option}")
-    print()
-
-    while True:
-        if default:
-            choice = input(f"Enter choice [1-{len(options)}] (default: {default}): ").strip()
-        else:
-            choice = input(f"Enter choice [1-{len(options)}]: ").strip()
-
-        if not choice and default:
-            return default
-
-        try:
-            num = int(choice)
-            if 1 <= num <= len(options):
-                return num
-        except ValueError:
-            pass
-
-        print(f"Please enter a number between 1 and {len(options)}")
+    val = input(prompt).strip()
+    return val if val else default
 
 
-def check_gpu() -> tuple[bool, str]:
-    """Check for NVIDIA GPU."""
-    try:
-        result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            parts = result.stdout.strip().split(',')
-            gpu_name = parts[0].strip()
-            gpu_mem = parts[1].strip() if len(parts) > 1 else "Unknown"
-            return True, f"{gpu_name} ({gpu_mem})"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return False, None
-
-
-def download_whisper_model(model_name: str) -> tuple[bool, str, str]:
-    """Download Whisper model with progress.
-
-    Returns: (success, device, compute_type)
-    """
-    print(f"\nDownloading Whisper {model_name}...")
-    print("(This may take a few minutes on first run)\n")
-
-    # Determine device
-    has_gpu, _ = check_gpu()
-    if has_gpu:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                device = "cuda"
-                compute_type = "float16"
-            else:
-                device = "cpu"
-                compute_type = "int8"
-        except ImportError:
-            device = "cpu"
-            compute_type = "int8"
-    else:
-        device = "cpu"
-        compute_type = "int8"
-
-    try:
-        from faster_whisper import WhisperModel
-
-        print(f"Loading on {device.upper()}...")
-
-        # This downloads if not cached
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
-        del model
-
-        print("[OK] Whisper model ready!")
-        return True, device, compute_type
-
-    except Exception as e:
-        print(f"[ERROR] Failed to download model: {e}")
-        return False, device, compute_type
-
-
-def download_diarization_models(hf_token: str) -> bool:
-    """Download pyannote diarization models."""
-    print("\nDownloading speaker diarization models...")
-    print("(This may take a few minutes)\n")
-
-    try:
-        os.environ['HF_TOKEN'] = hf_token
-
-        from pyannote.audio import Pipeline
-
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
-        )
-        del pipeline
-
-        print("[OK] Diarization models ready!")
-        return True
-
-    except Exception as e:
-        error_msg = str(e)
-        if "401" in error_msg or "unauthorized" in error_msg.lower():
-            print("[ERROR] Invalid HuggingFace token.")
-        elif "403" in error_msg or "access" in error_msg.lower():
-            print("[ERROR] Access denied. Accept the model license at:")
-            print("        https://huggingface.co/pyannote/speaker-diarization-3.1")
-        else:
-            print(f"[ERROR] Failed to download: {error_msg[:100]}")
-        return False
-
-
-def save_config(model_name: str, user_name: str, hf_token: str, openrouter_key: str,
-                meetings_folder: str, snippets_folder: str, skip_diarization: bool,
-                device: str, compute_type: str):
-    """Save configuration files."""
-    import yaml
-
-    koe_dir = Path(__file__).parent.parent
-
-    # Save .env
+def _save_env(groq_key: str, openrouter_key: str):
     env_lines = []
-    if hf_token:
-        env_lines.append(f"HF_TOKEN={hf_token}")
+    if groq_key:
+        env_lines.append(f"GROQ_API_KEY={groq_key}")
     if openrouter_key:
         env_lines.append(f"OPENROUTER_API_KEY={openrouter_key}")
-    env_lines.append("WHISPER_SERVER_URL=http://localhost:9876")
-    env_lines.append(f"WHISPER_MODEL={model_name}")
-    env_lines.append(f"WHISPER_DEVICE={device}")
-    env_lines.append(f"WHISPER_COMPUTE_TYPE={compute_type}")
+    (KOE_DIR / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
 
-    env_path = koe_dir / ".env"
-    with open(env_path, 'w') as f:
-        f.write("\n".join(env_lines) + "\n")
 
-    # Save config.yaml
+def _save_config(user_name: str):
+    import yaml
+
     config = {
-        'profile': {
-            'user_name': user_name,
-            'my_voice_embedding': None
+        "profile": {
+            "user_name": user_name,
         },
-        'meeting_options': {
-            'root_folder': meetings_folder if meetings_folder else None
+        "recording_options": {
+            "activation_key": "ctrl+shift+space",
+            "recording_mode": "press_to_toggle",
+            "sample_rate": 16000,
+            "silence_duration": 900,
         },
-        'recording_options': {
-            'activation_key': 'ctrl+shift+space',
-            'recording_mode': 'press_to_toggle',
-            'sample_rate': 16000,
-            'silence_duration': 900,
-            'filter_snippets_to_my_voice': False
-        },
-        'model_options': {
-            'local': {
-                'model': model_name
+        "model_options": {
+            "common": {
+                "language": None,
+                "initial_prompt": (
+                    "Use proper punctuation including periods, commas, and question marks."
+                ),
             },
-            'common': {
-                'initial_prompt': "Use proper punctuation including periods, commas, and question marks."
-            }
         },
-        'misc': {
-            'noise_on_completion': True,
-            'snippets_folder': snippets_folder if snippets_folder else None,
-            'print_to_terminal': True
-        }
+        "post_processing": {
+            "ai_cleanup_enabled": True,
+            "ai_cleanup_threshold": 10,
+            "ai_cleanup_model": "google/gemini-3-flash-preview",
+        },
+        "misc": {
+            "noise_on_completion": True,
+            "snippets_folder": None,
+            "print_to_terminal": True,
+        },
+        "meeting_options": {
+            "root_folder": None,
+        },
     }
 
-    # Only include diarization skip flag if skipped
-    if skip_diarization:
-        config['meeting_options']['diarization_enabled'] = False
-
-    config_path = koe_dir / "src" / "config.yaml"
-    with open(config_path, 'w') as f:
-        yaml.dump(config, f, default_flow_style=False)
-
-    # Create folders
-    if meetings_folder:
-        Path(meetings_folder).mkdir(parents=True, exist_ok=True)
-        (Path(meetings_folder) / "Transcripts").mkdir(exist_ok=True)
-        (Path(meetings_folder) / "Summaries").mkdir(exist_ok=True)
-
-    if snippets_folder:
-        Path(snippets_folder).mkdir(parents=True, exist_ok=True)
-
-    # Create setup complete marker
-    (koe_dir / ".setup_complete").touch()
-
-    print("\n[OK] Configuration saved!")
+    config_path = KOE_DIR / "src" / "config.yaml"
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=True)
 
 
 def run_setup():
-    """Run the terminal setup."""
-    clear_screen()
-
+    os.system("cls" if sys.platform == "win32" else "clear")
     print("""
     ██╗  ██╗ ██████╗ ███████╗
     ██║ ██╔╝██╔═══██╗██╔════╝
@@ -261,203 +95,47 @@ def run_setup():
     ██║  ██╗╚██████╔╝███████╗
     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
 
-    Local Speech-to-Text Setup
+    Cloud speech-to-text setup
     """)
 
-    print("This will set up Koe on your system.\n")
-
-    # Check for GPU
-    has_gpu, gpu_info = check_gpu()
-    if has_gpu:
-        print(f"[OK] GPU detected: {gpu_info}")
-        recommended_model = 5  # large-v3
-    else:
-        print("[--] No NVIDIA GPU detected. CPU mode will be used.")
-        print("     Smaller models recommended for better performance.")
-        recommended_model = 2  # base
-
-    # =========================================================================
-    # MODEL SELECTION
-    # =========================================================================
-    print_header("1. Model Selection")
-
-    print("Choose a Whisper model based on your hardware:\n")
-
-    options = []
-    for name, size, desc in MODELS:
-        rec = " (Recommended)" if MODELS.index((name, size, desc)) + 1 == recommended_model else ""
-        options.append(f"{name.ljust(10)} {size.ljust(10)} - {desc}{rec}")
-
-    model_choice = get_choice("Available models:", options, default=recommended_model)
-    selected_model = MODELS[model_choice - 1][0]
-    print(f"\nSelected: {selected_model}")
-
-    # =========================================================================
-    # HUGGINGFACE TOKEN
-    # =========================================================================
-    print_header("2. Speaker Diarization (Optional)")
-
-    print("""Speaker diarization identifies WHO is speaking in meetings.
-It requires a free HuggingFace account and token.
-
-What it enables:
-  - Speaker labels in Scribe transcripts ("Alex: ...", "Jordan: ...")
-  - Voice enrollment (recognize specific people by voice)
-  - Post-meeting speaker identification
-
-Without it:
-  - Koe hotkey transcription works normally
-  - Scribe works but without speaker identification
-""")
-
-    print("To get a token:")
-    print("  1. Create account at https://huggingface.co")
-    print("  2. Go to Settings -> Access Tokens")
-    print("  3. Create a token (read access is sufficient)")
-    print("  4. Accept the license at https://huggingface.co/pyannote/speaker-diarization-3.1")
+    _print_header("1. Groq API key (required)")
+    print("Groq runs Whisper Large v3 on their servers — no local GPU needed.")
+    print("Get a key at: https://console.groq.com/keys")
     print()
+    groq_key = ""
+    while not groq_key:
+        groq_key = _input("Enter Groq API key")
+        if not groq_key:
+            print("Groq key is required for transcription.")
 
-    hf_token = get_input("Enter HuggingFace token (or press Enter to skip)")
-    skip_diarization = False
-
-    if not hf_token:
-        skip_diarization = True
-        print()
-        print_box([
-            "Skipping diarization setup.",
-            "",
-            "To enable later:",
-            "  1. Get token from https://huggingface.co/settings/tokens",
-            "  2. Add to .env file: HF_TOKEN=hf_your_token_here",
-            "  3. Run: python run.py --setup"
-        ])
-        print()
-
-    # =========================================================================
-    # OPENROUTER KEY (OPTIONAL — powers cleanup + summaries)
-    # =========================================================================
-    print_header("3. AI Cleanup & Summaries (Optional)")
-
-    print("""OpenRouter powers two features:
-  - AI cleanup of long voice snippets (gemini-3-flash-preview)
-  - Auto-generated meeting summaries (claude-sonnet-4-6)
-
-What it enables:
-  - Cleaner snippet transcriptions (grammar, punctuation, term correction)
-  - Auto-generated summary when you stop recording a meeting
-  - Key decisions, action items, and topics extracted
-
-Cost: ~$0.001 per snippet, ~$0.04 per 60-minute meeting
-""")
-
-    print("To get a key:")
-    print("  1. Create account at https://openrouter.ai")
-    print("  2. Go to https://openrouter.ai/keys")
-    print("  3. Create a new key")
+    _print_header("2. OpenRouter API key (optional)")
+    print("OpenRouter powers AI cleanup of long snippets and meeting summaries.")
+    print("Skip if you don't want either feature — Groq transcription works without it.")
+    print("Get a key at: https://openrouter.ai/keys")
     print()
+    openrouter_key = _input("Enter OpenRouter API key (or press Enter to skip)")
 
-    openrouter_key = get_input("Enter OpenRouter API key (or press Enter to skip)")
+    _print_header("3. Your name")
+    print("Used to label your voice in Scribe meeting transcripts.")
+    print()
+    user_name = ""
+    while not user_name:
+        user_name = _input("Enter your first name")
+        if not user_name:
+            print("Name is required.")
 
-    if not openrouter_key:
-        print()
-        print_box([
-            "Skipping AI cleanup and summaries.",
-            "",
-            "To enable later:",
-            "  1. Get key from https://openrouter.ai/keys",
-            "  2. Add to .env file: OPENROUTER_API_KEY=sk-or-v1-...",
-        ])
-        print()
-
-    # =========================================================================
-    # USER NAME
-    # =========================================================================
-    print_header("4. Your Name")
-
-    print("Your name is used to label your voice in meeting transcripts.\n")
-
-    while True:
-        user_name = get_input("Enter your first name")
-        if user_name:
-            break
-        print("Name is required.")
-
-    # =========================================================================
-    # OUTPUT FOLDERS
-    # =========================================================================
-    print_header("5. Output Folders")
-
-    koe_dir = Path(__file__).parent.parent
-    default_meetings = str(koe_dir / "Meetings")
-    default_snippets = str(koe_dir / "Snippets")
-
-    print("Where should Koe save files?\n")
-
-    meetings_folder = get_input("Meetings folder", default_meetings)
-    snippets_folder = get_input("Snippets folder", default_snippets)
-
-    # =========================================================================
-    # DOWNLOAD MODELS
-    # =========================================================================
-    print_header("6. Downloading Models")
-
-    # Download Whisper
-    success, device, compute_type = download_whisper_model(selected_model)
-    if not success:
-        print("\nSetup incomplete. Please fix the error and run again.")
-        print("Run: python run.py --setup")
-        sys.exit(1)
-
-    # Download diarization (if token provided)
-    if hf_token and not skip_diarization:
-        if not download_diarization_models(hf_token):
-            print("\nDiarization setup failed. Continuing without it.")
-            print("You can set it up later by running: python run.py --setup")
-            skip_diarization = True
-
-    # =========================================================================
-    # SAVE CONFIG
-    # =========================================================================
-    print_header("7. Saving Configuration")
-
-    save_config(
-        model_name=selected_model,
-        user_name=user_name,
-        hf_token=hf_token,
-        openrouter_key=openrouter_key,
-        meetings_folder=meetings_folder,
-        snippets_folder=snippets_folder,
-        skip_diarization=skip_diarization,
-        device=device,
-        compute_type=compute_type
-    )
-
-    # =========================================================================
-    # DONE
-    # =========================================================================
-    print_header("Setup Complete!")
-
-    print(f"""
-Koe is ready to use!
-
-Quick start:
-  - Press {chr(0x2318) if sys.platform == 'darwin' else 'Ctrl'}+Shift+Space to transcribe speech
-  - Right-click tray icon -> Start Scribe for meetings
-  - Right-click tray icon -> Settings to customize
-
-Model: {selected_model}
-Diarization: {'Enabled' if not skip_diarization else 'Disabled (can enable later)'}
-AI Cleanup & Summaries: {'Enabled' if openrouter_key else 'Disabled (can enable later)'}
-""")
-
-    input("Press Enter to launch Koe...")
-
-    # Launch Koe
-    print("\nStarting Koe...")
+    _print_header("Saving config")
+    _save_env(groq_key, openrouter_key)
+    _save_config(user_name)
+    (KOE_DIR / ".setup_complete").touch()
+    print("Done.")
+    print()
+    print("Press Ctrl+Shift+Space to transcribe.")
+    print("Right-click the tray icon → Start Scribe for meetings.")
+    print()
 
 
 def main():
-    """Entry point."""
     try:
         run_setup()
     except KeyboardInterrupt:
@@ -465,5 +143,5 @@ def main():
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

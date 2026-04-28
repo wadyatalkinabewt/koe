@@ -1,182 +1,47 @@
-# User profile settings
+# User profile
 profile:
   user_name:
     value: null
     type: str
     description: "Your name - used to label your microphone audio in Scribe transcripts."
-  my_voice_embedding:
-    value: null
-    type: str
-    description: "Name of your enrolled voice fingerprint (from speaker_embeddings folder). Required for snippet voice filtering."
 
-# Meeting output settings
+# Meeting output
 meeting_options:
   root_folder:
     value: null
     type: str
-    description: "Root folder for meetings. Transcripts saved to 'Transcripts' subfolder, organized by category subfolders."
+    description: "Root folder for meeting recordings. Defaults to <koe-repo>/Meetings."
 
-# Configuration options for transcription engines
+# Transcription (Groq cloud)
 model_options:
-  # Engine selection
-  engine:
-    value: whisper
-    type: str
-    description: "Transcription engine to use. Whisper is well-tested; Parakeet is ~50x faster but English-only; Groq uses cloud API (no GPU required)."
-    options:
-      - whisper
-      - parakeet
-      - mlx
-      - groq
-
-  # Common configuration options (shared by all engines)
   common:
     language:
       value: en
       type: str
-      description: "The language code for the transcription in ISO-639-1 format. Parakeet only supports English."
-    temperature:
-      value: 0.0
-      type: float
-      description: "Controls the randomness of the transcription output. Lower values make the output more focused and deterministic."
+      description: "ISO-639-1 language code passed to Groq Whisper. null = auto-detect."
     initial_prompt:
       value: null
       type: str
-      description: "A string used as an initial prompt to condition the transcription."
+      description: "Vocab/style hint passed to Whisper. Comma-separated proper nouns work best."
 
-  # Configuration options for the faster-whisper model (local fallback and legacy)
-  local:
-    model:
-      value: base
-      type: str
-      description: "The model to use for transcription. The larger models provide better accuracy but are slower."
-      options:
-        - base
-        - base.en
-        - tiny
-        - tiny.en
-        - small
-        - small.en
-        - medium
-        - medium.en
-        - large
-        - large-v1
-        - large-v2
-        - large-v3
-    device:
-      value: auto
-      type: str
-      description: "The device to run the local Whisper model on. Use 'cuda' for NVIDIA GPUs, 'cpu' for CPU-only processing, or 'auto' to let the system automatically choose the best available device."
-      options:
-        - auto
-        - cuda
-        - cpu
-    compute_type:
-      value: default
-      type: str
-      description: "The compute type to use for the local Whisper model."
-      options:
-        - default
-        - float32
-        - float16
-        - int8
-    condition_on_previous_text:
-      value: false
-      type: bool
-      description: "Set to true to use the previously transcribed text as a prompt for the next transcription request. Default is false to prevent transcription bleeding."
-    vad_filter:
-      value: false
-      type: bool
-      description: "Set to true to use a voice activity detection (VAD) filter to remove silence from the recording."
-    model_path:
-      value: null
-      type: str
-      description: "The path to the local Whisper model. If not specified, the default model will be downloaded."
-
-  # Whisper engine configuration (server-side)
-  whisper:
-    model:
-      value: large-v3
-      type: str
-      description: "Whisper model to use. Larger models are more accurate but slower."
-      options:
-        - tiny
-        - tiny.en
-        - base
-        - base.en
-        - small
-        - small.en
-        - medium
-        - medium.en
-        - large-v1
-        - large-v2
-        - large-v3
-    device:
-      value: cuda
-      type: str
-      description: "Device for Whisper model. Use 'cuda' for GPU, 'cpu' for CPU."
-      options:
-        - auto
-        - cuda
-        - cpu
-    compute_type:
-      value: float16
-      type: str
-      description: "Compute precision. float16 is faster on GPU, int8 for CPU."
-      options:
-        - float16
-        - float32
-        - int8
-
-  # Parakeet engine configuration (NVIDIA NeMo)
-  parakeet:
-    model:
-      value: nvidia/parakeet-ctc-0.6b
-      type: str
-      description: "Parakeet model to use. English only, ~50x faster than Whisper."
-      options:
-        - nvidia/parakeet-ctc-0.6b
-        - nvidia/parakeet-ctc-1.1b
-    device:
-      value: cuda
-      type: str
-      description: "Device for Parakeet model."
-      options:
-        - auto
-        - cuda
-        - cpu
-
-  # MLX Whisper engine (Apple Silicon only)
-  mlx:
-    model:
-      value: mlx-community/whisper-large-v3-turbo
-      type: str
-      description: "MLX Whisper model. Apple Silicon only, uses unified memory GPU."
-      options:
-        - mlx-community/whisper-large-v3-turbo
-        - mlx-community/whisper-large-v3-mlx
-        - mlx-community/whisper-medium-mlx
-        - mlx-community/whisper-small-mlx
-        - mlx-community/whisper-base-mlx
-
-# Configuration options for activation and recording
+# Activation + recording
 recording_options:
   activation_key:
     value: ctrl+shift+space
     type: str
-    description: "The keyboard shortcut to activate the recording and transcribing process. Separate keys with a '+'."
+    description: "Hotkey to start/stop snippet recording. Separate keys with '+'."
   input_backend:
     value: auto
     type: str
-    description: "The input backend to use for detecting key presses. 'auto' will try to use the best available backend."
+    description: "Keyboard listener backend."
     options:
       - auto
       - evdev
       - pynput
   recording_mode:
-    value: continuous
+    value: press_to_toggle
     type: str
-    description: "The recording mode to use. Options include continuous (auto-restart recording after pause in speech until activation key is pressed again), voice_activity_detection (stop recording after pause in speech), press_to_toggle (stop recording when activation key is pressed again), hold_to_record (stop recording when activation key is released)."
+    description: "Recording trigger style."
     options:
       - continuous
       - voice_activity_detection
@@ -185,62 +50,62 @@ recording_options:
   sound_device:
     value: null
     type: str
-    description: "The numeric index of the sound device to use for recording. To find device numbers, run `python -m sounddevice`"
+    description: "Sound device index (run `python -m sounddevice` to list). null = default."
   sample_rate:
     value: 16000
     type: int
-    description: "The sample rate in Hz to use for recording."
+    description: "Recording sample rate in Hz."
   silence_duration:
     value: 900
     type: int
-    description: "The duration in milliseconds to wait for silence before stopping the recording."
+    description: "Milliseconds of silence before VAD modes auto-stop the recording."
   min_duration:
     value: 100
     type: int
-    description: "The minimum duration in milliseconds for a recording to be processed. Recordings shorter than this will be discarded."
-  filter_snippets_to_my_voice:
-    value: false
-    type: bool
-    description: "Filter snippet transcriptions to only include your voice. Requires my_voice_embedding to be set. Adds ~0.5-1s latency."
+    description: "Minimum recording length in ms — shorter recordings are discarded."
 
-# Post-processing settings
+# Post-processing
 post_processing:
   remove_fillers:
     value: true
     type: bool
-    description: "Remove filler words like 'um', 'uh', 'ah' from transcriptions."
+    description: "Strip 'um/uh/ah' style disfluencies from snippet transcriptions."
+  add_trailing_space:
+    value: true
+    type: bool
+    description: "Append a trailing space to snippets so they paste cleanly."
   ai_cleanup_enabled:
     value: true
     type: bool
-    description: "Use Claude to clean up grammar, punctuation, and filler words in snippets longer than the threshold."
+    description: "Use OpenRouter to clean up snippet grammar/punctuation. Requires OPENROUTER_API_KEY."
   ai_cleanup_threshold:
-    value: 30
+    value: 10
     type: int
-    description: "Minimum snippet duration in seconds before AI cleanup is applied. Set to 0 to apply to all snippets."
+    description: "Minimum snippet duration (seconds) before cleanup is applied. 0 = always."
   ai_cleanup_model:
-    value: claude-sonnet-4-6
+    value: google/gemini-3-flash-preview
     type: str
-    description: "Claude model to use for AI cleanup. Default is claude-sonnet-4-6 (200k context)."
+    description: "OpenRouter model slug for cleanup. See benchmarks/cleanup_bench.py for the model selection rationale."
   ai_cleanup_prompt:
-    value: "Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words (um, uh, like, you know, etc.).\n\nIMPORTANT:\n- Do NOT summarize or change the meaning\n- Do NOT add any new information\n- Keep the same speaking style and tone\n- Output ONLY the cleaned text, nothing else (no quotes, no explanation)\n\nTranscription:\n"
+    value: ""
     type: str
-    description: "Prompt prefix sent to Claude for AI cleanup. The transcription text is appended at the end."
+    description: "Prompt prefix sent to the cleanup model. Transcription is appended at the end."
 
-# Miscellaneous settings
+# Misc
 misc:
   print_to_terminal:
     value: true
     type: bool
-    description: "Set to true to print the script status and transcribed text to the terminal."
+    description: "Print status + transcript to the terminal."
   hide_status_window:
     value: false
     type: bool
-    description: "Set to true to hide the status window during operation."
+    description: "Hide the snippet status popup window."
   noise_on_completion:
-    value: false
+    value: true
     type: bool
-    description: "Set to true to play a noise after the transcription has been typed out."
+    description: "Play a beep when snippet transcription completes."
   snippets_folder:
     value: null
     type: str
-    description: "Folder for rolling transcription snippets. If not specified, defaults to Koe/Snippets."
+    description: "Where to save rolling snippet markdown files. null = <koe-repo>/Snippets."

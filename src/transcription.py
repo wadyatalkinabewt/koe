@@ -1,353 +1,306 @@
+"""
+Transcription pipeline — Groq Whisper + optional OpenRouter cleanup.
+
+Two entry points:
+- `transcribe(audio_data)` — snippet path (Koe hotkey). Returns flat polished string.
+- `transcribe_groq_segments(audio_data, label)` — meeting path (Scribe). Returns
+  list of {start, end, text, label} with chunk-offset-corrected timestamps.
+
+Long audio (>10 min at 16kHz) is auto-chunked under Groq's 25MB upload limit.
+"""
+
 import io
 import os
-import re
-import threading
+import wave
 from datetime import datetime
 from pathlib import Path
 import numpy as np
 import requests
-import soundfile as sf
 
 from utils import ConfigManager
-from transcription_client import TranscriptionClient, is_server_running
 
-# Debug logging to file
+# ---------- debug logging ----------
+
 _DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
 _DEBUG_LOG.parent.mkdir(exist_ok=True)
 
+
 def _debug(msg: str):
-    """Write debug message to file with timestamp."""
     timestamp = datetime.now().strftime("%H:%M:%S")
     try:
         with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] [transcription] {msg}\n")
-    except:
+    except Exception:
         pass
 
-# Server client (lazy initialized)
-_server_client = None
-_server_mode = None  # None = not checked, True = use server, False = use local
-_server_lock = threading.Lock()
 
-# Rolling snippet storage
+# ---------- rolling snippet storage ----------
+
 MAX_SNIPPETS = 5
 
+
 def _get_snippets_dir() -> Path:
-    """Get the snippets directory (configurable or default to Koe/Snippets)."""
     snippets_folder = ConfigManager.get_config_value('misc', 'snippets_folder')
     if snippets_folder:
         snippets_dir = Path(snippets_folder)
     else:
-        # Default to <repo_root>/Snippets (relative to this file's location)
         snippets_dir = Path(__file__).parent.parent / "Snippets"
     snippets_dir.mkdir(parents=True, exist_ok=True)
     return snippets_dir
 
-def save_rolling_transcription(text):
-    """Save snippet to rolling markdown files (keeps last 5). Newest is 1, oldest is 5."""
-    _debug("save_rolling_transcription() STARTED")
-    if not text or not text.strip():
-        _debug("  Empty text, skipping")
-        return
 
+def save_rolling_transcription(text: str):
+    """Save snippet to rolling markdown files (keeps last 5). Newest is 1, oldest is 5."""
+    if not text or not text.strip():
+        return
     try:
         snippets_dir = _get_snippets_dir()
-        _debug(f"  snippets_dir: {snippets_dir}")
 
-        # Delete oldest (5) if it exists
+        # Delete oldest, shift the rest up
         oldest = snippets_dir / f"snippet_{MAX_SNIPPETS}.md"
         if oldest.exists():
-            _debug(f"  Deleting oldest: {oldest}")
             oldest.unlink()
-
-        # Shift existing files up (4→5, 3→4, 2→3, 1→2)
         for i in range(MAX_SNIPPETS - 1, 0, -1):
-            old_file = snippets_dir / f"snippet_{i}.md"
-            new_file = snippets_dir / f"snippet_{i+1}.md"
-            if old_file.exists():
-                _debug(f"  Renaming {old_file.name} -> {new_file.name}")
-                old_file.rename(new_file)
+            old = snippets_dir / f"snippet_{i}.md"
+            new = snippets_dir / f"snippet_{i+1}.md"
+            if old.exists():
+                old.rename(new)
 
-        # Save new snippet as 1 (newest)
-        new_file = snippets_dir / "snippet_1.md"
+        # Write new as snippet_1
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         content = f"# Snippet\n\n**Time:** {timestamp}\n\n---\n\n{text.strip()}\n"
-        _debug(f"  Writing to {new_file}")
-        new_file.write_text(content, encoding='utf-8')
-        _debug("save_rolling_transcription() FINISHED")
-
+        (snippets_dir / "snippet_1.md").write_text(content, encoding='utf-8')
     except Exception as e:
-        _debug(f"  EXCEPTION: {e}")
-        ConfigManager.console_print(f"Failed to save snippet: {e}")
-
-def create_local_engine():
-    """Create a local transcription engine using the engine factory."""
-    try:
-        from engines import create_engine, is_engine_available, get_default_engine
-    except ImportError:
-        # Fallback for direct imports
-        import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent))
-        from engines import create_engine, is_engine_available, get_default_engine
-
-    ConfigManager.console_print('Creating local transcription engine...')
-
-    model_options = ConfigManager.get_config_section('model_options')
-
-    # Get engine ID from config or default to whisper
-    engine_id = model_options.get('engine', 'whisper')
-    if not is_engine_available(engine_id):
-        ConfigManager.console_print(f'Engine {engine_id} not available, using default')
-        engine_id = get_default_engine()
-
-    # Get engine-specific config
-    if engine_id == 'whisper':
-        engine_config = model_options.get('local', {})
-    else:
-        engine_config = model_options.get(engine_id, {})
-
-    model_name = engine_config.get('model', 'large-v3')
-    device = engine_config.get('device', 'auto')
-    compute_type = engine_config.get('compute_type', 'float16')
-
-    # Handle model_path for whisper
-    model_path = engine_config.get('model_path')
-    if model_path:
-        model_name = model_path
-
-    try:
-        engine = create_engine(engine_id)
-        success = engine.load(model_name, device, compute_type)
-        if success:
-            ConfigManager.console_print(f'Local engine ({engine_id}) created.')
-            return engine
-        else:
-            ConfigManager.console_print(f'Failed to load engine {engine_id}')
-            return None
-    except Exception as e:
-        ConfigManager.console_print(f'Error creating engine: {e}')
-        return None
+        _debug(f"  save_rolling_transcription error: {e}")
 
 
-def create_local_model():
-    """Create a local model (backward compatibility wrapper)."""
-    return create_local_engine()
+# ---------- Groq transcription ----------
 
-def transcribe_local(audio_data, local_engine=None):
-    """Transcribe audio using a local engine."""
-    if not local_engine:
-        local_engine = create_local_engine()
+# Groq's 25MB upload cap = ~13 min at 16kHz mono int16. Chunk at 10 min for headroom.
+GROQ_CHUNK_MAX_SAMPLES = 10 * 60 * 16000
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-    if local_engine is None:
-        ConfigManager.console_print('No local engine available')
-        return ''
 
-    model_options = ConfigManager.get_config_section('model_options')
+def _audio_to_wav_bytes(audio_int16: np.ndarray, sample_rate: int = 16000) -> io.BytesIO:
+    """Pack int16 PCM samples into an in-memory WAV file."""
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(audio_int16.tobytes())
+    buf.seek(0)
+    return buf
 
-    # Convert audio to float32 if needed
-    if audio_data.dtype != np.float32:
-        audio_data_float = audio_data.astype(np.float32) / 32768.0
-    else:
-        audio_data_float = audio_data
 
-    # Get common options
-    language = model_options.get('common', {}).get('language')
-    initial_prompt = model_options.get('common', {}).get('initial_prompt')
-    vad_filter = model_options.get('local', {}).get('vad_filter', False)
-    condition_on_previous = model_options.get('local', {}).get('condition_on_previous_text', False)
+def _ensure_int16(audio_data: np.ndarray) -> np.ndarray:
+    """Convert audio to int16 PCM (Whisper's expected format)."""
+    if audio_data.dtype == np.float32:
+        return np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
+    return audio_data.astype(np.int16)
 
-    result = local_engine.transcribe(
-        audio=audio_data_float,
-        sample_rate=16000,
-        language=language,
-        initial_prompt=initial_prompt,
-        vad_filter=vad_filter,
-        condition_on_previous_text=condition_on_previous,
-    )
 
-    return result.text
+def _groq_post(buf: io.BytesIO, data: dict, api_key: str, timeout: float):
+    """Single Groq POST. Returns (parsed_response | None, error_str | None).
 
-def _groq_transcribe_chunk(buf, data, api_key, timeout=30):
-    """Send a single WAV buffer to Groq API. Returns transcribed text or empty string."""
-    import requests as req
-
+    For text/json responses, parsed_response is whatever Groq returned.
+    On retry-eligible errors (5xx, timeout), retries once.
+    """
     for attempt in range(2):
         try:
-            response = req.post(
-                "https://api.groq.com/openai/v1/audio/transcriptions",
+            response = requests.post(
+                GROQ_URL,
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": ("audio.wav", buf, "audio/wav")},
                 data=data,
                 timeout=timeout,
             )
-
             if response.status_code == 200:
-                text = response.json().get("text", "")
-                _debug(f"  Groq response: {len(text)} chars")
-                return text
+                if data.get("response_format") == "verbose_json":
+                    return response.json(), None
+                return response.text if data.get("response_format") == "text" else response.json().get("text", ""), None
 
             if response.status_code >= 500 and attempt == 0:
-                _debug(f"  Groq server error {response.status_code}, retrying...")
+                _debug(f"  Groq {response.status_code}, retrying...")
                 buf.seek(0)
                 continue
 
-            _debug(f"  Groq API error: {response.status_code} {response.text[:200]}")
-            ConfigManager.console_print(f"Groq API error: {response.status_code}")
-            return ''
+            err = f"Groq HTTP {response.status_code}: {response.text[:200]}"
+            _debug(f"  {err}")
+            return None, err
 
-        except req.Timeout:
-            _debug(f"  Groq API timeout (attempt {attempt + 1})")
+        except requests.Timeout:
             if attempt == 0:
+                _debug(f"  Groq timeout, retrying...")
                 buf.seek(0)
                 continue
-            ConfigManager.console_print("Groq API timeout")
-            return ''
-        except req.RequestException as e:
-            _debug(f"  Groq API request error: {e}")
-            ConfigManager.console_print(f"Groq API error: {e}")
-            return ''
+            return None, "Groq timeout"
+        except requests.RequestException as e:
+            return None, f"Groq request error: {e}"
 
-    return ''
+    return None, "Groq request failed"
 
 
-# Groq file upload limit is 25MB. 16kHz mono int16 WAV = ~32KB/sec.
-# 10 minutes = ~19.2MB, safely under the limit.
-GROQ_CHUNK_MAX_SAMPLES = 10 * 60 * 16000  # 10 minutes at 16kHz
-
-
-def transcribe_groq(audio_data):
-    """Transcribe audio using Groq cloud API (whisper-large-v3)."""
-    import wave
-
-    _debug("transcribe_groq() STARTED")
-
-    api_key = os.environ.get('GROQ_API_KEY')
-    if not api_key:
-        _debug("  ERROR: No GROQ_API_KEY in environment")
-        ConfigManager.console_print("Error: GROQ_API_KEY not set in .env file")
-        return ''
-
-    # Convert int16 PCM numpy array to WAV in-memory
-    if audio_data.dtype == np.float32:
-        audio_int16 = np.clip(audio_data * 32768, -32768, 32767).astype(np.int16)
-    else:
-        audio_int16 = audio_data.astype(np.int16)
-
-    # Build request parameters
-    model_options = ConfigManager.get_config_section('model_options')
-    language = model_options.get('common', {}).get('language') or 'en'
-    initial_prompt = model_options.get('common', {}).get('initial_prompt')
-
+def _groq_request_data(response_format: str = "text") -> dict:
+    """Build the form data for a Groq Whisper request from current config."""
+    model_options = ConfigManager.get_config_section('model_options') or {}
+    common = model_options.get('common', {}) or {}
     data = {
         "model": "whisper-large-v3",
-        "language": language,
+        "language": common.get('language') or 'en',
+        "response_format": response_format,
     }
+    initial_prompt = common.get('initial_prompt')
     if initial_prompt:
         data["prompt"] = initial_prompt
-
-    # Split into chunks if audio exceeds Groq's 25MB file upload limit
-    total_samples = len(audio_int16)
-    if total_samples <= GROQ_CHUNK_MAX_SAMPLES:
-        # Short audio — single request
-        buf = io.BytesIO()
-        with wave.open(buf, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(16000)
-            wf.writeframes(audio_int16.tobytes())
-        buf.seek(0)
-
-        _debug(f"  Sending to Groq API (language={language})")
-        return _groq_transcribe_chunk(buf, data, api_key, timeout=60)
-    else:
-        # Long audio — chunk and concatenate
-        num_chunks = (total_samples + GROQ_CHUNK_MAX_SAMPLES - 1) // GROQ_CHUNK_MAX_SAMPLES
-        _debug(f"  Audio too long for single request ({total_samples / 16000:.0f}s), splitting into {num_chunks} chunks")
-
-        all_text = []
-        for i in range(num_chunks):
-            start = i * GROQ_CHUNK_MAX_SAMPLES
-            end = min(start + GROQ_CHUNK_MAX_SAMPLES, total_samples)
-            chunk = audio_int16[start:end]
-            chunk_dur = len(chunk) / 16000
-
-            buf = io.BytesIO()
-            with wave.open(buf, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(16000)
-                wf.writeframes(chunk.tobytes())
-            buf.seek(0)
-
-            _debug(f"  Chunk {i + 1}/{num_chunks} ({chunk_dur:.0f}s) sending to Groq API")
-            text = _groq_transcribe_chunk(buf, data, api_key, timeout=120)
-            if text:
-                all_text.append(text)
-
-        return ' '.join(all_text)
+    return data
 
 
-def post_process_transcription(transcription):
-    """Apply post-processing to the transcription using the centralized TextProcessor."""
+def transcribe_groq(audio_data: np.ndarray) -> str:
+    """Snippet-style transcription. Returns flat text. Auto-chunks long audio."""
+    _debug("transcribe_groq() STARTED")
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        _debug("  ERROR: GROQ_API_KEY not set")
+        ConfigManager.console_print("Error: GROQ_API_KEY not set in .env")
+        return ''
+
+    audio_int16 = _ensure_int16(audio_data)
+    data = _groq_request_data(response_format="text")
+    total = len(audio_int16)
+
+    if total <= GROQ_CHUNK_MAX_SAMPLES:
+        buf = _audio_to_wav_bytes(audio_int16)
+        result, err = _groq_post(buf, data, api_key, timeout=60)
+        if err:
+            ConfigManager.console_print(f"Groq error: {err}")
+            return ''
+        return result if isinstance(result, str) else ''
+
+    num_chunks = (total + GROQ_CHUNK_MAX_SAMPLES - 1) // GROQ_CHUNK_MAX_SAMPLES
+    _debug(f"  Long audio ({total/16000:.0f}s), {num_chunks} chunks")
+    parts = []
+    for i in range(num_chunks):
+        start = i * GROQ_CHUNK_MAX_SAMPLES
+        end = min(start + GROQ_CHUNK_MAX_SAMPLES, total)
+        buf = _audio_to_wav_bytes(audio_int16[start:end])
+        text, err = _groq_post(buf, data, api_key, timeout=120)
+        if err:
+            _debug(f"  Chunk {i+1} failed: {err}")
+            continue
+        if text:
+            parts.append(text if isinstance(text, str) else '')
+    return ' '.join(p.strip() for p in parts if p)
+
+
+def transcribe_groq_segments(audio_data: np.ndarray, label: str = "Speaker") -> list[dict]:
+    """Meeting-style transcription with sentence-level timestamps.
+
+    Returns a list of {start, end, text, label} dicts. Long audio is chunked
+    at 10-min boundaries; chunk segment timestamps are offset back to the
+    original timeline so the caller can interleave streams by start time.
+    """
+    _debug(f"transcribe_groq_segments() STARTED label={label}")
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        _debug("  ERROR: GROQ_API_KEY not set")
+        return []
+
+    audio_int16 = _ensure_int16(audio_data)
+    data = _groq_request_data(response_format="verbose_json")
+    total = len(audio_int16)
+    sample_rate = 16000
+
+    segments_out: list[dict] = []
+    chunk_count = (total + GROQ_CHUNK_MAX_SAMPLES - 1) // GROQ_CHUNK_MAX_SAMPLES if total else 0
+
+    for i in range(chunk_count):
+        start_sample = i * GROQ_CHUNK_MAX_SAMPLES
+        end_sample = min(start_sample + GROQ_CHUNK_MAX_SAMPLES, total)
+        chunk_offset_sec = start_sample / sample_rate
+        buf = _audio_to_wav_bytes(audio_int16[start_sample:end_sample])
+        result, err = _groq_post(buf, data, api_key, timeout=120)
+        if err:
+            _debug(f"  Chunk {i+1}/{chunk_count} failed: {err}")
+            continue
+        if not isinstance(result, dict):
+            continue
+
+        # Apply hallucination regex per chunk before joining
+        from utils import TextProcessor
+
+        for seg in result.get("segments", []):
+            text = TextProcessor.remove_filler_words(seg.get("text", "").strip())
+            if not text:
+                continue
+            segments_out.append({
+                "start": float(seg.get("start", 0.0)) + chunk_offset_sec,
+                "end": float(seg.get("end", 0.0)) + chunk_offset_sec,
+                "text": text,
+                "label": label,
+            })
+        _debug(f"  Chunk {i+1}/{chunk_count}: {len(result.get('segments', []))} segments")
+
+    _debug(f"transcribe_groq_segments() FINISHED, {len(segments_out)} total segments")
+    return segments_out
+
+
+# ---------- post-processing & cleanup ----------
+
+def post_process_transcription(transcription: str) -> str:
+    """Apply regex post-processing (filler words, hallucination tail strip)."""
     from utils import TextProcessor
     return TextProcessor.process(transcription, add_trailing_space=True)
 
 
+def _provider_pin_for_model(model_id: str):
+    """OpenRouter provider pin per model. None = let OpenRouter pick."""
+    pins = {
+        "google/gemini-3-flash-preview":         ["Google AI Studio"],
+        "google/gemini-3.1-flash-lite-preview":  ["Google AI Studio"],
+        "anthropic/claude-haiku-4-5":            ["Anthropic"],
+        "anthropic/claude-sonnet-4-6":           ["Anthropic"],
+        "openai/gpt-5.4-mini":                   ["OpenAI"],
+        "deepseek/deepseek-v3.2":                ["Friendli"],
+    }
+    order = pins.get(model_id)
+    return {"order": order, "allow_fallbacks": False} if order else None
 
-def ai_cleanup_transcription(text):
-    """Clean up grammar, punctuation, and filler words via OpenRouter.
 
-    Model and prompt configurable via post_processing.ai_cleanup_model and
-    post_processing.ai_cleanup_prompt in config.yaml. Default model is
-    google/gemini-3-flash-preview (winner of the cleanup model benchmark —
-    see benchmarks/cleanup_bench.py).
-    Returns the cleaned text, or the original text if cleanup fails.
-    """
-    _debug("ai_cleanup_transcription() STARTED")
-
+def ai_cleanup_transcription(text: str) -> str:
+    """Cleanup grammar/punctuation via OpenRouter. Falls back to original on any failure."""
     if not text or not text.strip():
-        _debug("  Empty text, skipping")
         return text
-
     try:
         from dotenv import load_dotenv
         load_dotenv()
 
         api_key = os.environ.get('OPENROUTER_API_KEY')
         if not api_key:
-            _debug("  No OPENROUTER_API_KEY, skipping AI cleanup")
+            _debug("  No OPENROUTER_API_KEY, skipping cleanup")
             return text
 
         model = ConfigManager.get_config_value('post_processing', 'ai_cleanup_model') or 'google/gemini-3-flash-preview'
         prompt_prefix = ConfigManager.get_config_value('post_processing', 'ai_cleanup_prompt') or (
-            "Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words (um, uh, like, you know, etc.).\n\n"
-            "IMPORTANT:\n- Do NOT summarize or change the meaning\n- Do NOT add any new information\n"
-            "- Keep the same speaking style and tone\n- Output ONLY the cleaned text, nothing else (no quotes, no explanation)\n\nTranscription:\n"
+            "Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words.\n\n"
+            "Output ONLY the cleaned text, nothing else (no quotes, no explanation).\n\nTranscription:\n"
         )
         prompt = prompt_prefix + text.strip()
-
-        # Pin provider to avoid quantisation routing variance between runs.
-        provider_pin = _provider_pin_for_model(model)
 
         body = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
-            # Generous output cap. 16384 comfortably exceeds any realistic snippet
-            # (~75 min at 150 wpm). Cost is based on actual tokens generated.
             "max_tokens": 16384,
         }
-        if provider_pin:
-            body["provider"] = provider_pin
+        pin = _provider_pin_for_model(model)
+        if pin:
+            body["provider"] = pin
 
-        _debug(f"  Calling OpenRouter ({model}, provider={provider_pin})...")
+        _debug(f"  Calling OpenRouter ({model}, provider={pin})")
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=body,
             timeout=120,
         )
@@ -362,158 +315,39 @@ def ai_cleanup_transcription(text):
             return text
 
         cleaned = data["choices"][0]["message"]["content"].strip()
-        _debug(f"  AI cleanup complete: {len(text)} -> {len(cleaned)} chars")
-
-        # Add trailing space back (was in original post-processing)
+        _debug(f"  cleanup ok: {len(text)} -> {len(cleaned)} chars")
         if not cleaned.endswith(' '):
             cleaned += ' '
-
         return cleaned
 
     except Exception as e:
-        _debug(f"  AI cleanup error: {e}")
+        _debug(f"  cleanup error: {e}")
         return text
 
 
-def _provider_pin_for_model(model_id):
-    """Return OpenRouter provider routing config for a given model slug.
+# ---------- top-level snippet entry point ----------
 
-    Pinning prevents the same model from routing to FP4/FP8 quantised hosts
-    on some calls and full-precision on others, which shows up as quality
-    variance. See benchmarks/cleanup_bench.py for the providers verified on.
-    Returns None for unknown models (lets OpenRouter pick).
-    """
-    pins = {
-        "google/gemini-3-flash-preview":         ["Google AI Studio"],
-        "google/gemini-3.1-flash-lite-preview":  ["Google AI Studio"],
-        "anthropic/claude-haiku-4-5":            ["Anthropic"],
-        "anthropic/claude-sonnet-4-6":           ["Anthropic"],
-        "openai/gpt-5.4-mini":                   ["OpenAI"],
-        "deepseek/deepseek-v3.2":                ["Friendli"],
-    }
-    order = pins.get(model_id)
-    if not order:
-        return None
-    return {"order": order, "allow_fallbacks": False}
-
-def check_server_available():
-    """Check if the transcription server is running."""
-    global _server_client, _server_mode
-
-    with _server_lock:
-        if _server_mode is not None:
-            return _server_mode
-
-        _server_client = TranscriptionClient()
-        _server_mode = _server_client.is_server_available(force_check=True)
-
-        if _server_mode:
-            ConfigManager.console_print('Transcription server detected - using shared model')
-        else:
-            ConfigManager.console_print('No transcription server - using local model')
-
-        return _server_mode
-
-
-def transcribe_server(audio_data, retry_count=0):
-    """Transcribe using the shared server with retry on failure."""
-    global _server_client, _server_mode
-
-    with _server_lock:
-        if _server_client is None:
-            _server_client = TranscriptionClient()
-        client = _server_client
-
-    model_options = ConfigManager.get_config_section('model_options')
-    language = model_options.get('common', {}).get('language')
-
-    # Check if voice filtering is enabled
-    filter_to_speaker = None
-    if ConfigManager.get_config_value('recording_options', 'filter_snippets_to_my_voice'):
-        my_voice = ConfigManager.get_config_value('profile', 'my_voice_embedding')
-        if my_voice:
-            filter_to_speaker = my_voice
-            ConfigManager.console_print(f'Voice filtering enabled: {my_voice}')
-
-    text, success = client.transcribe(
-        audio_data,
-        sample_rate=16000,
-        language=language,
-        vad_filter=model_options.get('local', {}).get('vad_filter', True),
-        filter_to_speaker=filter_to_speaker
-    )
-
-    if success:
-        return text
-    else:
-        ConfigManager.console_print(f'Server transcription failed: {text}')
-
-        # Retry once with fresh connection check
-        if retry_count < 1:
-            ConfigManager.console_print('Retrying with fresh server connection...')
-            # Reset cached state and recreate client
-            with _server_lock:
-                _server_mode = None
-                _server_client = TranscriptionClient()
-                new_client = _server_client
-            if new_client.is_server_available(force_check=True):
-                return transcribe_server(audio_data, retry_count=1)
-            else:
-                ConfigManager.console_print('Server no longer available after retry')
-
-        return ''
-
-
-def transcribe(audio_data, local_model=None):
-    """Transcribe audio using server or local model."""
+def transcribe(audio_data: np.ndarray) -> str:
+    """Snippet path: Groq → regex post-process → optional cleanup → save → return."""
     _debug("transcribe() STARTED")
     if audio_data is None:
-        _debug("  audio_data is None, returning empty")
         return ''
 
-    # Calculate audio duration for AI cleanup threshold check
-    sample_rate = 16000
-    audio_duration_sec = len(audio_data) / sample_rate
-    _debug(f"  Audio duration: {audio_duration_sec:.1f}s")
+    audio_duration_sec = len(audio_data) / 16000
+    _debug(f"  Duration: {audio_duration_sec:.1f}s")
 
-    # Get configured engine
-    engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
-    _debug(f"  Engine: {engine}")
+    raw = transcribe_groq(audio_data)
+    _debug(f"  Raw: {len(raw)} chars")
 
-    if engine == 'groq':
-        _debug("  Using Groq cloud transcription")
-        transcription = transcribe_groq(audio_data)
-    else:
-        # Check if server is available
-        server_available = check_server_available()
-        _debug(f"  Server available: {server_available}")
+    result = post_process_transcription(raw)
+    _debug(f"  Post-processed: {len(result)} chars")
 
-        # Parakeet requires server (can't run locally on Windows)
-        if engine == 'parakeet' and not server_available:
-            _debug("  ERROR: Parakeet requires server but server not available")
-            raise RuntimeError("Parakeet is still loading - please wait.")
-
-        # Priority: 1) Server if running, 2) Local model
-        if server_available:
-            _debug("  Using server transcription")
-            transcription = transcribe_server(audio_data)
-        else:
-            _debug("  Using local transcription")
-            transcription = transcribe_local(audio_data, local_model)
-
-    _debug(f"  Raw transcription length: {len(transcription)}")
-    result = post_process_transcription(transcription)
-    _debug(f"  Post-processed result length: {len(result)}")
-
-    # Check if AI cleanup is enabled and duration meets threshold
-    ai_cleanup_enabled = ConfigManager.get_config_value('post_processing', 'ai_cleanup_enabled')
-    ai_cleanup_threshold = ConfigManager.get_config_value('post_processing', 'ai_cleanup_threshold') or 30
-
-    if ai_cleanup_enabled and audio_duration_sec >= ai_cleanup_threshold:
-        _debug(f"  AI cleanup enabled and duration ({audio_duration_sec:.1f}s) >= threshold ({ai_cleanup_threshold}s)")
+    cleanup_enabled = ConfigManager.get_config_value('post_processing', 'ai_cleanup_enabled')
+    threshold = ConfigManager.get_config_value('post_processing', 'ai_cleanup_threshold') or 10
+    if cleanup_enabled and audio_duration_sec >= threshold:
         result = ai_cleanup_transcription(result)
     else:
-        _debug(f"  AI cleanup skipped (enabled={ai_cleanup_enabled}, duration={audio_duration_sec:.1f}s, threshold={ai_cleanup_threshold}s)")
+        _debug(f"  Cleanup skipped (enabled={cleanup_enabled}, dur={audio_duration_sec:.1f}s, threshold={threshold}s)")
 
     save_rolling_transcription(result)
     _debug("transcribe() FINISHED")

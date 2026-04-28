@@ -1,106 +1,72 @@
+"""
+Koe — hotkey transcription app.
+
+Entry point. Boots a QApplication, registers the global hotkey, and runs
+in the system tray. Audio capture happens in ResultThread; transcription
+is delegated to transcription.transcribe() which calls Groq + cleanup.
+"""
+
 import os
 import sys
-
-# Platform-specific setup (CUDA DLLs on Windows, no-op on macOS)
-from compat import setup_cuda_dlls
-setup_cuda_dlls()
-
-def preload_model():
-    """Load the Whisper model.
-
-    If the transcription server is running, we skip loading the local model
-    since we'll use the shared model from the server.
-    """
-    from utils import ConfigManager
-    from transcription import create_local_model, check_server_available
-
-    ConfigManager.initialize()
-    if ConfigManager.config_file_exists():
-        # Check if server is running - if so, use that instead of loading local
-        if check_server_available():
-            print("[Koe] Using shared transcription server")
-            return None
-
-        # No server, load local model
-        print("[Koe] Loading local model...")
-        return create_local_model()
-    return None
-
-
-# Now safe to import PyQt5
 import time
-import socket
+import threading
+from pathlib import Path
+from datetime import datetime
+
 import pyperclip
-from audioplayer import AudioPlayer
-from PyQt5.QtCore import QObject, QProcess
+from PyQt5.QtCore import QObject, QProcess, Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox
 
+from compat import (
+    acquire_single_instance_lock,
+    release_single_instance_lock,
+    set_app_user_model_id,
+    clipboard_copy_fallback,
+    play_sound_file,
+)
 from key_listener import KeyListener
 from result_thread import ResultThread
 from ui.main_window import MainWindow
 from ui.settings_window import SettingsWindow
 from ui.status_window import StatusWindow
 from ui.initialization_window import InitializationWindow
-from transcription import create_local_model
 from utils import ConfigManager
-from server_launcher import is_server_running, start_server_background
-
-# Module-level debug logging
-from pathlib import Path
-from datetime import datetime
 
 _DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
 
+
 def _debug(msg: str):
-    """Write debug message to file with timestamp."""
     try:
         with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            f.write(f"[{timestamp}] {msg}\n")
-    except:
+            f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+    except Exception:
         pass
 
 
 class KoeApp(QObject):
-    # Minimum recording time (seconds) before hotkey can stop recording
-    # This prevents accidental double-press from discarding recordings
+    # Minimum recording time before hotkey can stop. Prevents accidental double-press from discarding recordings.
     MIN_RECORDING_SECONDS = 1.0
 
-    def __init__(self, qapp=None, init_window=None, preloaded_model=None):
-        # Flag to track if user explicitly stopped continuous mode (prevents auto-restart)
-        self.continuous_stopped = False
+    def __init__(self, qapp=None, init_window=None):
         super().__init__()
-
-        # Single-instance check (Windows mutex / macOS file lock)
-        from compat import acquire_single_instance_lock
+        self.continuous_stopped = False
         self._instance_lock = acquire_single_instance_lock()
-
-        self.preloaded_model = preloaded_model
-        self.recording_start_time = None  # Track when recording started
-        self.processing_result = False  # Prevent new recordings during result processing
-        import threading
-        self._thread_lock = threading.Lock()  # Guard thread creation
+        self.recording_start_time = None
+        self.processing_result = False
+        self._thread_lock = threading.Lock()
         self.app = qapp if qapp else QApplication(sys.argv)
         self.init_window = init_window
 
-        # If no QApplication was passed, set it up now
         if not qapp:
-            # Set app ID for taskbar grouping (Windows-only, no-op on macOS)
-            from compat import set_app_user_model_id
             set_app_user_model_id()
-
-            # Set app icon with absolute path
-            from pathlib import Path
             icon_path = str(Path(__file__).parent.parent / "assets" / "koe-icon.ico")
             self.app.setWindowIcon(QIcon(icon_path))
-            self.app.setQuitOnLastWindowClosed(False)  # Keep app alive in tray
-
-            # Show initialization window if not already shown
+            self.app.setQuitOnLastWindowClosed(False)
             if not init_window:
                 self.init_window = InitializationWindow()
                 self.init_window.show()
-                self.app.processEvents()  # Force UI update
+                self.app.processEvents()
 
         if ConfigManager._instance is None:
             ConfigManager.initialize()
@@ -113,29 +79,14 @@ class KoeApp(QObject):
             self.initialize_components()
         else:
             print("No valid configuration file found. Opening settings window...")
-            # Close initialization window if opening settings
-            if hasattr(self, 'init_window') and self.init_window:
+            if self.init_window:
                 self.init_window.close()
             self.settings_window.show()
 
     def initialize_components(self):
-        from transcription import check_server_available
-
         self.key_listener = KeyListener()
         self.key_listener.add_callback("on_activate", self.on_activation)
         self.key_listener.add_callback("on_deactivate", self.on_deactivation)
-
-        engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
-        if engine == 'groq':
-            # Groq cloud engine - no local model or server needed
-            self.local_model = None
-        elif self.preloaded_model is not None:
-            self.local_model = self.preloaded_model
-        elif check_server_available():
-            # Using server, no local model needed
-            self.local_model = None
-        else:
-            self.local_model = create_local_model()
 
         self.result_thread = None
 
@@ -148,22 +99,18 @@ class KoeApp(QObject):
             self.status_window = StatusWindow()
 
         self.create_tray_icon()
-        # Auto-start listening (skip main window, go straight to tray)
         self.key_listener.start()
 
-        # Close initialization window now that we're ready
-        if hasattr(self, 'init_window') and self.init_window:
+        if self.init_window:
             self.init_window.close()
 
     def create_tray_icon(self):
-        from pathlib import Path
         from ui.theme import (BG_COLOR, TEXT_COLOR, SECONDARY_TEXT,
-                              BUTTON_HOVER_BG, INPUT_BORDER, BORDER_COLOR)
+                              BUTTON_HOVER_BG, INPUT_BORDER)
 
         icon_path = str(Path(__file__).parent.parent / "assets" / "koe-icon.ico")
         self.tray_icon = QSystemTrayIcon(QIcon(icon_path), self.app)
 
-        # Dark terminal-themed menu stylesheet
         menu_style = f"""
             QMenu {{
                 background-color: {BG_COLOR};
@@ -179,39 +126,17 @@ class KoeApp(QObject):
                 border-radius: 4px;
                 margin: 2px 4px;
             }}
-            QMenu::item:selected {{
-                background-color: {BUTTON_HOVER_BG};
-                color: {TEXT_COLOR};
-            }}
-            QMenu::item:disabled {{
-                color: {SECONDARY_TEXT};
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background-color: {INPUT_BORDER};
-                margin: 6px 12px;
-            }}
-            QMenu::indicator {{
-                width: 16px;
-                height: 16px;
-                margin-left: 6px;
-            }}
-            QMenu::right-arrow {{
-                width: 12px;
-                height: 12px;
-                margin-right: 8px;
-            }}
+            QMenu::item:selected {{ background-color: {BUTTON_HOVER_BG}; color: {TEXT_COLOR}; }}
+            QMenu::item:disabled {{ color: {SECONDARY_TEXT}; }}
+            QMenu::separator {{ height: 1px; background-color: {INPUT_BORDER}; margin: 6px 12px; }}
         """
 
-        # Store menu and actions as instance variables to prevent garbage collection
         self.tray_menu = QMenu()
         self.tray_menu.setStyleSheet(menu_style)
 
-        engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
-        if engine != 'groq':
-            self.meeting_action = QAction("Start Scribe", self.app)
-            self.meeting_action.triggered.connect(self.start_meeting_mode)
-            self.tray_menu.addAction(self.meeting_action)
+        self.meeting_action = QAction("Start Scribe", self.app)
+        self.meeting_action.triggered.connect(self.start_meeting_mode)
+        self.tray_menu.addAction(self.meeting_action)
 
         self.settings_action = QAction("Settings", self.app)
         self.settings_action.triggered.connect(self.settings_window.show)
@@ -228,33 +153,21 @@ class KoeApp(QObject):
 
     def start_meeting_mode(self):
         """Launch Scribe as a separate process."""
-        # Launch Scribe from the project root directory
-        # Scribe will handle server availability itself
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         QProcess.startDetached(sys.executable, ["-m", "src.meeting.app"], project_root)
 
     def cleanup(self):
         if self.key_listener:
             self.key_listener.stop()
-
-        # Release the single-instance lock
-        if hasattr(self, '_instance_lock') and self._instance_lock:
-            from compat import release_single_instance_lock
+        if self._instance_lock:
             release_single_instance_lock(self._instance_lock)
 
     def exit_app(self):
         self.cleanup()
-        # Stop the server when Koe exits
-        from server_launcher import stop_server
-        stop_server()
         QApplication.quit()
 
     def restart_app(self):
         self.cleanup()
-        # Stop the server so new instance can start with updated config (e.g., engine change)
-        from server_launcher import stop_server
-        stop_server()
-        # Start new instance before quitting (startDetached won't run after quit)
         QProcess.startDetached(sys.executable, sys.argv)
         QApplication.quit()
 
@@ -269,8 +182,6 @@ class KoeApp(QObject):
 
     def on_activation(self):
         if self.result_thread and self.result_thread.isRunning():
-            # Protection against accidental double-press:
-            # Only allow stopping if we've been recording for MIN_RECORDING_SECONDS
             if self.recording_start_time is not None:
                 elapsed = time.time() - self.recording_start_time
                 if elapsed < self.MIN_RECORDING_SECONDS:
@@ -279,49 +190,41 @@ class KoeApp(QObject):
 
             recording_mode = ConfigManager.get_config_value("recording_options", "recording_mode")
             if recording_mode == "continuous":
-                # Mark that user explicitly stopped - prevents auto-restart after transcription
                 self.continuous_stopped = True
 
-            # Stop recording and trigger transcription (for all modes)
             self.result_thread.stop_recording()
             return
 
-        # Starting a new recording
-        self.continuous_stopped = False  # Reset flag when starting fresh
+        self.continuous_stopped = False
         self.start_result_thread()
 
     def on_deactivation(self):
         if ConfigManager.get_config_value("recording_options", "recording_mode") == "hold_to_record":
             if self.result_thread and self.result_thread.isRunning():
-                # For hold_to_record, also check minimum recording time
                 if self.recording_start_time is not None:
                     elapsed = time.time() - self.recording_start_time
                     if elapsed < self.MIN_RECORDING_SECONDS:
                         ConfigManager.console_print(f'Hold too short ({elapsed:.1f}s), waiting for min duration')
-                        # Don't stop yet - let the user keep holding or it will auto-stop
                         return
                 self.result_thread.stop_recording()
 
     def start_result_thread(self):
         with self._thread_lock:
-            # Guard against rapid double-press: if we JUST set recording_start_time, don't create new thread
-            # (isRunning() may not be True yet if thread is still spinning up)
+            # Guard against rapid double-press
             if self.recording_start_time is not None:
-                elapsed = time.time() - self.recording_start_time
-                if elapsed < 0.5:  # Thread was just started, don't create another
-                    ConfigManager.console_print(f'Thread starting, ignoring duplicate press')
+                if time.time() - self.recording_start_time < 0.5:
+                    ConfigManager.console_print('Thread starting, ignoring duplicate press')
                     return
 
             if self.result_thread and self.result_thread.isRunning():
                 return
 
-            # Don't start a new recording if still processing previous result
             if self.processing_result:
                 ConfigManager.console_print('Still processing previous transcription...')
                 return
 
-            self.recording_start_time = time.time()  # Track when recording started (SET BEFORE creating thread)
-            self.result_thread = ResultThread(self.local_model)
+            self.recording_start_time = time.time()
+            self.result_thread = ResultThread()
             if not ConfigManager.get_config_value("misc", "hide_status_window"):
                 self.result_thread.statusSignal.connect(self.status_window.updateStatus)
                 self.result_thread.errorSignal.connect(self.status_window.showError)
@@ -330,20 +233,13 @@ class KoeApp(QObject):
             self.result_thread.start()
 
     def stop_result_thread(self):
-        _debug("stop_result_thread() called")
         if self.result_thread and self.result_thread.isRunning():
-            _debug("  Thread is running, calling stop()")
-            self.recording_start_time = None  # Reset since we're cancelling
-            self.processing_result = False  # Clear flag since we're cancelling
+            self.recording_start_time = None
+            self.processing_result = False
             self.result_thread.stop()
-        else:
-            _debug("  Thread not running, nothing to stop")
 
     def _copy_to_clipboard(self, text, retries=3):
-        """Copy text to clipboard with retries and fallback."""
-        import subprocess
-
-        for attempt in range(retries):
+        for _ in range(retries):
             try:
                 pyperclip.copy(text)
                 if pyperclip.paste() == text:
@@ -351,132 +247,72 @@ class KoeApp(QObject):
             except Exception:
                 pass
             time.sleep(0.1)
-
-        # Fallback: platform-specific clipboard command
-        from compat import clipboard_copy_fallback
         return clipboard_copy_fallback(text)
 
     def on_transcription_error(self, error_msg):
-        """Handle transcription errors with tray notification."""
-        # Show tray notification so user knows even if they weren't looking
         if hasattr(self, 'tray_icon') and self.tray_icon:
             self.tray_icon.showMessage(
                 "Koe - Transcription Failed",
                 error_msg,
                 QSystemTrayIcon.Warning,
-                5000  # Show for 5 seconds
+                5000
             )
         ConfigManager.console_print(f'Transcription error: {error_msg}')
 
     def on_transcription_complete(self, result):
-        _debug("on_transcription_complete() STARTED")
-        self.recording_start_time = None  # Reset recording start time
-        self.processing_result = True  # Block new recordings during processing
+        self.recording_start_time = None
+        self.processing_result = True
 
         try:
-            _debug(f"  result length: {len(result)}")
-            ConfigManager.console_print(f'=== on_transcription_complete called with result length: {len(result)} ===')
-
-            # Copy to clipboard only (no typing into text fields)
             if result and result.strip():
-                _debug("  Copying to clipboard...")
-                ConfigManager.console_print('Copying to clipboard...')
                 success = self._copy_to_clipboard(result)
-                _debug(f"  Clipboard copy success: {success}")
                 if success:
                     ConfigManager.console_print(f'Copied to clipboard: {result[:50]}...')
                 else:
-                    ConfigManager.console_print('WARNING: Failed to copy to clipboard')
-            else:
-                _debug("  Skipping clipboard (empty)")
-                ConfigManager.console_print('Skipping clipboard (empty result)')
+                    ConfigManager.console_print('WARNING: clipboard copy failed')
 
-            # Play beep sound
-            _debug("  Checking beep setting...")
             if ConfigManager.get_config_value("misc", "noise_on_completion"):
                 try:
-                    _debug("  Playing beep...")
-                    ConfigManager.console_print('Playing beep...')
-                    beep_path = Path(__file__).parent.parent / "assets" / "beep.wav"
-                    from compat import play_sound_file
-                    play_sound_file(beep_path)
-                    _debug("  Beep played")
-                    ConfigManager.console_print('Beep played')
+                    play_sound_file(Path(__file__).parent.parent / "assets" / "beep.wav")
                 except Exception as e:
-                    _debug(f"  Beep failed: {e}")
-                    ConfigManager.console_print(f'Failed to play beep: {e}')
+                    ConfigManager.console_print(f'Beep failed: {e}')
 
-            # Signal completion so status window shows "Complete!" for 2 seconds
-            _debug("  Checking status window...")
             if not ConfigManager.get_config_value("misc", "hide_status_window"):
-                # Only update if window is still visible (might have been closed by cancel)
                 if self.status_window.isVisible():
-                    _debug("  Updating status window to 'complete'...")
-                    ConfigManager.console_print('Signaling completion to status window...')
-                    # Call updateStatus directly - statusSignal is for window-to-app communication
                     self.status_window.updateStatus('complete')
-                    _debug("  Status window updated")
-                    ConfigManager.console_print('Status window will close after showing completion')
-                else:
-                    _debug("  Status window already closed, skipping update")
-                    ConfigManager.console_print('Status window already closed')
 
-            _debug("  Restarting key listener...")
-            if ConfigManager.get_config_value("recording_options", "recording_mode") == "continuous" and not self.continuous_stopped:
-                # Auto-restart recording in continuous mode (unless user explicitly stopped)
+            if (ConfigManager.get_config_value("recording_options", "recording_mode") == "continuous"
+                    and not self.continuous_stopped):
                 self.start_result_thread()
             else:
-                # Just restart the key listener for next activation
                 self.key_listener.start()
-            _debug("  Key listener restarted")
 
         except Exception as e:
-            _debug(f"  EXCEPTION: {e}")
-            ConfigManager.console_print(f'EXCEPTION in on_transcription_complete: {e}')
+            _debug(f"on_transcription_complete EXCEPTION: {e}")
             import traceback
-            _debug(f"  Traceback: {traceback.format_exc()}")
+            _debug(f"Traceback: {traceback.format_exc()}")
             traceback.print_exc()
         finally:
-            # Always clear the flag, even if something fails
             self.processing_result = False
-            _debug("on_transcription_complete() FINISHED")
-            ConfigManager.console_print('=== on_transcription_complete finished ===\n')
 
     def run(self):
         sys.exit(self.app.exec_())
 
 
 if __name__ == "__main__":
-    # Enable high-DPI scaling BEFORE creating QApplication
-    from PyQt5.QtCore import Qt
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
-    # Create QApplication first so we can show initialization window
     qapp = QApplication(sys.argv)
-
-    # Set app ID for taskbar grouping (Windows-only, no-op on macOS)
-    from compat import set_app_user_model_id
     set_app_user_model_id()
 
-    # Set app icon with absolute path
-    from pathlib import Path
     icon_path = str(Path(__file__).parent.parent / "assets" / "koe-icon.ico")
     qapp.setWindowIcon(QIcon(icon_path))
-    qapp.setQuitOnLastWindowClosed(False)  # Keep app alive in tray
+    qapp.setQuitOnLastWindowClosed(False)
 
-    # Show initialization window immediately
     init_window = InitializationWindow()
     init_window.show()
-    qapp.processEvents()  # Force UI update to show window
+    qapp.processEvents()
 
-    # Load model if using local engine (Groq doesn't need one)
-    engine = ConfigManager.get_config_value('model_options', 'engine') or 'whisper'
-    if engine == 'groq':
-        preloaded_model = None
-    else:
-        preloaded_model = preload_model()
-
-    # Create KoeApp with the existing QApplication and initialization window
-    app = KoeApp(qapp=qapp, init_window=init_window, preloaded_model=preloaded_model)
+    app = KoeApp(qapp=qapp, init_window=init_window)
     app.run()

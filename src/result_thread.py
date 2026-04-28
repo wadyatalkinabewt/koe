@@ -61,14 +61,8 @@ class ResultThread(QThread):
     resultSignal = pyqtSignal(str)
     errorSignal = pyqtSignal(str)  # Emits error message for notifications
 
-    def __init__(self, local_model=None):
-        """
-        Initialize the ResultThread.
-
-        :param local_model: Local transcription model (if applicable)
-        """
+    def __init__(self):
         super().__init__()
-        self.local_model = local_model
         self.is_recording = False
         self.is_running = True
         self.sample_rate = None
@@ -142,7 +136,7 @@ class ResultThread(QThread):
             # Time the transcription process
             _debug("  Starting transcription...")
             start_time = time.time()
-            result = transcribe(audio_data, self.local_model)
+            result = transcribe(audio_data)
             end_time = time.time()
 
             transcription_time = end_time - start_time
