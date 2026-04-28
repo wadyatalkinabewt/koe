@@ -1,8 +1,9 @@
 """
-AI summarization client using Anthropic's Claude API.
+AI summarization client using OpenRouter.
 
-Uses Claude Sonnet 4.5 to generate comprehensive meeting summaries with
-anti-hallucination safeguards and retry logic.
+Default model is anthropic/claude-sonnet-4-6 (still routes to Anthropic via
+OpenRouter — Sonnet remains the right call for long-form summary quality at
+once-per-meeting frequency). To switch models, change SummarizerClient.MODEL.
 """
 
 import time
@@ -10,36 +11,29 @@ import os
 from typing import Optional, Callable
 from pathlib import Path
 
+import requests
+
 
 class SummarizerClient:
-    """Client for AI-powered meeting summarization."""
+    """Client for AI-powered meeting summarization via OpenRouter."""
 
-    MODEL = "claude-sonnet-4-5-20250929"
+    MODEL = "anthropic/claude-sonnet-4-6"
+    PROVIDER_PIN = {"order": ["Anthropic"], "allow_fallbacks": False}
     MAX_RETRIES = 3
     INITIAL_RETRY_DELAY = 2.0  # seconds
-    TIMEOUT = 300  # 5 minutes total timeout
+    REQUEST_TIMEOUT = 300  # 5 minutes per attempt
+    OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
     def __init__(self, api_key: Optional[str] = None):
         """
         Initialize summarizer client.
 
         Args:
-            api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
+            api_key: OpenRouter API key (defaults to OPENROUTER_API_KEY env var)
         """
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in environment or provided")
-
-        # Lazy import anthropic to avoid import errors if not installed
-        try:
-            import anthropic
-            self.anthropic = anthropic
-            self.client = anthropic.Anthropic(api_key=self.api_key)
-        except ImportError:
-            raise ImportError(
-                "anthropic package not installed. "
-                "Install with: pip install anthropic>=0.40.0"
-            )
+            raise ValueError("OPENROUTER_API_KEY not found in environment or provided")
 
     def summarize(
         self,
@@ -59,12 +53,20 @@ class SummarizerClient:
         Raises:
             Exception: If summarization fails after all retries
         """
-        # Status updates handled by parent (summarize_detached.py)
-        # Shows user-friendly messages: "Analyzing transcript...", "Generating summary...", etc.
-
         prompt = self._build_prompt(transcript_content)
 
-        # Retry with exponential backoff
+        body = {
+            "model": self.MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4096,
+            "temperature": 0.0,
+            "provider": self.PROVIDER_PIN,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -74,38 +76,39 @@ class SummarizerClient:
                         status_callback(f"Retrying in {delay:.0f}s...")
                     time.sleep(delay)
 
-                # Don't update status for each attempt - keeps UI clean
-
-                response = self.client.messages.create(
-                    model=self.MODEL,
-                    max_tokens=4096,
-                    temperature=0.0,  # Deterministic for consistency
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ]
+                response = requests.post(
+                    self.OPENROUTER_URL,
+                    headers=headers,
+                    json=body,
+                    timeout=self.REQUEST_TIMEOUT,
                 )
 
-                # Extract text from response
-                summary = response.content[0].text
+                if response.status_code != 200:
+                    last_error = f"HTTP {response.status_code}: {response.text[:300]}"
+                    # Don't retry on client errors (4xx other than 429)
+                    if 400 <= response.status_code < 500 and response.status_code != 429:
+                        break
+                    continue
+
+                data = response.json()
+                if data.get("error"):
+                    last_error = f"API error: {data['error']}"
+                    continue
+
+                summary = data["choices"][0]["message"]["content"]
 
                 if status_callback:
                     status_callback("Summary generated successfully")
 
                 return summary
 
-            except self.anthropic.APIConnectionError as e:
+            except requests.exceptions.Timeout as e:
+                last_error = f"Request timeout: {e}"
+            except requests.exceptions.ConnectionError as e:
                 last_error = f"Network error: {e}"
-            except self.anthropic.RateLimitError as e:
-                last_error = f"Rate limit exceeded: {e}"
-            except self.anthropic.APIStatusError as e:
-                last_error = f"API error ({e.status_code}): {e.message}"
             except Exception as e:
                 last_error = f"Unexpected error: {e}"
 
-        # All retries exhausted
         raise Exception(f"Summarization failed after {self.MAX_RETRIES} attempts: {last_error}")
 
     def _extract_metadata(self, transcript_content: str) -> dict:

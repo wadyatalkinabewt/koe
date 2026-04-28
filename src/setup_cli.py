@@ -172,7 +172,7 @@ def download_diarization_models(hf_token: str) -> bool:
         return False
 
 
-def save_config(model_name: str, user_name: str, hf_token: str, anthropic_key: str,
+def save_config(model_name: str, user_name: str, hf_token: str, openrouter_key: str,
                 meetings_folder: str, snippets_folder: str, skip_diarization: bool,
                 device: str, compute_type: str):
     """Save configuration files."""
@@ -184,8 +184,8 @@ def save_config(model_name: str, user_name: str, hf_token: str, anthropic_key: s
     env_lines = []
     if hf_token:
         env_lines.append(f"HF_TOKEN={hf_token}")
-    if anthropic_key:
-        env_lines.append(f"ANTHROPIC_API_KEY={anthropic_key}")
+    if openrouter_key:
+        env_lines.append(f"OPENROUTER_API_KEY={openrouter_key}")
     env_lines.append("WHISPER_SERVER_URL=http://localhost:9876")
     env_lines.append(f"WHISPER_MODEL={model_name}")
     env_lines.append(f"WHISPER_DEVICE={device}")
@@ -334,38 +334,38 @@ Without it:
         print()
 
     # =========================================================================
-    # ANTHROPIC KEY (OPTIONAL)
+    # OPENROUTER KEY (OPTIONAL — powers cleanup + summaries)
     # =========================================================================
-    print_header("3. AI Summaries (Optional)")
+    print_header("3. AI Cleanup & Summaries (Optional)")
 
-    print("""AI summaries automatically generate meeting notes after each Scribe session.
-Uses Claude to extract key decisions, action items, and discussion topics.
+    print("""OpenRouter powers two features:
+  - AI cleanup of long voice snippets (gemini-3-flash-preview)
+  - Auto-generated meeting summaries (claude-sonnet-4-6)
 
 What it enables:
-  - Auto-generated summary when you stop recording
-  - Key decisions and action items extracted
-  - Topics discussed with brief descriptions
-  - Saves to Meetings/Summaries/ folder
+  - Cleaner snippet transcriptions (grammar, punctuation, term correction)
+  - Auto-generated summary when you stop recording a meeting
+  - Key decisions, action items, and topics extracted
 
-Cost: ~$0.04 per 60-minute meeting
+Cost: ~$0.001 per snippet, ~$0.04 per 60-minute meeting
 """)
 
     print("To get a key:")
-    print("  1. Create account at https://console.anthropic.com")
-    print("  2. Go to API Keys")
+    print("  1. Create account at https://openrouter.ai")
+    print("  2. Go to https://openrouter.ai/keys")
     print("  3. Create a new key")
     print()
 
-    anthropic_key = get_input("Enter Anthropic API key (or press Enter to skip)")
+    openrouter_key = get_input("Enter OpenRouter API key (or press Enter to skip)")
 
-    if not anthropic_key:
+    if not openrouter_key:
         print()
         print_box([
-            "Skipping AI summaries.",
+            "Skipping AI cleanup and summaries.",
             "",
             "To enable later:",
-            "  1. Get key from https://console.anthropic.com",
-            "  2. Add to .env file: ANTHROPIC_API_KEY=sk-ant-...",
+            "  1. Get key from https://openrouter.ai/keys",
+            "  2. Add to .env file: OPENROUTER_API_KEY=sk-or-v1-...",
         ])
         print()
 
@@ -424,7 +424,7 @@ Cost: ~$0.04 per 60-minute meeting
         model_name=selected_model,
         user_name=user_name,
         hf_token=hf_token,
-        anthropic_key=anthropic_key,
+        openrouter_key=openrouter_key,
         meetings_folder=meetings_folder,
         snippets_folder=snippets_folder,
         skip_diarization=skip_diarization,
@@ -447,7 +447,7 @@ Quick start:
 
 Model: {selected_model}
 Diarization: {'Enabled' if not skip_diarization else 'Disabled (can enable later)'}
-AI Summaries: {'Enabled' if anthropic_key else 'Disabled (can enable later)'}
+AI Cleanup & Summaries: {'Enabled' if openrouter_key else 'Disabled (can enable later)'}
 """)
 
     input("Press Enter to launch Koe...")

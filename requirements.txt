@@ -82,9 +82,6 @@ uvicorn==0.40.0
 # Audio capture (WASAPI loopback for system audio)
 PyAudioWPatch==0.2.12.8
 
-# AI summarization
-anthropic==0.76.0
-
 # Audio processing (high-quality resampling)
 scipy==1.11.4
 

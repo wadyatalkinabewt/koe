@@ -5,6 +5,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 import numpy as np
+import requests
 import soundfile as sf
 
 from utils import ConfigManager
@@ -295,10 +296,12 @@ def post_process_transcription(transcription):
 
 
 def ai_cleanup_transcription(text):
-    """Use Claude to clean up grammar, punctuation, and filler words.
+    """Clean up grammar, punctuation, and filler words via OpenRouter.
 
     Model and prompt configurable via post_processing.ai_cleanup_model and
-    post_processing.ai_cleanup_prompt in config.yaml.
+    post_processing.ai_cleanup_prompt in config.yaml. Default model is
+    google/gemini-3-flash-preview (winner of the cleanup model benchmark —
+    see benchmarks/cleanup_bench.py).
     Returns the cleaned text, or the original text if cleanup fails.
     """
     _debug("ai_cleanup_transcription() STARTED")
@@ -308,18 +311,15 @@ def ai_cleanup_transcription(text):
         return text
 
     try:
-        import anthropic
         from dotenv import load_dotenv
         load_dotenv()
 
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        api_key = os.environ.get('OPENROUTER_API_KEY')
         if not api_key:
-            _debug("  No ANTHROPIC_API_KEY, skipping AI cleanup")
+            _debug("  No OPENROUTER_API_KEY, skipping AI cleanup")
             return text
 
-        client = anthropic.Anthropic(api_key=api_key)
-
-        model = ConfigManager.get_config_value('post_processing', 'ai_cleanup_model') or 'claude-sonnet-4-6'
+        model = ConfigManager.get_config_value('post_processing', 'ai_cleanup_model') or 'google/gemini-3-flash-preview'
         prompt_prefix = ConfigManager.get_config_value('post_processing', 'ai_cleanup_prompt') or (
             "Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words (um, uh, like, you know, etc.).\n\n"
             "IMPORTANT:\n- Do NOT summarize or change the meaning\n- Do NOT add any new information\n"
@@ -327,16 +327,41 @@ def ai_cleanup_transcription(text):
         )
         prompt = prompt_prefix + text.strip()
 
-        _debug(f"  Calling Claude {model} API...")
-        response = client.messages.create(
-            model=model,
-            max_tokens=2048,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+        # Pin provider to avoid quantisation routing variance between runs.
+        provider_pin = _provider_pin_for_model(model)
+
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            # Generous output cap. 16384 comfortably exceeds any realistic snippet
+            # (~75 min at 150 wpm). Cost is based on actual tokens generated.
+            "max_tokens": 16384,
+        }
+        if provider_pin:
+            body["provider"] = provider_pin
+
+        _debug(f"  Calling OpenRouter ({model}, provider={provider_pin})...")
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=120,
         )
 
-        cleaned = response.content[0].text.strip()
+        if response.status_code != 200:
+            _debug(f"  OpenRouter HTTP {response.status_code}: {response.text[:300]}")
+            return text
+
+        data = response.json()
+        if data.get("error"):
+            _debug(f"  OpenRouter API error: {data['error']}")
+            return text
+
+        cleaned = data["choices"][0]["message"]["content"].strip()
         _debug(f"  AI cleanup complete: {len(text)} -> {len(cleaned)} chars")
 
         # Add trailing space back (was in original post-processing)
@@ -345,12 +370,31 @@ def ai_cleanup_transcription(text):
 
         return cleaned
 
-    except ImportError:
-        _debug("  anthropic package not installed, skipping AI cleanup")
-        return text
     except Exception as e:
         _debug(f"  AI cleanup error: {e}")
         return text
+
+
+def _provider_pin_for_model(model_id):
+    """Return OpenRouter provider routing config for a given model slug.
+
+    Pinning prevents the same model from routing to FP4/FP8 quantised hosts
+    on some calls and full-precision on others, which shows up as quality
+    variance. See benchmarks/cleanup_bench.py for the providers verified on.
+    Returns None for unknown models (lets OpenRouter pick).
+    """
+    pins = {
+        "google/gemini-3-flash-preview":         ["Google AI Studio"],
+        "google/gemini-3.1-flash-lite-preview":  ["Google AI Studio"],
+        "anthropic/claude-haiku-4-5":            ["Anthropic"],
+        "anthropic/claude-sonnet-4-6":           ["Anthropic"],
+        "openai/gpt-5.4-mini":                   ["OpenAI"],
+        "deepseek/deepseek-v3.2":                ["Friendli"],
+    }
+    order = pins.get(model_id)
+    if not order:
+        return None
+    return {"order": order, "allow_fallbacks": False}
 
 def check_server_available():
     """Check if the transcription server is running."""

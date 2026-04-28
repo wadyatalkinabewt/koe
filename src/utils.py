@@ -284,29 +284,24 @@ class TextProcessor:
             r'\bhmm+\b', r'\bmm+\b', r'\bhm+\b',
         ]
 
-        # Whisper hallucinations - ONLY remove at end of transcription
+        # Whisper hallucinations - ONLY remove at end of transcription.
+        # KEEP STRICT: Alex wraps up snippets conversationally (e.g. "okay cool,
+        # get on with it", "alright take care", "yeah that's all"). Earlier
+        # versions of this list stripped those legit endings — do not add
+        # generic wrap-up patterns back. Only patterns here should be
+        # unambiguous Whisper training-data artifacts (YouTube boilerplate) or
+        # non-speech audio tags.
         trailing_hallucinations = [
             # YouTube outros
             r"\s*we'?ll be right back\.?\s*$",
-            r"\s*thank(s| you)( for watching)?\.?\s*$",
+            r"\s*thank(s| you) for watching\.?\s*$",
             r"\s*subscribe to (my|the|our) channel\.?\s*$",
             r"\s*please (like and )?subscribe\.?\s*$",
-            r"\s*see you (in the )?next (one|video|time)\.?\s*$",
+            r"\s*see you in the next (one|video|time)\.?\s*$",
             r"\s*don'?t forget to (like and )?subscribe\.?\s*$",
             r"\s*like (and )?subscribe\.?\s*$",
             r"\s*hit the (like|bell|subscribe)( button)?\.?\s*$",
-            # Common trailing phrases
-            r"\s*(so,?\s*)?that'?s (it|all)( for (today|now))?\.?\s*$",
-            r"\s*bye( bye)?\.?\s*$",
-            r"\s*goodbye\.?\s*$",
-            r"\s*take care\.?\s*$",
-            # Incomplete trailing sentences (hallucinated continuations)
-            r",?\s*and I'?ll\.?\s*$",
-            r",?\s*and we'?ll\.?\s*$",
-            r",?\s*and I'?m\.?\s*$",
-            r",?\s*so I'?ll\.?\s*$",
-            r",?\s*I'?ll see\.?\s*$",
-            # Music/sound descriptions
+            # Non-speech audio descriptions
             r"\s*\[music\]\s*$",
             r"\s*\[applause\]\s*$",
             r"\s*♪.*$",

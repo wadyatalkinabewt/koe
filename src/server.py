@@ -194,22 +194,21 @@ def _apply_post_processing(text: str) -> str:
 
 
 def _apply_ai_cleanup(text: str) -> str:
-    """Use Claude Haiku to clean up grammar and punctuation.
+    """Clean up grammar/punctuation via OpenRouter (gemini-3-flash-preview).
 
-    Returns original text if cleanup fails or API key not set.
+    Used by /transcribe_file when apply_ai_cleanup=true (Robin/moltbot voice
+    notes). Returns original text if cleanup fails or no key set.
     """
     if not text or not text.strip():
         return text
 
     try:
-        import anthropic
+        import requests
 
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        api_key = os.environ.get('OPENROUTER_API_KEY')
         if not api_key:
-            logger.info("AI cleanup skipped: no ANTHROPIC_API_KEY")
+            logger.info("AI cleanup skipped: no OPENROUTER_API_KEY")
             return text
-
-        client = anthropic.Anthropic(api_key=api_key)
 
         prompt = (
             "Clean up this voice transcription. Fix grammar, add proper punctuation, "
@@ -222,13 +221,32 @@ def _apply_ai_cleanup(text: str) -> str:
             "Transcription:\n" + text.strip()
         )
 
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}]
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "google/gemini-3-flash-preview",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4096,
+                "temperature": 0.0,
+                "provider": {"order": ["Google AI Studio"], "allow_fallbacks": False},
+            },
+            timeout=60,
         )
 
-        cleaned = response.content[0].text.strip()
+        if response.status_code != 200:
+            logger.warning(f"AI cleanup HTTP {response.status_code}: {response.text[:200]}")
+            return text
+
+        data = response.json()
+        if data.get("error"):
+            logger.warning(f"AI cleanup API error: {data['error']}")
+            return text
+
+        cleaned = data["choices"][0]["message"]["content"].strip()
         logger.info(f"AI cleanup: {len(text)} -> {len(cleaned)} chars")
         return cleaned
 

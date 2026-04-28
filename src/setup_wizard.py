@@ -331,7 +331,7 @@ class SetupWizard(QMainWindow):
         self.current_page = SetupPage.WELCOME
         self.system_results = {}
         self.hf_token = ""
-        self.anthropic_key = ""
+        self.openrouter_key = ""
         self.user_name = ""
         self.voice_audio = None
         self.meetings_folder = ""
@@ -653,22 +653,22 @@ class SetupWizard(QMainWindow):
 
         layout.addSpacing(16)
 
-        # Anthropic key (optional)
-        anthropic_label = QLabel("Anthropic API Key (optional - for AI meeting summaries)")
-        anthropic_label.setFont(QFont('Cascadia Code', 10))
-        anthropic_label.setStyleSheet(f"color: {theme.TEXT_COLOR};")
-        layout.addWidget(anthropic_label)
+        # OpenRouter key (optional — powers cleanup + summaries)
+        openrouter_label = QLabel("OpenRouter API Key (optional - for AI cleanup & meeting summaries)")
+        openrouter_label.setFont(QFont('Cascadia Code', 10))
+        openrouter_label.setStyleSheet(f"color: {theme.TEXT_COLOR};")
+        layout.addWidget(openrouter_label)
 
-        self.anthropic_input = QLineEdit()
-        self.anthropic_input.setPlaceholderText("sk-ant-... (optional)")
-        self.anthropic_input.setEchoMode(QLineEdit.Password)
-        self.anthropic_input.setStyleSheet(self._input_style())
-        layout.addWidget(self.anthropic_input)
+        self.openrouter_input = QLineEdit()
+        self.openrouter_input.setPlaceholderText("sk-or-v1-... (optional)")
+        self.openrouter_input.setEchoMode(QLineEdit.Password)
+        self.openrouter_input.setStyleSheet(self._input_style())
+        layout.addWidget(self.openrouter_input)
 
-        anthropic_link = QLabel('<a href="https://console.anthropic.com" style="color: ' + theme.LINK_COLOR + ';">Get key from console.anthropic.com</a>')
-        anthropic_link.setFont(QFont('Cascadia Code', 9))
-        anthropic_link.setOpenExternalLinks(True)
-        layout.addWidget(anthropic_link)
+        openrouter_link = QLabel('<a href="https://openrouter.ai/keys" style="color: ' + theme.LINK_COLOR + ';">Get key from openrouter.ai/keys</a>')
+        openrouter_link.setFont(QFont('Cascadia Code', 9))
+        openrouter_link.setOpenExternalLinks(True)
+        layout.addWidget(openrouter_link)
 
         layout.addSpacing(8)
 
@@ -1188,7 +1188,7 @@ class SetupWizard(QMainWindow):
         # Validate current page
         if page == SetupPage.API_KEYS:
             self.hf_token = self.hf_input.text().strip()
-            self.anthropic_key = self.anthropic_input.text().strip()
+            self.openrouter_key = self.openrouter_input.text().strip()
 
             if not self.hf_token or not self.hf_token.startswith("hf_"):
                 QMessageBox.warning(self, "Invalid Token",
@@ -1245,8 +1245,8 @@ class SetupWizard(QMainWindow):
         # Save .env file
         env_path = koe_dir / ".env"
         env_content = f"HF_TOKEN={self.hf_token}\n"
-        if self.anthropic_key:
-            env_content += f"ANTHROPIC_API_KEY={self.anthropic_key}\n"
+        if self.openrouter_key:
+            env_content += f"OPENROUTER_API_KEY={self.openrouter_key}\n"
         env_content += "WHISPER_SERVER_URL=http://localhost:9876\n"
 
         with open(env_path, 'w') as f:
