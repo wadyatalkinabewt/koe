@@ -129,8 +129,8 @@ dmypy.json
 .pyre/
 
 # Configuration files (keep .example files)
-config.yaml
-src/config.yaml
+/config.yaml
+# src/config.yaml is tracked so transcription dictionary syncs across machines
 
 # Koe-specific
 # Setup wizard marker
