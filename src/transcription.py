@@ -346,6 +346,10 @@ def transcribe(audio_data: np.ndarray) -> str:
     threshold = ConfigManager.get_config_value('post_processing', 'ai_cleanup_threshold') or 10
     if cleanup_enabled and audio_duration_sec >= threshold:
         result = ai_cleanup_transcription(result)
+        from utils import TextProcessor
+        result = TextProcessor.remove_filler_words(result)
+        if result and not result.endswith(' '):
+            result += ' '
     else:
         _debug(f"  Cleanup skipped (enabled={cleanup_enabled}, dur={audio_duration_sec:.1f}s, threshold={threshold}s)")
 

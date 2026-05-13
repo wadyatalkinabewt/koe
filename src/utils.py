@@ -292,15 +292,16 @@ class TextProcessor:
         # unambiguous Whisper training-data artifacts (YouTube boilerplate) or
         # non-speech audio tags.
         trailing_hallucinations = [
-            # YouTube outros
-            r"\s*we'?ll be right back\.?\s*$",
-            r"\s*thank(s| you) for watching\.?\s*$",
-            r"\s*subscribe to (my|the|our) channel\.?\s*$",
-            r"\s*please (like and )?subscribe\.?\s*$",
-            r"\s*see you in the next (one|video|time)\.?\s*$",
-            r"\s*don'?t forget to (like and )?subscribe\.?\s*$",
-            r"\s*like (and )?subscribe\.?\s*$",
-            r"\s*hit the (like|bell|subscribe)( button)?\.?\s*$",
+            # YouTube outros (punctuation lenient — handles . ! ? ... combos)
+            r"\s*we'?ll be right back[.!?]*\s*$",
+            r"\s*thank(s| you)( (you|all|so much))? for watching[.!?]*\s*$",
+            r"\s*thanks for watching[.!?]*\s*$",
+            r"\s*subscribe to (my|the|our) channel[.!?]*\s*$",
+            r"\s*please (like and )?subscribe[.!?]*\s*$",
+            r"\s*see you in the next (one|video|time)[.!?]*\s*$",
+            r"\s*don'?t forget to (like and )?subscribe[.!?]*\s*$",
+            r"\s*like (and )?subscribe[.!?]*\s*$",
+            r"\s*hit the (like|bell|subscribe)( button)?[.!?]*\s*$",
             # Non-speech audio descriptions
             r"\s*\[music\]\s*$",
             r"\s*\[applause\]\s*$",
@@ -308,8 +309,13 @@ class TextProcessor:
             r"\s*\u266a.*$", # Another form of the music note from server.py
         ]
         
-        for pattern in trailing_hallucinations:
-            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        # Iterate to catch stacked artifacts (e.g. "Thanks for watching. Thanks for watching!")
+        prev = None
+        while prev != text:
+            prev = text
+            for pattern in trailing_hallucinations:
+                text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+            text = text.rstrip()
 
         for filler in fillers:
             text = re.sub(filler, '', text, flags=re.IGNORECASE)
