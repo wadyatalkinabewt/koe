@@ -1,13 +1,11 @@
 import time
 import traceback
+import wave
 import numpy as np
 import sounddevice as sd
-import tempfile
-import wave
 import webrtcvad
 from PyQt5.QtCore import QThread, QMutex, pyqtSignal
-from collections import deque
-from threading import Event, Lock
+from queue import Empty, Queue
 from pathlib import Path
 from datetime import datetime
 
@@ -18,6 +16,8 @@ from utils import ConfigManager
 _DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
 _DEBUG_LOG.parent.mkdir(exist_ok=True)
 _MAX_LOG_SIZE = 1 * 1024 * 1024  # 1MB
+_MAX_TAIL_AUDIO_DEBUG_FILES = 5
+_TAIL_AUDIO_DEBUG_SECONDS = 20
 
 def _rotate_log_if_needed():
     """Rotate debug.log if it exceeds max size."""
@@ -39,6 +39,37 @@ def _debug(msg: str):
             f.write(f"[{timestamp}] {msg}\n")
     except:
         pass
+
+
+def _save_rolling_tail_audio(audio_data: np.ndarray, sample_rate: int):
+    """Keep the final seconds of recent snippets for local cutoff debugging."""
+    if audio_data is None or len(audio_data) == 0:
+        return
+    try:
+        debug_dir = _DEBUG_LOG.parent / "snippet_tail_audio"
+        debug_dir.mkdir(exist_ok=True)
+
+        oldest = debug_dir / f"tail_{_MAX_TAIL_AUDIO_DEBUG_FILES}.wav"
+        if oldest.exists():
+            oldest.unlink()
+        for i in range(_MAX_TAIL_AUDIO_DEBUG_FILES - 1, 0, -1):
+            old = debug_dir / f"tail_{i}.wav"
+            new = debug_dir / f"tail_{i+1}.wav"
+            if old.exists():
+                old.rename(new)
+
+        sample_rate = int(sample_rate or 16000)
+        tail_samples = sample_rate * _TAIL_AUDIO_DEBUG_SECONDS
+        tail = np.asarray(audio_data[-tail_samples:], dtype=np.int16)
+        path = debug_dir / "tail_1.wav"
+        with wave.open(str(path), 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(tail.tobytes())
+        _debug(f"  Saved tail audio debug: {path}")
+    except Exception as e:
+        _debug(f"  Failed to save tail audio debug: {e}")
 
 
 class ResultThread(QThread):
@@ -132,11 +163,12 @@ class ResultThread(QThread):
             _debug("  Emitting 'transcribing' status")
             self.statusSignal.emit('transcribing')
             ConfigManager.console_print('Transcribing...')
+            _save_rolling_tail_audio(audio_data, self.sample_rate or 16000)
 
             # Time the transcription process
             _debug("  Starting transcription...")
             start_time = time.time()
-            result = transcribe(audio_data)
+            result = transcribe(audio_data, sample_rate=self.sample_rate or 16000)
             end_time = time.time()
 
             transcription_time = end_time - start_time
@@ -215,11 +247,9 @@ class ResultThread(QThread):
                 silent_frame_count = 0
                 _debug("  VAD created")
 
-            audio_buffer = deque(maxlen=frame_size)
             recording = []
 
-            data_ready = Event()
-            buffer_lock = Lock()  # Protect audio_buffer access between threads
+            audio_queue: Queue[np.ndarray] = Queue()
             callback_error = [None]  # Mutable container to capture callback errors
 
             def audio_callback(indata, frames, time, status):
@@ -228,12 +258,39 @@ class ResultThread(QThread):
                         ConfigManager.console_print(f"Audio callback status: {status}")
                     if indata is None or len(indata) == 0:
                         return  # Skip empty frames
-                    with buffer_lock:
-                        audio_buffer.extend(indata[:, 0])
-                    data_ready.set()
+                    audio_queue.put(indata[:, 0].copy())
                 except Exception as e:
                     callback_error[0] = str(e)
-                    data_ready.set()  # Unblock the main loop
+
+            def process_frame(frame, use_vad=True):
+                nonlocal initial_frames_to_skip
+                nonlocal speech_detected, silent_frame_count
+
+                if frame is None or len(frame) == 0:
+                    return False
+
+                frame = np.asarray(frame, dtype=np.int16)
+                recording.append(frame)
+
+                # Avoid trying to detect voice in initial frames.
+                if initial_frames_to_skip > 0:
+                    initial_frames_to_skip -= 1
+                    return False
+
+                if vad and use_vad and len(frame) == frame_size:
+                    if vad.is_speech(frame.tobytes(), self.sample_rate):
+                        silent_frame_count = 0
+                        if not speech_detected:
+                            ConfigManager.console_print("Speech detected.")
+                            speech_detected = True
+                    else:
+                        silent_frame_count += 1
+
+                    if speech_detected and silent_frame_count > silence_frames:
+                        _debug("  Silence detected, breaking loop")
+                        return True
+
+                return False
 
             _debug("  Opening audio stream...")
             with sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='int16',
@@ -246,42 +303,53 @@ class ResultThread(QThread):
                         _debug(f"  Callback error: {callback_error[0]}")
                         break
 
-                    # Use timeout so we can check is_recording flag regularly
-                    if not data_ready.wait(timeout=0.1):
-                        continue
-                    data_ready.clear()
-
-                    with buffer_lock:
-                        if len(audio_buffer) < frame_size:
-                            continue
-
-                        # Save frame
-                        frame = np.array(list(audio_buffer), dtype=np.int16)
-                        audio_buffer.clear()
-                    recording.extend(frame)
-
-                    # Avoid trying to detect voice in initial frames
-                    if initial_frames_to_skip > 0:
-                        initial_frames_to_skip -= 1
+                    # Use timeout so we can check is_recording flag regularly.
+                    try:
+                        frame = audio_queue.get(timeout=0.1)
+                    except Empty:
                         continue
 
-                    if vad:
-                        if vad.is_speech(frame.tobytes(), self.sample_rate):
-                            silent_frame_count = 0
-                            if not speech_detected:
-                                ConfigManager.console_print("Speech detected.")
-                                speech_detected = True
-                        else:
-                            silent_frame_count += 1
+                    should_stop = process_frame(frame)
 
-                        if speech_detected and silent_frame_count > silence_frames:
-                            _debug("  Silence detected, breaking loop")
+                    # Drain any backlog so callback bursts do not overwrite audio.
+                    while True:
+                        try:
+                            queued_frame = audio_queue.get_nowait()
+                        except Empty:
                             break
+                        should_stop = process_frame(queued_frame) or should_stop
+
+                    if should_stop:
+                        break
 
                 _debug("  Recording loop exited")
 
+                # Capture frames already delivered by the audio callback before
+                # the stream closes. Without this, the last callback burst can be
+                # dropped when the user presses the stop hotkey.
+                flush_deadline = time.monotonic() + 0.25
+                flushed_frames = 0
+                while time.monotonic() < flush_deadline:
+                    try:
+                        frame = audio_queue.get(timeout=0.03)
+                    except Empty:
+                        continue
+                    process_frame(frame, use_vad=False)
+                    flushed_frames += 1
+
+                while True:
+                    try:
+                        frame = audio_queue.get_nowait()
+                    except Empty:
+                        break
+                    process_frame(frame, use_vad=False)
+                    flushed_frames += 1
+
+                if flushed_frames:
+                    _debug(f"  Flushed {flushed_frames} queued audio frames after stop")
+
             _debug("  Audio stream closed")
-            audio_data = np.array(recording, dtype=np.int16)
+            audio_data = np.concatenate(recording).astype(np.int16, copy=False) if recording else np.array([], dtype=np.int16)
             duration = len(audio_data) / self.sample_rate
 
             ConfigManager.console_print(f'Recording finished. Size: {audio_data.size} samples, Duration: {duration:.2f} seconds')

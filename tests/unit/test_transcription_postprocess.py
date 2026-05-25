@@ -4,11 +4,21 @@ Tests for transcription post-processing.
 
 import pytest
 import sys
+import wave
 from pathlib import Path
+import numpy as np
 
 # Import the module under test
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-from transcription import remove_filler_words, ensure_ending_punctuation, post_process_transcription
+from transcription import (
+    _audio_to_wav_bytes,
+    _chunk_max_samples,
+    _cleanup_preserves_tail,
+    _merge_tail_retry,
+    ensure_ending_punctuation,
+    post_process_transcription,
+    remove_filler_words,
+)
 
 
 class TestRemoveFillerWords:
@@ -42,7 +52,7 @@ class TestRemoveFillerWords:
             ("Hello world. Subscribe to my channel.", "Hello world."),
             ("Hello world. Please like and subscribe.", "Hello world."),
             ("Hello world. We'll be right back.", "Hello world."),
-            ("Hello world. See you next time.", "Hello world."),
+            ("Hello world. See you in the next video.", "Hello world."),
         ]
         for input_text, expected in test_cases:
             result = remove_filler_words(input_text)
@@ -119,9 +129,64 @@ class TestPostProcessTranscription:
     def test_handles_empty_input(self):
         """Should handle empty input gracefully."""
         result = post_process_transcription("")
-        assert result == ". "  # Just punctuation and space
+        assert result == ""
 
     def test_handles_whitespace_only(self):
         """Should handle whitespace-only input."""
         result = post_process_transcription("   ")
-        assert result == ". "
+        assert result == "   "
+
+
+class TestAudioToWavBytes:
+    def test_chunk_limit_stays_under_groq_upload_cap_for_high_sample_rates(self):
+        assert _chunk_max_samples(48000) == 10 * 60 * 16000
+
+    def test_appends_trailing_silence_without_changing_sample_rate(self):
+        audio = np.array([1000, -1000, 500], dtype=np.int16)
+
+        buf = _audio_to_wav_bytes(audio, sample_rate=8000, trailing_silence_sec=1.0)
+
+        with wave.open(buf, "rb") as wf:
+            assert wf.getframerate() == 8000
+            assert wf.getnframes() == len(audio) + 8000
+            raw = wf.readframes(wf.getnframes())
+
+        samples = np.frombuffer(raw, dtype=np.int16)
+        assert np.array_equal(samples[:len(audio)], audio)
+        assert np.all(samples[len(audio):] == 0)
+
+
+class TestCleanupTailGuard:
+    def test_accepts_cleanup_that_preserves_tail(self):
+        original = "This is a transcription. Could you look into this and fix it if you can."
+        cleaned = "This is a transcription. Could you look into this, and fix it if you can."
+
+        assert _cleanup_preserves_tail(original, cleaned)
+
+    def test_rejects_cleanup_that_drops_tail(self):
+        original = "This is a transcription. Could you look into this and fix it if you can."
+        cleaned = "This is a transcription."
+
+        assert not _cleanup_preserves_tail(original, cleaned)
+
+    def test_rejects_cleanup_when_tail_words_only_appear_earlier(self):
+        original = "Check the docs first. Then update the current setup with the final fix."
+        cleaned = "Check the docs first. Then update the current setup."
+
+        assert not _cleanup_preserves_tail(original, cleaned)
+
+
+class TestTailRetryMerge:
+    def test_keeps_full_text_when_tail_is_already_present(self):
+        full = "Please check the docs and then update the final section."
+        tail = "Then update the final section."
+
+        assert _merge_tail_retry(full, tail) == full
+
+    def test_appends_missing_tail_suffix(self):
+        full = "Please check the docs and then update"
+        tail = "and then update the final section before you finish."
+
+        assert _merge_tail_retry(full, tail) == (
+            "Please check the docs and then update the final section before you finish."
+        )
