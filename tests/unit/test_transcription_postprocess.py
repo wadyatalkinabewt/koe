@@ -12,6 +12,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from transcription import (
     _audio_to_wav_bytes,
+    _boost_quiet_audio_for_whisper,
     _chunk_max_samples,
     _cleanup_preserves_tail,
     _merge_tail_retry,
@@ -154,6 +155,32 @@ class TestAudioToWavBytes:
         samples = np.frombuffer(raw, dtype=np.int16)
         assert np.array_equal(samples[:len(audio)], audio)
         assert np.all(samples[len(audio):] == 0)
+
+
+class TestAudioBoost:
+    def test_boosts_quiet_audio(self):
+        audio = np.array([100, -100, 200, -200], dtype=np.int16)
+
+        boosted = _boost_quiet_audio_for_whisper(audio, target_rms=1000.0, max_gain=8.0)
+
+        assert boosted.dtype == np.int16
+        boosted_rms = np.sqrt(np.mean(boosted.astype(np.float32) ** 2))
+        original_rms = np.sqrt(np.mean(audio.astype(np.float32) ** 2))
+        assert boosted_rms > original_rms
+
+    def test_leaves_loud_audio_unchanged(self):
+        audio = np.array([4000, -4000, 3000, -3000], dtype=np.int16)
+
+        boosted = _boost_quiet_audio_for_whisper(audio, target_rms=1000.0, max_gain=8.0)
+
+        assert np.array_equal(boosted, audio)
+
+    def test_leaves_silence_unchanged(self):
+        audio = np.zeros(1600, dtype=np.int16)
+
+        boosted = _boost_quiet_audio_for_whisper(audio)
+
+        assert np.array_equal(boosted, audio)
 
 
 class TestCleanupTailGuard:

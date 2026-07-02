@@ -18,6 +18,12 @@ _DEBUG_LOG.parent.mkdir(exist_ok=True)
 _MAX_LOG_SIZE = 1 * 1024 * 1024  # 1MB
 _MAX_TAIL_AUDIO_DEBUG_FILES = 5
 _TAIL_AUDIO_DEBUG_SECONDS = 20
+_HOST_API_PRIORITY = {
+    "Windows WASAPI": 0,
+    "Windows DirectSound": 1,
+    "MME": 2,
+    "Windows WDM-KS": 3,
+}
 
 def _rotate_log_if_needed():
     """Rotate debug.log if it exceeds max size."""
@@ -70,6 +76,90 @@ def _save_rolling_tail_audio(audio_data: np.ndarray, sample_rate: int):
         _debug(f"  Saved tail audio debug: {path}")
     except Exception as e:
         _debug(f"  Failed to save tail audio debug: {e}")
+
+
+def _normalise_sound_device(device):
+    """Convert numeric device config strings to PortAudio device indexes."""
+    if device in (None, "", "null"):
+        return None
+    if isinstance(device, str):
+        try:
+            return int(device)
+        except ValueError:
+            return device
+    return device
+
+
+def _input_device_candidates(preferred_device=None):
+    """Return input devices to try, preferring explicit/default then stable Windows APIs."""
+    seen = set()
+    candidates = []
+
+    def add(device):
+        key = ("default", None) if device is None else ("device", str(device))
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(device)
+
+    add(_normalise_sound_device(preferred_device))
+    add(None)
+
+    try:
+        hostapis = sd.query_hostapis()
+        devices = list(enumerate(sd.query_devices()))
+
+        def sort_key(item):
+            idx, info = item
+            api_name = hostapis[info.get("hostapi", -1)].get("name", "")
+            return (
+                _HOST_API_PRIORITY.get(api_name, 99),
+                not bool(info.get("name")),
+                str(info.get("name", "")).lower(),
+                idx,
+            )
+
+        for idx, info in sorted(devices, key=sort_key):
+            if int(info.get("max_input_channels") or 0) > 0:
+                add(idx)
+    except Exception as e:
+        _debug(f"  Could not enumerate fallback input devices: {e}")
+
+    return candidates
+
+
+def _device_label(device):
+    if device is None:
+        return "default"
+    try:
+        info = sd.query_devices(device)
+        return f"{device} ({info.get('name', 'unknown')})"
+    except Exception:
+        return str(device)
+
+
+def _open_input_stream(sample_rate: int, frame_size: int, sound_device, callback):
+    """Open a compatible input stream, falling back when Windows default is stale."""
+    last_error = None
+    for device in _input_device_candidates(sound_device):
+        try:
+            stream = sd.InputStream(
+                samplerate=sample_rate,
+                channels=1,
+                dtype='int16',
+                blocksize=frame_size,
+                device=device,
+                callback=callback,
+            )
+            _debug(f"  Audio stream selected: {_device_label(device)}")
+            return stream, device
+        except Exception as e:
+            last_error = e
+            _debug(f"  Audio stream failed for {_device_label(device)}: {e}")
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No input audio devices found")
 
 
 class ResultThread(QThread):
@@ -293,9 +383,16 @@ class ResultThread(QThread):
                 return False
 
             _debug("  Opening audio stream...")
-            with sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='int16',
-                                blocksize=frame_size, device=recording_options.get('sound_device'),
-                                callback=audio_callback):
+            stream, selected_device = _open_input_stream(
+                self.sample_rate,
+                frame_size,
+                recording_options.get('sound_device'),
+                audio_callback,
+            )
+            if selected_device != _normalise_sound_device(recording_options.get('sound_device')):
+                _debug(f"  Using fallback input device: {_device_label(selected_device)}")
+
+            with stream:
                 _debug("  Audio stream opened, entering recording loop")
                 while self.is_running and self.is_recording:
                     # Check for callback errors

@@ -155,6 +155,30 @@ def _ensure_int16(audio_data: np.ndarray) -> np.ndarray:
     return audio_data.astype(np.int16)
 
 
+def _boost_quiet_audio_for_whisper(
+    audio_int16: np.ndarray,
+    target_rms: float = 3000.0,
+    max_gain: float = 8.0,
+) -> np.ndarray:
+    """Boost quiet mic snippets before Whisper without clipping loud audio."""
+    if audio_int16.size == 0:
+        return audio_int16.astype(np.int16, copy=False)
+
+    audio_f = audio_int16.astype(np.float32)
+    rms = float(np.sqrt(np.mean(audio_f ** 2)))
+    if rms <= 1e-3 or rms >= target_rms:
+        return audio_int16.astype(np.int16, copy=False)
+
+    peak = float(np.max(np.abs(audio_f)))
+    clip_limited_gain = (32767.0 / peak) if peak > 0 else max_gain
+    gain = min(target_rms / rms, max_gain, clip_limited_gain)
+    if gain <= 1.0:
+        return audio_int16.astype(np.int16, copy=False)
+
+    _debug(f"  Boosting quiet audio for Whisper: rms={rms:.1f}, gain={gain:.2f}x")
+    return np.clip(audio_f * gain, -32768, 32767).astype(np.int16)
+
+
 def _groq_post(buf: io.BytesIO, data: dict, api_key: str, timeout: float):
     """Single Groq POST. Returns (parsed_response | None, error_str | None).
 
@@ -232,6 +256,7 @@ def _transcribe_groq_audio(
     sample_rate: int,
     timeout: float,
 ) -> str:
+    audio_int16 = _boost_quiet_audio_for_whisper(audio_int16)
     buf = _audio_to_wav_bytes(
         audio_int16,
         sample_rate=sample_rate,
