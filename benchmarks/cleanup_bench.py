@@ -24,7 +24,7 @@ MODELS = [
     {"key": "haiku-4-5",       "id": "anthropic/claude-haiku-4-5",            "providers": ["Anthropic"]},
     {"key": "sonnet-4-6",      "id": "anthropic/claude-sonnet-4-6",           "providers": ["Anthropic"]},
     {"key": "gemini-3.1-lite", "id": "google/gemini-3.1-flash-lite-preview",  "providers": ["Google AI Studio"]},
-    {"key": "gemini-3-flash",  "id": "google/gemini-3-flash-preview",         "providers": ["Google AI Studio"]},
+    {"key": "gemini-3.5-flash","id": "google/gemini-3.5-flash",               "providers": ["Google AI Studio"]},
     {"key": "gpt-5.4-mini",    "id": "openai/gpt-5.4-mini",                   "providers": ["OpenAI"]},
     {"key": "deepseek-v3.2",   "id": "deepseek/deepseek-v3.2",                "providers": ["Friendli"]},
 ]

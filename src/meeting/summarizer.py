@@ -1,9 +1,8 @@
 """
 AI summarization client using OpenRouter.
 
-Default model is anthropic/claude-sonnet-4-6 (still routes to Anthropic via
-OpenRouter — Sonnet remains the right call for long-form summary quality at
-once-per-meeting frequency). To switch models, change SummarizerClient.MODEL.
+Default model is google/gemini-3.5-flash via OpenRouter, pinned to Google AI
+Studio for stable routing. To switch models, change SummarizerClient.MODEL.
 """
 
 import time
@@ -17,8 +16,8 @@ import requests
 class SummarizerClient:
     """Client for AI-powered meeting summarization via OpenRouter."""
 
-    MODEL = "anthropic/claude-sonnet-4-6"
-    PROVIDER_PIN = {"order": ["Anthropic"], "allow_fallbacks": False}
+    MODEL = "google/gemini-3.5-flash"
+    PROVIDER_PIN = {"order": ["Google AI Studio"], "allow_fallbacks": False}
     MAX_RETRIES = 3
     INITIAL_RETRY_DELAY = 2.0  # seconds
     REQUEST_TIMEOUT = 300  # 5 minutes per attempt

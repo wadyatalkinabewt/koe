@@ -5,7 +5,7 @@ Flow:
   1. Open Scribe → notes textarea + participant field + REC button + timer
   2. REC → captures mic + loopback to temp WAVs (no live transcription)
   3. STOP → window collapses to progress indicator, worker thread kicks off
-  4. Worker: transcribe each stream against Groq, interleave segments,
+  4. Worker: transcribe each stream against the configured cloud backend, interleave segments,
      prompt for participant if missing, run summary, save 3 files
   5. Done indicator stays open until user clicks close
   6. Close = closes indicator only. Does NOT reopen Scribe.
@@ -80,7 +80,7 @@ class MeetingWorker(QThread):
 
     def run(self):
         try:
-            from transcription import transcribe_groq_segments
+            from transcription import transcribe_segments
             from meeting.summarizer import SummarizerClient
             from meeting.transcript import render_transcript
 
@@ -89,13 +89,13 @@ class MeetingWorker(QThread):
             mic_audio, mic_sr, mic_ch = load_wav_as_int16(self.mic_wav)
             if mic_sr != 16000 or mic_ch != 1:
                 mic_audio = preprocess_loopback(mic_audio, mic_sr, mic_ch, target_rate=16000)
-            mic_segments = transcribe_groq_segments(mic_audio, label=self.user_name)
+            mic_segments = transcribe_segments(mic_audio, label=self.user_name)
 
             # ----- transcribe loopback (preprocess to 16kHz mono first) -----
             self.status_signal.emit("Transcribing other audio...")
             lb_audio, lb_sr, lb_ch = load_wav_as_int16(self.loopback_wav)
             lb_audio_16k = preprocess_loopback(lb_audio, lb_sr, lb_ch, target_rate=16000)
-            lb_segments = transcribe_groq_segments(lb_audio_16k, label=self.participant)
+            lb_segments = transcribe_segments(lb_audio_16k, label=self.participant)
 
             all_segments = mic_segments + lb_segments
             if not all_segments:

@@ -1,12 +1,12 @@
 """
-Transcription pipeline — Groq Whisper + optional OpenRouter cleanup.
+Transcription pipeline — ElevenLabs Scribe v2/Groq + optional OpenRouter cleanup.
 
 Two entry points:
 - `transcribe(audio_data)` — snippet path (Koe hotkey). Returns flat polished string.
-- `transcribe_groq_segments(audio_data, label)` — meeting path (Scribe). Returns
+- `transcribe_segments(audio_data, label)` — meeting path (Scribe). Returns
   list of {start, end, text, label} with chunk-offset-corrected timestamps.
 
-Long audio (>10 min at 16kHz) is auto-chunked under Groq's 25MB upload limit.
+Long audio (>10 min at 16kHz) is auto-chunked for stable cloud requests.
 """
 
 import io
@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 import numpy as np
 import requests
+from dotenv import load_dotenv
 
 from utils import ConfigManager
 
@@ -96,7 +97,7 @@ def save_transcription_debug(raw: str, post_processed: str, final: str, duration
             f"# Snippet Debug\n\n"
             f"**Time:** {timestamp}\n"
             f"**Duration:** {duration_sec:.2f}s\n\n"
-            "## Raw Groq\n\n"
+            "## Raw Transcription\n\n"
             f"{(raw or '').strip()}\n\n"
             "## Post Processed\n\n"
             f"{(post_processed or '').strip()}\n\n"
@@ -116,6 +117,54 @@ GROQ_CHUNK_MAX_SAMPLES = GROQ_CHUNK_SECONDS * 16000
 GROQ_TRAILING_SILENCE_SEC = 2.0
 GROQ_TAIL_RETRY_SECONDS = 15.0
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+
+ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVENLABS_API_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+
+
+def _load_env():
+    load_dotenv(Path(__file__).parent.parent / ".env")
+
+
+def _transcription_provider() -> str:
+    provider = ConfigManager.get_config_value('model_options', 'transcription_provider')
+    return (provider or 'elevenlabs').strip().lower()
+
+
+def _api_key_from_env(*names: str) -> str:
+    _load_env()
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return ''
+
+
+def _initial_prompt_keyterms() -> list[str]:
+    """Convert the shared vocab hint into ElevenLabs keyterms."""
+    model_options = ConfigManager.get_config_section('model_options') or {}
+    common = model_options.get('common', {}) or {}
+    initial_prompt = common.get('initial_prompt') or ''
+    if not initial_prompt:
+        return []
+
+    keyterms: list[str] = []
+    seen: set[str] = set()
+    for raw_term in re.split(r"[,;\n]", str(initial_prompt)):
+        term = raw_term.strip().strip(".")
+        term = re.sub(r"\s+", " ", term)
+        if not term or re.search(r"[<>{}\[\]\\]", term):
+            continue
+        if len(term.split()) > 5 or len(term) >= 50:
+            continue
+        lower = term.lower()
+        if lower in seen:
+            continue
+        keyterms.append(term)
+        seen.add(lower)
+        if len(keyterms) >= 1000:
+            break
+    return keyterms
 
 
 def _chunk_max_samples(sample_rate: int) -> int:
@@ -249,6 +298,129 @@ def _groq_result_text(result) -> str:
     )
 
 
+def _elevenlabs_request_data() -> list[tuple[str, str]]:
+    """Build form fields for ElevenLabs Scribe v2 from current config."""
+    model_options = ConfigManager.get_config_section('model_options') or {}
+    common = model_options.get('common', {}) or {}
+    elevenlabs = model_options.get('elevenlabs', {}) or {}
+
+    data = [
+        ("model_id", elevenlabs.get("model_id") or "scribe_v2"),
+        ("language_code", common.get('language') or 'en'),
+        ("tag_audio_events", "false"),
+        ("timestamps_granularity", "word"),
+        ("diarize", "false"),
+        ("num_speakers", "1"),
+        ("temperature", str(elevenlabs.get("temperature", 0.0))),
+        ("file_format", "other"),
+        ("no_verbatim", "false"),
+    ]
+
+    if elevenlabs.get("keyterms_enabled", True):
+        data.extend(("keyterms", term) for term in _initial_prompt_keyterms())
+    return data
+
+
+def _elevenlabs_result_text(result) -> str:
+    if not isinstance(result, dict):
+        return ''
+    return str(result.get("text") or '').strip()
+
+
+def _elevenlabs_post(buf: io.BytesIO, data: list[tuple[str, str]], api_key: str, timeout: float):
+    """Single ElevenLabs STT POST. Returns (parsed_response | None, error_str | None)."""
+    try:
+        response = requests.post(
+            ELEVENLABS_URL,
+            headers={"xi-api-key": api_key},
+            files={"file": ("audio.wav", buf, "audio/wav")},
+            data=data,
+            timeout=timeout,
+        )
+    except requests.Timeout:
+        return None, "ElevenLabs timeout"
+    except requests.RequestException as e:
+        return None, f"ElevenLabs request error: {e}"
+
+    try:
+        result = response.json()
+    except ValueError:
+        result = {"_raw": response.text[:500]}
+
+    if response.status_code != 200:
+        return None, f"ElevenLabs HTTP {response.status_code}: {response.text[:300]}"
+    return result, None
+
+
+def _transcribe_elevenlabs_audio(
+    audio_int16: np.ndarray,
+    data: list[tuple[str, str]],
+    api_key: str,
+    sample_rate: int,
+    timeout: float,
+) -> dict:
+    audio_int16 = _boost_quiet_audio_for_whisper(audio_int16)
+    buf = _audio_to_wav_bytes(audio_int16, sample_rate=sample_rate)
+    result, err = _elevenlabs_post(buf, data, api_key, timeout=timeout)
+    if err:
+        _debug(f"  ElevenLabs error: {err}")
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _segments_from_elevenlabs_words(result: dict, label: str, offset_sec: float = 0.0) -> list[dict]:
+    words = result.get("words") if isinstance(result, dict) else None
+    if not isinstance(words, list):
+        text = _elevenlabs_result_text(result)
+        if not text:
+            return []
+        return [{"start": offset_sec, "end": offset_sec, "text": text, "label": label}]
+
+    segments: list[dict] = []
+    current_words: list[str] = []
+    current_start: float | None = None
+    current_end = 0.0
+    last_end: float | None = None
+
+    def flush():
+        nonlocal current_words, current_start, current_end
+        text = " ".join(current_words).strip()
+        if text and current_start is not None:
+            segments.append({
+                "start": current_start + offset_sec,
+                "end": current_end + offset_sec,
+                "text": text,
+                "label": label,
+            })
+        current_words = []
+        current_start = None
+        current_end = 0.0
+
+    for word in words:
+        if not isinstance(word, dict) or word.get("type") not in (None, "word"):
+            continue
+        text = str(word.get("text") or '').strip()
+        if not text:
+            continue
+        start = float(word.get("start") or 0.0)
+        end = float(word.get("end") or start)
+
+        if current_words and last_end is not None and start - last_end > 1.2:
+            flush()
+
+        if current_start is None:
+            current_start = start
+        current_words.append(text)
+        current_end = end
+        last_end = end
+
+        if text.endswith((".", "?", "!")) or len(current_words) >= 28:
+            flush()
+
+    flush()
+    return segments
+
+
 def _transcribe_groq_audio(
     audio_int16: np.ndarray,
     data: dict,
@@ -370,6 +542,47 @@ def transcribe_groq(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
     return full_text
 
 
+def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
+    """Snippet-style transcription via ElevenLabs Scribe v2."""
+    _debug("transcribe_elevenlabs() STARTED")
+    api_key = _api_key_from_env(*ELEVENLABS_API_KEY_NAMES)
+    if not api_key:
+        _debug("  ERROR: ELEVENLABS_API_KEY not set")
+        ConfigManager.console_print("Error: ELEVENLABS_API_KEY not set in .env")
+        return ''
+
+    sample_rate = int(sample_rate or 16000)
+    audio_int16 = _ensure_int16(audio_data)
+    data = _elevenlabs_request_data()
+    total = len(audio_int16)
+    max_samples = _chunk_max_samples(sample_rate)
+
+    if total <= max_samples:
+        result = _transcribe_elevenlabs_audio(audio_int16, data, api_key, sample_rate, timeout=120)
+        text = _elevenlabs_result_text(result)
+    else:
+        num_chunks = (total + max_samples - 1) // max_samples
+        _debug(f"  Long audio ({total/sample_rate:.0f}s), {num_chunks} chunks")
+        parts = []
+        for i in range(num_chunks):
+            start = i * max_samples
+            end = min(start + max_samples, total)
+            result = _transcribe_elevenlabs_audio(
+                audio_int16[start:end],
+                data,
+                api_key,
+                sample_rate,
+                timeout=180,
+            )
+            chunk_text = _elevenlabs_result_text(result)
+            if chunk_text:
+                parts.append(chunk_text)
+        text = ' '.join(p.strip() for p in parts if p)
+
+    _debug(f"transcribe_elevenlabs() FINISHED, {len(text)} chars")
+    return text
+
+
 def transcribe_groq_segments(audio_data: np.ndarray, label: str = "Speaker", sample_rate: int = 16000) -> list[dict]:
     """Meeting-style transcription with sentence-level timestamps.
 
@@ -427,6 +640,65 @@ def transcribe_groq_segments(audio_data: np.ndarray, label: str = "Speaker", sam
     return segments_out
 
 
+def transcribe_elevenlabs_segments(audio_data: np.ndarray, label: str = "Speaker", sample_rate: int = 16000) -> list[dict]:
+    """Meeting-style transcription with word-derived timestamps via ElevenLabs."""
+    _debug(f"transcribe_elevenlabs_segments() STARTED label={label}")
+    api_key = _api_key_from_env(*ELEVENLABS_API_KEY_NAMES)
+    if not api_key:
+        _debug("  ERROR: ELEVENLABS_API_KEY not set")
+        return []
+
+    sample_rate = int(sample_rate or 16000)
+    audio_int16 = _ensure_int16(audio_data)
+    data = _elevenlabs_request_data()
+    total = len(audio_int16)
+    max_samples = _chunk_max_samples(sample_rate)
+    chunk_count = (total + max_samples - 1) // max_samples if total else 0
+
+    segments_out: list[dict] = []
+    for i in range(chunk_count):
+        start_sample = i * max_samples
+        end_sample = min(start_sample + max_samples, total)
+        chunk_offset_sec = start_sample / sample_rate
+        result = _transcribe_elevenlabs_audio(
+            audio_int16[start_sample:end_sample],
+            data,
+            api_key,
+            sample_rate,
+            timeout=180,
+        )
+        if not result:
+            continue
+
+        from utils import TextProcessor
+
+        segments = _segments_from_elevenlabs_words(result, label=label, offset_sec=chunk_offset_sec)
+        for seg in segments:
+            text = TextProcessor.remove_filler_words(seg.get("text", "").strip())
+            if not text:
+                continue
+            seg = dict(seg)
+            seg["text"] = text
+            segments_out.append(seg)
+        _debug(f"  Chunk {i+1}/{chunk_count}: {len(segments)} segments")
+
+    _debug(f"transcribe_elevenlabs_segments() FINISHED, {len(segments_out)} total segments")
+    return segments_out
+
+
+def transcribe_segments(audio_data: np.ndarray, label: str = "Speaker", sample_rate: int = 16000) -> list[dict]:
+    """Meeting path routed by configured transcription provider."""
+    provider = _transcription_provider()
+    if provider == "groq":
+        return transcribe_groq_segments(audio_data, label=label, sample_rate=sample_rate)
+    if provider == "elevenlabs":
+        return transcribe_elevenlabs_segments(audio_data, label=label, sample_rate=sample_rate)
+
+    _debug(f"  Unknown transcription provider: {provider}")
+    ConfigManager.console_print(f"Error: unknown transcription provider '{provider}'")
+    return []
+
+
 # ---------- post-processing & cleanup ----------
 
 def post_process_transcription(transcription: str) -> str:
@@ -482,6 +754,7 @@ def _cleanup_preserves_tail(original: str, cleaned: str, tail_words: int = 12) -
 def _provider_pin_for_model(model_id: str):
     """OpenRouter provider pin per model. None = let OpenRouter pick."""
     pins = {
+        "google/gemini-3.5-flash":               ["Google AI Studio"],
         "google/gemini-3-flash-preview":         ["Google AI Studio"],
         "google/gemini-3.1-flash-lite-preview":  ["Google AI Studio"],
         "anthropic/claude-haiku-4-5":            ["Anthropic"],
@@ -506,7 +779,7 @@ def ai_cleanup_transcription(text: str) -> str:
             _debug("  No OPENROUTER_API_KEY, skipping cleanup")
             return text
 
-        model = ConfigManager.get_config_value('post_processing', 'ai_cleanup_model') or 'google/gemini-3-flash-preview'
+        model = ConfigManager.get_config_value('post_processing', 'ai_cleanup_model') or 'google/gemini-3.5-flash'
         prompt_prefix = ConfigManager.get_config_value('post_processing', 'ai_cleanup_prompt') or (
             "Clean up this transcription. Fix grammar, add proper punctuation, and remove filler words.\n\n"
             "Output ONLY the cleaned text, nothing else (no quotes, no explanation).\n\nTranscription:\n"
@@ -557,7 +830,7 @@ def ai_cleanup_transcription(text: str) -> str:
 # ---------- top-level snippet entry point ----------
 
 def transcribe(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
-    """Snippet path: Groq → regex post-process → optional cleanup → save → return."""
+    """Snippet path: provider STT -> regex post-process -> optional cleanup -> save -> return."""
     _debug("transcribe() STARTED")
     if audio_data is None:
         return ''
@@ -566,7 +839,16 @@ def transcribe(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
     audio_duration_sec = len(audio_data) / sample_rate
     _debug(f"  Duration: {audio_duration_sec:.1f}s")
 
-    raw = transcribe_groq(audio_data, sample_rate=sample_rate)
+    provider = _transcription_provider()
+    _debug(f"  Provider: {provider}")
+    if provider == "groq":
+        raw = transcribe_groq(audio_data, sample_rate=sample_rate)
+    elif provider == "elevenlabs":
+        raw = transcribe_elevenlabs(audio_data, sample_rate=sample_rate)
+    else:
+        _debug(f"  Unknown transcription provider: {provider}")
+        ConfigManager.console_print(f"Error: unknown transcription provider '{provider}'")
+        raw = ''
     _debug(f"  Raw: {len(raw)} chars")
 
     post_processed = post_process_transcription(raw)

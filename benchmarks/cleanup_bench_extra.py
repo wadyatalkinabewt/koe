@@ -12,7 +12,7 @@ API_KEY = os.environ["OPENROUTER_API_KEY"]
 
 def main():
     bench_dir = Path(__file__).parent
-    top3 = ["gemini-3-flash", "sonnet-4-6", "deepseek-v3.2"]
+    top3 = ["gemini-3.5-flash", "sonnet-4-6", "deepseek-v3.2"]
     top3_models = [m for m in MODELS if m["key"] in top3]
 
     # Tiebreaker: 2 additional runs (run_idx 1 and 2) for top 3 = 90 calls
@@ -37,8 +37,8 @@ def main():
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     print(f"Wrote {len(results)} tiebreaker results to {out_tb}")
 
-    # Sanity: winner candidate (gemini-3-flash) on no-glossary regime, 15 calls
-    winner_model = next(m for m in MODELS if m["key"] == "gemini-3-flash")
+    # Sanity: current cleanup candidate on no-glossary regime, 15 calls
+    winner_model = next(m for m in MODELS if m["key"] == "gemini-3.5-flash")
     print(f"\nNo-glossary sanity check: {len(SAMPLES)} calls for {winner_model['key']}")
     sanity = []
     with ThreadPoolExecutor(max_workers=10) as ex:

@@ -1,4 +1,4 @@
-"""Swearing spot-check — gemini-3-flash-preview, locked production prompt."""
+"""Swearing spot-check — gemini-3.5-flash, locked production prompt."""
 
 import os
 import json
@@ -12,7 +12,7 @@ from cleanup_bench import GLOSSARY, PROMPT, MODELS
 API_KEY = os.environ["OPENROUTER_API_KEY"]
 URL = "https://openrouter.ai/api/v1/chat/completions"
 
-WINNER = next(m for m in MODELS if m["key"] == "gemini-3-flash")
+WINNER = next(m for m in MODELS if m["key"] == "gemini-3.5-flash")
 
 SWEARING_SAMPLES = [
     {"id": "A", "domain": "tradie-frustrated",

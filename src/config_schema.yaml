@@ -12,17 +12,37 @@ meeting_options:
     type: str
     description: "Root folder for meeting recordings. Defaults to <koe-repo>/Meetings."
 
-# Transcription (Groq cloud)
+# Transcription cloud backend
 model_options:
+  transcription_provider:
+    value: elevenlabs
+    type: str
+    description: "Speech-to-text backend. No automatic fallback is used."
+    options:
+      - elevenlabs
+      - groq
   common:
     language:
       value: en
       type: str
-      description: "ISO-639-1 language code passed to Groq Whisper. null = auto-detect."
+      description: "ISO-639-1 language code passed to speech-to-text. null = auto-detect where supported."
     initial_prompt:
       value: null
       type: str
-      description: "Vocab/style hint passed to Whisper. Comma-separated proper nouns work best."
+      description: "Vocab/style hint. For ElevenLabs, comma-separated entries are sent as keyterms."
+  elevenlabs:
+    model_id:
+      value: scribe_v2
+      type: str
+      description: "ElevenLabs speech-to-text model ID."
+    keyterms_enabled:
+      value: true
+      type: bool
+      description: "Send common.initial_prompt entries as ElevenLabs keyterms. This may add STT surcharge."
+    temperature:
+      value: 0.0
+      type: float
+      description: "ElevenLabs STT temperature."
 
 # Activation + recording
 recording_options:
@@ -75,15 +95,15 @@ post_processing:
     type: bool
     description: "Append a trailing space to snippets so they paste cleanly."
   ai_cleanup_enabled:
-    value: true
+    value: false
     type: bool
-    description: "Use OpenRouter to clean up snippet grammar/punctuation. Requires OPENROUTER_API_KEY."
+    description: "Use OpenRouter to clean up snippet grammar/punctuation. Disabled by default; requires OPENROUTER_API_KEY."
   ai_cleanup_threshold:
     value: 10
     type: int
     description: "Minimum snippet duration (seconds) before cleanup is applied. 0 = always."
   ai_cleanup_model:
-    value: google/gemini-3-flash-preview
+    value: google/gemini-3.5-flash
     type: str
     description: "OpenRouter model slug for cleanup. See benchmarks/cleanup_bench.py for the model selection rationale."
   ai_cleanup_prompt:

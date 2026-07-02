@@ -10,16 +10,20 @@ import numpy as np
 
 # Import the module under test
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+import transcription
 from transcription import (
     _audio_to_wav_bytes,
     _boost_quiet_audio_for_whisper,
     _chunk_max_samples,
     _cleanup_preserves_tail,
+    _elevenlabs_request_data,
+    _segments_from_elevenlabs_words,
     _merge_tail_retry,
     ensure_ending_punctuation,
     post_process_transcription,
     remove_filler_words,
 )
+from utils import ConfigManager
 
 
 class TestRemoveFillerWords:
@@ -217,3 +221,68 @@ class TestTailRetryMerge:
         assert _merge_tail_retry(full, tail) == (
             "Please check the docs and then update the final section before you finish."
         )
+
+
+class TestElevenLabsTranscription:
+    def test_request_data_uses_scribe_v2_and_keyterms(self, monkeypatch):
+        manager = ConfigManager()
+        manager.config = {
+            "model_options": {
+                "common": {
+                    "language": "en",
+                    "initial_prompt": "Alex, Acme, Civis, bad [term], this term is too long for keyterms",
+                },
+                "elevenlabs": {
+                    "model_id": "scribe_v2",
+                    "keyterms_enabled": True,
+                    "temperature": 0.0,
+                },
+            },
+        }
+        monkeypatch.setattr(ConfigManager, "_instance", manager)
+
+        data = _elevenlabs_request_data()
+
+        assert ("model_id", "scribe_v2") in data
+        assert ("language_code", "en") in data
+        assert ("keyterms", "Alex") in data
+        assert ("keyterms", "Acme") in data
+        assert ("keyterms", "bad [term]") not in data
+
+    def test_segments_from_elevenlabs_words_preserve_timestamps(self):
+        result = {
+            "words": [
+                {"text": "Hello", "start": 0.1, "end": 0.4, "type": "word"},
+                {"text": "world.", "start": 0.5, "end": 0.8, "type": "word"},
+                {"text": "Next", "start": 2.4, "end": 2.7, "type": "word"},
+                {"text": "bit", "start": 2.8, "end": 3.1, "type": "word"},
+            ]
+        }
+
+        segments = _segments_from_elevenlabs_words(result, label="Alex", offset_sec=10.0)
+
+        assert segments == [
+            {"start": 10.1, "end": 10.8, "text": "Hello world.", "label": "Alex"},
+            {"start": 12.4, "end": 13.1, "text": "Next bit", "label": "Alex"},
+        ]
+
+    def test_transcribe_routes_to_elevenlabs_without_groq_fallback(self, monkeypatch):
+        manager = ConfigManager()
+        manager.config = {
+            "model_options": {"transcription_provider": "elevenlabs"},
+            "post_processing": {"ai_cleanup_enabled": False, "ai_cleanup_threshold": 10},
+            "misc": {"print_to_terminal": False, "snippets_folder": None},
+        }
+        monkeypatch.setattr(ConfigManager, "_instance", manager)
+        monkeypatch.setattr(transcription, "transcribe_elevenlabs", lambda *_args, **_kwargs: "hello world")
+        monkeypatch.setattr(
+            transcription,
+            "transcribe_groq",
+            lambda *_args, **_kwargs: pytest.fail("Groq should not be used as fallback"),
+        )
+        monkeypatch.setattr(transcription, "save_rolling_transcription", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(transcription, "save_transcription_debug", lambda *_args, **_kwargs: None)
+
+        result = transcription.transcribe(np.array([1, -1], dtype=np.int16), sample_rate=16000)
+
+        assert result == "hello world. "

@@ -207,20 +207,20 @@ def diarize(audio_path: Path, num_speakers: int) -> list[dict]:
 def transcribe_with_koe(audio_path: Path) -> list[dict]:
     load_dotenv(KOE_DIR / ".env")
     sys.path.insert(0, str(SRC_DIR))
-    from transcription import transcribe_groq_segments
+    from transcription import transcribe_segments
 
     audio, sample_rate = sf.read(str(audio_path), dtype="int16")
     if audio.ndim > 1:
         audio = audio.mean(axis=1).astype(np.int16)
 
-    log("Running Koe/Groq transcription")
-    segments = transcribe_groq_segments(audio, label="Speaker", sample_rate=sample_rate)
+    log("Running Koe transcription")
+    segments = transcribe_segments(audio, label="Speaker", sample_rate=sample_rate)
     cleaned = [
         {"start": float(seg["start"]), "end": float(seg["end"]), "text": str(seg["text"]).strip()}
         for seg in segments
         if str(seg.get("text", "")).strip()
     ]
-    log(f"Koe/Groq produced {len(cleaned)} transcript segments")
+    log(f"Koe produced {len(cleaned)} transcript segments")
     return cleaned
 
 
@@ -480,7 +480,7 @@ def run_render_only(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Transcribe existing meeting recordings with alignment, pyannote diarization, and Koe/Groq."
+        description="Transcribe existing meeting recordings with alignment, pyannote diarization, and Koe."
     )
     parser.add_argument("audio_files", nargs="*", help="Input audio/video recordings to align and mix.")
     parser.add_argument("--meeting-name", default="Meeting", help="Name used in transcript heading and folder slug.")

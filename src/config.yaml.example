@@ -15,13 +15,14 @@ recording_options:
   filter_snippets_to_my_voice: false
 
 model_options:
+  transcription_provider: elevenlabs # elevenlabs or groq. No automatic fallback.
   common:
     language: null         # Auto-detect, or set to "en", "es", etc.
-    initial_prompt: "Use proper punctuation including periods, commas, and question marks."
-  local:
-    model: large-v3
-    device: auto           # auto, cuda, or cpu
-    vad_filter: true
+    initial_prompt: "Alex, Acme, Civis, Hetzner, Hermes, Koe"
+  elevenlabs:
+    model_id: scribe_v2
+    keyterms_enabled: true # Sends initial_prompt entries as keyterms; may add STT surcharge.
+    temperature: 0.0
 
 misc:
   noise_on_completion: true

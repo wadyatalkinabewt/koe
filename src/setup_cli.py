@@ -2,12 +2,12 @@
 Koe first-time setup — minimal terminal flow.
 
 Asks for:
-  1. Groq API key (required, used for transcription)
-  2. OpenRouter key (optional, used for AI cleanup of long snippets and meeting summaries)
+  1. ElevenLabs API key (required, used for transcription)
+  2. OpenRouter key (optional, used for meeting summaries and cleanup benchmarks)
   3. User name (labels your voice in Scribe transcripts)
 
 Writes .env and src/config.yaml, then exits. No model downloads, no GPU
-checks — Groq is cloud-only.
+checks — transcription is cloud-only.
 """
 
 import os
@@ -35,8 +35,10 @@ def _input(prompt: str, default: str = "") -> str:
     return val if val else default
 
 
-def _save_env(groq_key: str, openrouter_key: str):
+def _save_env(elevenlabs_key: str, openrouter_key: str, groq_key: str = ""):
     env_lines = []
+    if elevenlabs_key:
+        env_lines.append(f"ELEVENLABS_API_KEY={elevenlabs_key}")
     if groq_key:
         env_lines.append(f"GROQ_API_KEY={groq_key}")
     if openrouter_key:
@@ -58,17 +60,23 @@ def _save_config(user_name: str):
             "silence_duration": 900,
         },
         "model_options": {
+            "transcription_provider": "elevenlabs",
             "common": {
                 "language": None,
                 "initial_prompt": (
                     "Use proper punctuation including periods, commas, and question marks."
                 ),
             },
+            "elevenlabs": {
+                "model_id": "scribe_v2",
+                "keyterms_enabled": True,
+                "temperature": 0.0,
+            },
         },
         "post_processing": {
-            "ai_cleanup_enabled": True,
+            "ai_cleanup_enabled": False,
             "ai_cleanup_threshold": 10,
-            "ai_cleanup_model": "google/gemini-3-flash-preview",
+            "ai_cleanup_model": "google/gemini-3.5-flash",
         },
         "misc": {
             "noise_on_completion": True,
@@ -98,19 +106,19 @@ def run_setup():
     Cloud speech-to-text setup
     """)
 
-    _print_header("1. Groq API key (required)")
-    print("Groq runs Whisper Large v3 on their servers — no local GPU needed.")
-    print("Get a key at: https://console.groq.com/keys")
+    _print_header("1. ElevenLabs API key (required)")
+    print("ElevenLabs runs Scribe v2 on their servers — no local GPU needed.")
+    print("Get a key at: https://elevenlabs.io/app/settings/api-keys")
     print()
-    groq_key = ""
-    while not groq_key:
-        groq_key = _input("Enter Groq API key")
-        if not groq_key:
-            print("Groq key is required for transcription.")
+    elevenlabs_key = ""
+    while not elevenlabs_key:
+        elevenlabs_key = _input("Enter ElevenLabs API key")
+        if not elevenlabs_key:
+            print("ElevenLabs key is required for transcription.")
 
     _print_header("2. OpenRouter API key (optional)")
-    print("OpenRouter powers AI cleanup of long snippets and meeting summaries.")
-    print("Skip if you don't want either feature — Groq transcription works without it.")
+    print("OpenRouter powers meeting summaries and optional cleanup benchmarks.")
+    print("Skip if you don't want either feature — transcription works without it.")
     print("Get a key at: https://openrouter.ai/keys")
     print()
     openrouter_key = _input("Enter OpenRouter API key (or press Enter to skip)")
@@ -125,7 +133,7 @@ def run_setup():
             print("Name is required.")
 
     _print_header("Saving config")
-    _save_env(groq_key, openrouter_key)
+    _save_env(elevenlabs_key, openrouter_key)
     _save_config(user_name)
     (KOE_DIR / ".setup_complete").touch()
     print("Done.")

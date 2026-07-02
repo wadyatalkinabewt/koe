@@ -1,12 +1,13 @@
 """
-Settings window — minimal Groq-only config.
+Settings window — minimal cloud-transcription config.
 
 Exposes the handful of things that change at runtime:
   - Profile (your name)
   - Output folders (meetings, snippets)
   - Recording (hotkey, beep on completion)
+  - Transcription backend
   - AI cleanup (toggle, threshold, model, prompt prefix)
-  - Whisper initial_prompt (vocab hint)
+  - STT vocab hint
 """
 
 import sys
@@ -17,6 +18,7 @@ from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import (
     QApplication, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QCheckBox, QWidget, QScrollArea, QFileDialog, QTextEdit, QSpinBox,
+    QComboBox,
 )
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -63,7 +65,7 @@ class SettingsWindow(BaseWindow):
                 font-family: 'Cascadia Code', Consolas, monospace;
             }}
             QLabel {{ color: {theme.TEXT_COLOR}; }}
-            QLineEdit, QTextEdit, QSpinBox {{
+            QLineEdit, QTextEdit, QSpinBox, QComboBox {{
                 background-color: {theme.INPUT_BG};
                 color: {theme.TEXT_COLOR};
                 border: 1px solid {theme.INPUT_BORDER};
@@ -72,9 +74,10 @@ class SettingsWindow(BaseWindow):
                 font-family: 'Cascadia Code', Consolas, monospace;
                 font-size: 10pt;
             }}
-            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {{
+            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QComboBox:focus {{
                 border: 1px solid {theme.INPUT_FOCUS_BORDER};
             }}
+            QComboBox::drop-down {{ border: none; width: 24px; }}
             QPushButton {{
                 background-color: {theme.BUTTON_BG};
                 color: {theme.TEXT_COLOR};
@@ -147,6 +150,17 @@ class SettingsWindow(BaseWindow):
         self.beep_checkbox = QCheckBox("Play sound on snippet completion")
         layout.addWidget(self.beep_checkbox)
 
+        # ----- transcription -----
+        layout.addWidget(self._section_label("TRANSCRIPTION"))
+        layout.addWidget(_label("Backend", theme.SECONDARY_TEXT, 9))
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItem("ElevenLabs Scribe v2", "elevenlabs")
+        self.provider_combo.addItem("Groq Whisper Large v3", "groq")
+        layout.addWidget(self.provider_combo)
+
+        self.keyterms_checkbox = QCheckBox("Send vocab hint as ElevenLabs keyterms")
+        layout.addWidget(self.keyterms_checkbox)
+
         # ----- AI cleanup -----
         layout.addWidget(self._section_label("AI CLEANUP (snippets)"))
         self.cleanup_enabled_checkbox = QCheckBox("Enable AI cleanup")
@@ -163,7 +177,7 @@ class SettingsWindow(BaseWindow):
 
         layout.addWidget(_label("Cleanup model (OpenRouter slug)", theme.SECONDARY_TEXT, 9))
         self.cleanup_model_input = QLineEdit()
-        self.cleanup_model_input.setPlaceholderText("google/gemini-3-flash-preview")
+        self.cleanup_model_input.setPlaceholderText("google/gemini-3.5-flash")
         layout.addWidget(self.cleanup_model_input)
 
         layout.addWidget(_label("Cleanup prompt prefix", theme.SECONDARY_TEXT, 9))
@@ -172,9 +186,9 @@ class SettingsWindow(BaseWindow):
         self.cleanup_prompt_edit.setMinimumHeight(140)
         layout.addWidget(self.cleanup_prompt_edit)
 
-        # ----- whisper hint -----
-        layout.addWidget(self._section_label("WHISPER VOCAB HINT"))
-        layout.addWidget(_label("Comma-separated proper nouns to bias Whisper", theme.SECONDARY_TEXT, 9))
+        # ----- STT hint -----
+        layout.addWidget(self._section_label("STT VOCAB HINT"))
+        layout.addWidget(_label("Comma-separated proper nouns to bias transcription", theme.SECONDARY_TEXT, 9))
         self.initial_prompt_edit = QTextEdit()
         self.initial_prompt_edit.setAcceptRichText(False)
         self.initial_prompt_edit.setMinimumHeight(80)
@@ -233,6 +247,12 @@ class SettingsWindow(BaseWindow):
         self.beep_checkbox.setChecked(
             bool(ConfigManager.get_config_value("misc", "noise_on_completion"))
         )
+        provider = ConfigManager.get_config_value("model_options", "transcription_provider") or "elevenlabs"
+        provider_idx = self.provider_combo.findData(provider)
+        self.provider_combo.setCurrentIndex(provider_idx if provider_idx >= 0 else 0)
+        self.keyterms_checkbox.setChecked(
+            bool(ConfigManager.get_config_value("model_options", "elevenlabs", "keyterms_enabled"))
+        )
 
         self.cleanup_enabled_checkbox.setChecked(
             bool(ConfigManager.get_config_value("post_processing", "ai_cleanup_enabled"))
@@ -261,13 +281,17 @@ class SettingsWindow(BaseWindow):
                                        "recording_options", "activation_key")
         ConfigManager.set_config_value(self.beep_checkbox.isChecked(),
                                        "misc", "noise_on_completion")
+        ConfigManager.set_config_value(self.provider_combo.currentData() or "elevenlabs",
+                                       "model_options", "transcription_provider")
+        ConfigManager.set_config_value(self.keyterms_checkbox.isChecked(),
+                                       "model_options", "elevenlabs", "keyterms_enabled")
 
         ConfigManager.set_config_value(self.cleanup_enabled_checkbox.isChecked(),
                                        "post_processing", "ai_cleanup_enabled")
         ConfigManager.set_config_value(self.threshold_spin.value(),
                                        "post_processing", "ai_cleanup_threshold")
         ConfigManager.set_config_value(
-            self.cleanup_model_input.text().strip() or "google/gemini-3-flash-preview",
+            self.cleanup_model_input.text().strip() or "google/gemini-3.5-flash",
             "post_processing", "ai_cleanup_model",
         )
         ConfigManager.set_config_value(self.cleanup_prompt_edit.toPlainText() or None,

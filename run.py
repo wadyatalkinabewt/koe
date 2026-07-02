@@ -1,5 +1,5 @@
 """
-Koe - Local speech-to-text with speaker identification.
+Koe - Cloud speech-to-text with snippet and meeting modes.
 
 Entry point that checks for first-time setup and runs the appropriate mode.
 """
@@ -19,15 +19,14 @@ def needs_setup() -> bool:
     if (koe_dir / ".setup_complete").exists():
         return False
 
-    # Check for existing config with WHISPER_MODEL (new setup) or HF_TOKEN (old setup)
+    # Check for existing config with a cloud transcription key.
     env_path = koe_dir / ".env"
     config_path = koe_dir / "src" / "config.yaml"
 
     if env_path.exists() and config_path.exists():
         with open(env_path) as f:
             content = f.read()
-            # New setup saves WHISPER_MODEL, old setup required HF_TOKEN
-            if "WHISPER_MODEL=" in content or "HF_TOKEN=hf_" in content:
+            if "ELEVENLABS_API_KEY=" in content or "GROQ_API_KEY=" in content:
                 # Has valid config, mark as complete
                 (koe_dir / ".setup_complete").touch()
                 return False
