@@ -1,17 +1,14 @@
-"""
-Scribe — minimal meeting transcription UI.
+"""Scribe meeting-mode UI and background transcription workflow.
 
-Flow:
-  1. Open Scribe → notes textarea + participant field + REC button + timer
-  2. REC → captures mic + loopback to temp WAVs (no live transcription)
-  3. STOP → window collapses to progress indicator, worker thread kicks off
-  4. Worker: transcribe each stream against the configured cloud backend, interleave segments,
-     prompt for participant if missing, run summary, save 3 files
-  5. Done indicator stays open until user clicks close
-  6. Close = closes indicator only. Does NOT reopen Scribe.
+One-on-one meetings use deterministic microphone/loopback labels. Group
+meetings keep the microphone owner deterministic and diarize the loopback file
+with ElevenLabs speaker-library matching. Completed meetings may optionally
+retain both original source WAVs; they are never merged.
 """
 
 import sys
+import os
+import re
 import socket
 import shutil
 import tempfile
@@ -19,18 +16,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal, QUrl
-from PyQt5.QtGui import QIcon, QDesktopServices
+from PyQt5.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal, QUrl
+from PyQt5.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QInputDialog, QMessageBox,
+    QStackedWidget, QFrame,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from compat import set_app_user_model_id
+from compat import apply_window_icon, enable_dark_titlebar, set_app_user_model_id
 from utils import ConfigManager
+from ui import theme
 from ui.theme import (
     BG_COLOR, TEXT_COLOR, SECONDARY_TEXT, DIM_TEXT,
     RECORDING_COLOR, INPUT_BG, INPUT_BORDER, INPUT_FOCUS_BORDER,
@@ -39,6 +38,12 @@ from ui.theme import (
     SCROLLBAR_HANDLE_HOVER,
 )
 from meeting.capture import AudioCapture, load_wav_as_int16, preprocess_loopback
+
+
+MODE_ONE_ON_ONE = "one_on_one"
+MODE_GROUP = "group"
+SCRIBE_APP_ID = "Koe.Scribe.App"
+SCRIBE_ICON = PROJECT_ROOT / "assets" / "koe-icon.ico"
 
 
 # ---------- single-instance lock ----------
@@ -56,6 +61,159 @@ def acquire_scribe_lock() -> Optional[socket.socket]:
         return None
 
 
+class MeetingModeDialog(QDialog):
+    """Choose the meeting attribution mode before the Scribe window opens."""
+
+    def __init__(self):
+        super().__init__()
+        self.selected_mode: Optional[str] = None
+        self.setWindowTitle("Start Scribe")
+        self.setWindowFlags(
+            (self.windowFlags() | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+            & ~Qt.WindowContextHelpButtonHint
+        )
+        self.setFixedSize(440, 176)
+        self.setStyleSheet(theme.application_stylesheet() + f"""
+            QFrame#modeOptions {{
+                background: {theme.SURFACE_COLOR};
+                border: 1px solid {theme.BORDER_COLOR};
+                border-radius: 10px;
+            }}
+            QFrame#modeSeparator {{
+                background: {theme.BORDER_COLOR};
+                border: none;
+            }}
+            QPushButton#modeOption {{
+                text-align: center;
+                background: transparent;
+                border: none;
+                border-radius: 8px;
+                padding: 0;
+                font-size: 10pt;
+                font-weight: 600;
+            }}
+            QPushButton#modeOption:hover {{
+                background: {theme.ACCENT_SOFT};
+                color: {theme.ACCENT_HOVER};
+            }}
+            QLabel#modeTitle {{
+                font-size: 16pt;
+                font-weight: 700;
+            }}
+        """)
+        apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(26, 14, 26, 14)
+        layout.setSpacing(0)
+        layout.addStretch(1)
+
+        title = QLabel("How many other people are\nin this meeting?")
+        title.setObjectName("modeTitle")
+        title.setWordWrap(False)
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        layout.addSpacing(16)
+
+        option_row = QHBoxLayout()
+        option_row.setSpacing(0)
+        option_row.addStretch()
+
+        options = QFrame()
+        options.setObjectName("modeOptions")
+        options.setFixedSize(225, 40)
+        options_layout = QHBoxLayout(options)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(0)
+
+        one_on_one = QPushButton("One")
+        one_on_one.setObjectName("modeOption")
+        one_on_one.setCursor(Qt.PointingHandCursor)
+        one_on_one.setFixedSize(112, 38)
+        one_on_one.clicked.connect(lambda: self._choose(MODE_ONE_ON_ONE))
+        options_layout.addWidget(one_on_one)
+
+        separator = QFrame()
+        separator.setObjectName("modeSeparator")
+        separator.setFixedSize(1, 24)
+        options_layout.addWidget(separator, 0, Qt.AlignVCenter)
+
+        group = QPushButton("Multiple")
+        group.setObjectName("modeOption")
+        group.setCursor(Qt.PointingHandCursor)
+        group.setFixedSize(112, 38)
+        group.clicked.connect(lambda: self._choose(MODE_GROUP))
+        options_layout.addWidget(group)
+        option_row.addWidget(options)
+        option_row.addStretch()
+        layout.addLayout(option_row)
+        layout.addStretch(1)
+
+    def _choose(self, mode: str) -> None:
+        self.selected_mode = mode
+        self.accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        enable_dark_titlebar(self)
+        apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
+
+
+def _unique_labels(segments: list[dict], preferred_first: str) -> list[str]:
+    labels = [preferred_first] if preferred_first else []
+    for segment in sorted(segments, key=lambda item: item.get("start", 0)):
+        label = str(segment.get("label") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _persist_meeting_audio(mic_wav: Path, loopback_wav: Path, meeting_dir: Path) -> None:
+    """Stage and verify both source WAVs before promoting either durable file."""
+    destinations = {
+        mic_wav: meeting_dir / "microphone.wav",
+        loopback_wav: meeting_dir / "meeting-audio.wav",
+    }
+    if any(destination.exists() for destination in destinations.values()):
+        raise FileExistsError("Meeting audio already exists in the output folder.")
+
+    stage_dir = Path(tempfile.mkdtemp(prefix=".audio-stage-", dir=str(meeting_dir)))
+    promoted: list[Path] = []
+    try:
+        staged: dict[Path, Path] = {}
+        for source, destination in destinations.items():
+            staged_path = stage_dir / destination.name
+            shutil.copy2(source, staged_path)
+            if staged_path.stat().st_size != source.stat().st_size:
+                raise OSError(f"Audio copy verification failed for {source.name}")
+            staged[source] = staged_path
+
+        for source, destination in destinations.items():
+            os.replace(staged[source], destination)
+            promoted.append(destination)
+
+        if any(
+            destination.stat().st_size != source.stat().st_size
+            for source, destination in destinations.items()
+        ):
+            raise OSError("Final meeting audio verification failed")
+    except Exception:
+        for destination in promoted:
+            destination.unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+
+
+def _discard_temp_audio(mic_wav: Path, loopback_wav: Path) -> None:
+    """Remove an unusable no-speech attempt without touching a meeting folder."""
+    for source in (mic_wav, loopback_wav):
+        source.unlink(missing_ok=True)
+    temp_dir = mic_wav.parent
+    if temp_dir.exists() and not any(temp_dir.iterdir()):
+        temp_dir.rmdir()
+
+
 # ---------- worker ----------
 
 class MeetingWorker(QThread):
@@ -66,21 +224,25 @@ class MeetingWorker(QThread):
     error_signal = pyqtSignal(str)
 
     def __init__(self, mic_wav: Path, loopback_wav: Path,
-                 user_name: str, participant: str,
+                 user_name: str, meeting_subject: str, meeting_mode: str,
                  notes_text: str, output_root: Path,
-                 started_at: datetime):
+                 started_at: datetime, save_audio: bool = False,
+                 meeting_dir: Optional[Path] = None):
         super().__init__()
         self.mic_wav = mic_wav
         self.loopback_wav = loopback_wav
         self.user_name = user_name or "You"
-        self.participant = participant or "Speaker"
+        self.meeting_subject = meeting_subject or "Meeting"
+        self.meeting_mode = meeting_mode
         self.notes_text = notes_text
         self.output_root = output_root
         self.started_at = started_at
+        self.save_audio = save_audio
+        self.meeting_dir = Path(meeting_dir) if meeting_dir is not None else None
 
     def run(self):
         try:
-            from transcription import transcribe_segments
+            from transcription import transcribe_file_segments, transcribe_segments
             from meeting.summarizer import SummarizerClient
             from meeting.transcript import render_transcript
 
@@ -91,36 +253,57 @@ class MeetingWorker(QThread):
                 mic_audio = preprocess_loopback(mic_audio, mic_sr, mic_ch, target_rate=16000)
             mic_segments = transcribe_segments(mic_audio, label=self.user_name)
 
-            # ----- transcribe loopback (preprocess to 16kHz mono first) -----
+            # ----- transcribe loopback -----
             self.status_signal.emit("Transcribing other audio...")
-            lb_audio, lb_sr, lb_ch = load_wav_as_int16(self.loopback_wav)
-            lb_audio_16k = preprocess_loopback(lb_audio, lb_sr, lb_ch, target_rate=16000)
-            lb_segments = transcribe_segments(lb_audio_16k, label=self.participant)
+            if self.meeting_mode == MODE_GROUP:
+                lb_segments = transcribe_file_segments(
+                    self.loopback_wav,
+                    label="Speaker",
+                    diarize=True,
+                    use_speaker_library=True,
+                )
+            else:
+                lb_audio, lb_sr, lb_ch = load_wav_as_int16(self.loopback_wav)
+                lb_audio_16k = preprocess_loopback(lb_audio, lb_sr, lb_ch, target_rate=16000)
+                lb_segments = transcribe_segments(
+                    lb_audio_16k,
+                    label=self.meeting_subject,
+                )
 
             all_segments = mic_segments + lb_segments
             if not all_segments:
+                _discard_temp_audio(self.mic_wav, self.loopback_wav)
                 self.error_signal.emit("No speech detected in either stream.")
                 return
 
             # ----- transcript -----
             duration = max((s["end"] for s in all_segments), default=0.0)
+            participants = (
+                _unique_labels(all_segments, preferred_first=self.user_name)
+                if self.meeting_mode == MODE_GROUP
+                else [self.user_name, self.meeting_subject]
+            )
             transcript_md = render_transcript(
                 segments=all_segments,
-                meeting_name=self.participant,
-                participants=[self.user_name, self.participant],
+                meeting_name=self.meeting_subject,
+                participants=participants,
                 started_at=self.started_at,
                 duration_seconds=duration,
             )
 
             # ----- save files -----
-            folder_name = f"{self.started_at.strftime('%y_%m_%d')}_{_sanitize(self.participant)}"
-            meeting_dir = self.output_root / folder_name
+            meeting_dir = self.meeting_dir or _meeting_directory(
+                self.output_root,
+                self.meeting_subject,
+                self.meeting_mode,
+                self.started_at,
+            )
             meeting_dir.mkdir(parents=True, exist_ok=True)
             (meeting_dir / "transcript.md").write_text(transcript_md, encoding="utf-8")
 
             notes_md = ""
             if self.notes_text.strip():
-                notes_md = f"# Notes — {self.participant}\n\n{self.notes_text.strip()}\n"
+                notes_md = f"# Notes — {self.meeting_subject}\n\n{self.notes_text.strip()}\n"
                 (meeting_dir / "notes.md").write_text(notes_md, encoding="utf-8")
 
             # ----- summary -----
@@ -135,15 +318,22 @@ class MeetingWorker(QThread):
                     f"# Summary\n\nSummary generation failed: {e}\n", encoding="utf-8"
                 )
 
-            # ----- cleanup temp WAVs -----
-            try:
-                self.mic_wav.unlink(missing_ok=True)
-                self.loopback_wav.unlink(missing_ok=True)
-                temp_dir = self.mic_wav.parent
-                if temp_dir.exists() and not any(temp_dir.iterdir()):
-                    temp_dir.rmdir()
-            except Exception:
-                pass
+            # ----- optional durable audio, then temp cleanup -----
+            if self.save_audio:
+                try:
+                    _persist_meeting_audio(self.mic_wav, self.loopback_wav, meeting_dir)
+                except Exception as exc:
+                    self.error_signal.emit(
+                        f"Meeting files were written, but audio could not be saved: {exc}. "
+                        f"Temporary sources were preserved in {self.mic_wav.parent}."
+                    )
+                    return
+
+            self.mic_wav.unlink(missing_ok=True)
+            self.loopback_wav.unlink(missing_ok=True)
+            temp_dir = self.mic_wav.parent
+            if temp_dir.exists() and not any(temp_dir.iterdir()):
+                temp_dir.rmdir()
 
             self.done_signal.emit(str(meeting_dir), str(summary_path))
 
@@ -153,35 +343,66 @@ class MeetingWorker(QThread):
             self.error_signal.emit(f"Failed: {e}")
 
 
-def _sanitize(name: str) -> str:
+def _sanitize(name: str, *, underscores: bool = False) -> str:
     """Strip filesystem-unsafe characters from a participant name."""
     name = (name or "Meeting").strip()
     for ch in '<>:"/\\|?*\n\r\t':
         name = name.replace(ch, "_")
+    if underscores:
+        name = re.sub(r"\s+", "_", name)
+        name = re.sub(r"_+", "_", name)
     name = name.strip(". ")
     return name or "Meeting"
+
+
+def _meeting_directory(
+    output_root: Path,
+    meeting_subject: str,
+    meeting_mode: str,
+    started_at: datetime,
+) -> Path:
+    folder_component = _sanitize(
+        meeting_subject,
+        underscores=meeting_mode == MODE_GROUP,
+    )
+    folder_name = f"{started_at.strftime('%y_%m_%d')}_{folder_component}"
+    return output_root / folder_name
 
 
 # ---------- main window ----------
 
 class ScribeWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, meeting_mode: str = MODE_ONE_ON_ONE):
         super().__init__()
-        ConfigManager.initialize()
+        if ConfigManager._instance is None:
+            ConfigManager.initialize()
 
         self.user_name = ConfigManager.get_config_value("profile", "user_name") or "You"
         self.output_root = self._resolve_output_root()
+        self.meeting_mode = meeting_mode if meeting_mode in (MODE_ONE_ON_ONE, MODE_GROUP) else MODE_ONE_ON_ONE
+        self.save_audio = bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
 
         self.setWindowTitle("Scribe")
-        self.resize(720, 600)
+        apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
+        self.resize(760, 590)
+        self.setMinimumSize(660, 500)
         self.setStyleSheet(self._stylesheet())
 
         self.capture: Optional[AudioCapture] = None
         self.temp_dir: Optional[Path] = None
         self.recording_started_at: Optional[datetime] = None
+        self.meeting_started_at: Optional[datetime] = None
+        self.meeting_dir: Optional[Path] = None
         self.worker: Optional[MeetingWorker] = None
         self.elapsed_timer = QTimer(self)
         self.elapsed_timer.timeout.connect(self._tick_timer)
+        self.recording_pulse_timer = QTimer(self)
+        self.recording_pulse_timer.timeout.connect(self._pulse_recording_indicator)
+        self.processing_pulse_timer = QTimer(self)
+        self.processing_pulse_timer.timeout.connect(self._pulse_processing_indicator)
+        self._pulse_on = True
+        self._processing_pulse_on = True
+        self._processing_color = theme.ACCENT_COLOR
         self.tick_seconds = 0
 
         self._build_ui()
@@ -192,126 +413,260 @@ class ScribeWindow(QMainWindow):
             return Path(configured).expanduser()
         return PROJECT_ROOT / "Meetings"
 
+    def _meeting_directory_for_session(self, meeting_subject: str) -> Path:
+        if self.meeting_started_at is None:
+            self.meeting_started_at = self.recording_started_at or datetime.now()
+        if self.meeting_dir is None:
+            self.meeting_dir = _meeting_directory(
+                self.output_root,
+                meeting_subject,
+                self.meeting_mode,
+                self.meeting_started_at,
+            )
+        return self.meeting_dir
+
     def _stylesheet(self) -> str:
-        return f"""
-            QMainWindow {{ background-color: {BG_COLOR}; }}
-            QLabel {{ color: {TEXT_COLOR}; font-family: 'Cascadia Code', Consolas, monospace; }}
-            QLineEdit, QTextEdit {{
-                background-color: {INPUT_BG};
-                color: {TEXT_COLOR};
-                border: 1px solid {INPUT_BORDER};
-                border-radius: 6px;
-                padding: 8px;
-                font-family: 'Cascadia Code', Consolas, monospace;
+        return theme.application_stylesheet() + f"""
+            QLabel#meetingFieldTitle {{
+                color: {theme.ACCENT_COLOR};
                 font-size: 11pt;
-                selection-background-color: {SELECTION_BG};
-                selection-color: {SELECTION_TEXT};
+                font-weight: 600;
             }}
-            QLineEdit:focus, QTextEdit:focus {{ border: 1px solid {INPUT_FOCUS_BORDER}; }}
-            QLineEdit:disabled, QTextEdit:disabled {{ color: {SECONDARY_TEXT}; }}
-            QPushButton {{
-                background-color: {BUTTON_BG};
-                color: {TEXT_COLOR};
-                border: 1px solid {BUTTON_BORDER};
-                border-radius: 6px;
-                padding: 8px 18px;
-                font-family: 'Cascadia Code', Consolas, monospace;
+            QLabel#scribeTimer {{
+                background: transparent;
+                border: none;
+                padding: 0;
+                color: {theme.SECONDARY_TEXT};
                 font-size: 11pt;
+                font-weight: 700;
             }}
-            QPushButton:hover {{ background-color: {BUTTON_HOVER_BG}; }}
-            QPushButton:disabled {{ color: {DIM_TEXT}; border-color: {DIM_TEXT}; }}
-            QScrollBar:vertical {{
-                background: {SCROLLBAR_BG}; width: 10px; border-radius: 5px;
+            QLabel#scribeTimer[recording="true"] {{
+                color: {theme.TEXT_COLOR};
             }}
-            QScrollBar::handle:vertical {{ background: {SCROLLBAR_HANDLE}; border-radius: 5px; }}
-            QScrollBar::handle:vertical:hover {{ background: {SCROLLBAR_HANDLE_HOVER}; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QPushButton#startButton {{
+                min-height: 0;
+                padding: 0 10px;
+                background: {theme.SURFACE_COLOR};
+                border: 1px solid #315D50;
+                color: #79E2BD;
+            }}
+            QPushButton#startButton:hover {{
+                background: {theme.SUCCESS_SOFT};
+                border-color: {theme.SUCCESS_COLOR};
+                color: #A3F0D3;
+            }}
+            QPushButton#stopButton {{
+                min-height: 0;
+                padding: 0 10px;
+                background: {theme.SURFACE_COLOR};
+                border: 1px solid #67343D;
+                color: #FF9CA4;
+            }}
+            QPushButton#stopButton:hover {{
+                background: {theme.ERROR_SOFT};
+                border-color: {theme.RECORDING_COLOR};
+                color: #FFC0C5;
+            }}
+            QLabel#processingLabel {{
+                background: transparent;
+                border: none;
+                padding: 0;
+                color: {theme.SECONDARY_TEXT};
+                font-weight: 600;
+            }}
+            QLabel#readyLabel {{
+                color: {theme.SECONDARY_TEXT};
+                font-size: 8pt;
+                font-weight: 600;
+            }}
+            QLabel#retryStatus {{
+                color: #FF9CA4;
+                font-size: 8pt;
+                font-weight: 600;
+            }}
+            QFrame#completionOptions {{
+                background: transparent;
+                border: none;
+            }}
+            QPushButton#summaryButton {{
+                min-height: 0;
+                min-width: 0;
+                background: {theme.ACCENT_COLOR};
+                border: 1px solid {theme.ACCENT_COLOR};
+                color: #FFFFFF;
+                padding: 4px 10px;
+                border-radius: 8px;
+                font-size: 9pt;
+                font-weight: 600;
+            }}
+            QPushButton#summaryButton:hover {{
+                background: {theme.ACCENT_HOVER};
+                border-color: {theme.ACCENT_HOVER};
+            }}
+            QPushButton#folderButton {{
+                min-height: 0;
+                min-width: 0;
+                background: {theme.SURFACE_COLOR};
+                border: 1px solid {theme.BORDER_COLOR};
+                color: {theme.SECONDARY_TEXT};
+                padding: 4px 9px;
+                border-radius: 8px;
+                font-size: 9pt;
+                font-weight: 600;
+            }}
+            QPushButton#folderButton:hover {{
+                background: {theme.SURFACE_HOVER};
+                color: {theme.TEXT_COLOR};
+            }}
         """
 
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(28, 26, 28, 26)
+        layout.setSpacing(14)
 
-        # Header: participant + timer
-        header = QHBoxLayout()
-        header.setSpacing(12)
+        meeting_layout = QHBoxLayout()
+        meeting_layout.setContentsMargins(0, 0, 0, 0)
+        meeting_layout.setSpacing(16)
 
-        participant_lbl = QLabel("MEETING WITH")
-        participant_lbl.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 9pt;")
+        field_title = "Meeting Name" if self.meeting_mode == MODE_GROUP else "Meeting With"
+        placeholder = (
+            "e.g. Weekly sync or Management meeting"
+            if self.meeting_mode == MODE_GROUP
+            else "Add a name now or after recording"
+        )
+        self.meeting_field_label = QLabel(field_title)
+        self.meeting_field_label.setObjectName("meetingFieldTitle")
         self.participant_input = QLineEdit()
-        self.participant_input.setPlaceholderText("Name (can be added later)")
-        self.participant_input.setFixedWidth(280)
+        self.participant_input.setPlaceholderText(placeholder)
+        self.participant_input.setMaximumWidth(360)
 
-        participant_box = QVBoxLayout()
-        participant_box.setSpacing(4)
-        participant_box.addWidget(participant_lbl)
+        participant_widget = QWidget()
+        participant_widget.setMaximumWidth(360)
+        participant_box = QVBoxLayout(participant_widget)
+        participant_box.setContentsMargins(0, 0, 0, 0)
+        participant_box.setSpacing(7)
+        participant_box.addWidget(self.meeting_field_label)
         participant_box.addWidget(self.participant_input)
-        header.addLayout(participant_box)
+        meeting_layout.addWidget(participant_widget, 1)
 
-        header.addStretch()
+        self.action_stack = QStackedWidget()
+        self.action_stack.setFixedWidth(328)
+        self.action_stack.setFixedHeight(38)
+
+        self.record_controls_widget = QWidget()
+        record_controls = QHBoxLayout(self.record_controls_widget)
+        record_controls.setContentsMargins(0, 0, 0, 0)
+        record_controls.setSpacing(8)
+        self.retry_indicator = QLabel("●")
+        self.retry_indicator.setFixedWidth(9)
+        self.retry_indicator.setStyleSheet(
+            f"color: {theme.ERROR_COLOR}; background: transparent; border: none;"
+        )
+        self.retry_indicator.hide()
+        record_controls.addWidget(self.retry_indicator)
+        self.retry_label = QLabel("No Speech Detected")
+        self.retry_label.setObjectName("retryStatus")
+        self.retry_label.setToolTip("No speech detected in either stream.")
+        self.retry_label.hide()
+        record_controls.addWidget(self.retry_label)
+        record_controls.addStretch()
+
+        self.record_button = QPushButton("Start")
+        self.record_button.setObjectName("startButton")
+        self.record_button.setFixedSize(72, 34)
+        self.record_button.setIconSize(QSize(14, 10))
+        self.record_button.clicked.connect(self._on_record_clicked)
+        record_controls.addWidget(self.record_button)
 
         self.timer_label = QLabel("00:00")
-        self.timer_label.setStyleSheet(f"color: {DIM_TEXT}; font-size: 18pt;")
-        self.timer_label.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
-        header.addWidget(self.timer_label)
+        self.timer_label.setObjectName("scribeTimer")
+        self.timer_label.setProperty("recording", False)
+        self.timer_label.setAlignment(Qt.AlignCenter)
+        self.timer_label.setFixedSize(62, 34)
+        record_controls.addWidget(self.timer_label)
+        self.action_stack.addWidget(self.record_controls_widget)
 
-        layout.addLayout(header)
+        self.processing_controls_widget = QWidget()
+        processing_controls = QHBoxLayout(self.processing_controls_widget)
+        processing_controls.setContentsMargins(0, 0, 0, 0)
+        processing_controls.setSpacing(8)
+        self.processing_indicator = QLabel("●")
+        self.processing_indicator.setFixedWidth(9)
+        self.processing_indicator.setAlignment(Qt.AlignCenter)
+        self.processing_indicator.setStyleSheet(
+            f"color: {theme.ACCENT_COLOR}; background: transparent; border: none;"
+        )
+        processing_controls.addWidget(self.processing_indicator)
+        self.processing_label = QLabel("Processing…")
+        self.processing_label.setObjectName("processingLabel")
+        self.processing_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.processing_label.setFixedHeight(36)
+        processing_controls.addWidget(self.processing_label)
+        processing_controls.addStretch()
+        self.processing_timer_label = QLabel("00:00")
+        self.processing_timer_label.setObjectName("scribeTimer")
+        self.processing_timer_label.setProperty("recording", False)
+        self.processing_timer_label.setAlignment(Qt.AlignCenter)
+        self.processing_timer_label.setFixedSize(62, 34)
+        processing_controls.addWidget(self.processing_timer_label)
+        self.action_stack.addWidget(self.processing_controls_widget)
 
-        # Notes
-        notes_lbl = QLabel("NOTES")
-        notes_lbl.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 9pt;")
+        self.done_controls_widget = QWidget()
+        done_controls = QHBoxLayout(self.done_controls_widget)
+        done_controls.setContentsMargins(0, 0, 0, 0)
+        done_controls.setSpacing(8)
+        self.ready_indicator = QLabel("●")
+        self.ready_indicator.setFixedWidth(9)
+        self.ready_indicator.setAlignment(Qt.AlignCenter)
+        self.ready_indicator.setStyleSheet(
+            f"color: {theme.SUCCESS_COLOR}; background: transparent; border: none;"
+        )
+        done_controls.addWidget(self.ready_indicator)
+        self.ready_label = QLabel("Ready")
+        self.ready_label.setObjectName("readyLabel")
+        done_controls.addWidget(self.ready_label)
+        done_controls.addStretch()
+
+        self.completion_options = QFrame()
+        self.completion_options.setObjectName("completionOptions")
+        completion_layout = QHBoxLayout(self.completion_options)
+        completion_layout.setContentsMargins(0, 0, 0, 0)
+        completion_layout.setSpacing(8)
+        self.open_summary_button = QPushButton("Summary")
+        self.open_summary_button.setObjectName("summaryButton")
+        self.open_summary_button.setAccessibleName("Open summary")
+        self.open_summary_button.setCursor(Qt.PointingHandCursor)
+        self.open_summary_button.setToolTip("Open summary")
+        self.open_summary_button.setFixedHeight(28)
+        self.open_summary_button.clicked.connect(self._open_summary)
+        completion_layout.addWidget(self.open_summary_button)
+        self.open_folder_button = QPushButton("Folder")
+        self.open_folder_button.setObjectName("folderButton")
+        self.open_folder_button.setAccessibleName("Open folder")
+        self.open_folder_button.setCursor(Qt.PointingHandCursor)
+        self.open_folder_button.setToolTip("Open folder")
+        self.open_folder_button.setFixedHeight(28)
+        self.open_folder_button.clicked.connect(self._open_folder)
+        completion_layout.addWidget(self.open_folder_button)
+        done_controls.addWidget(self.completion_options)
+        self.action_stack.addWidget(self.done_controls_widget)
+
+        meeting_layout.addWidget(self.action_stack, 0, Qt.AlignBottom)
+        layout.addLayout(meeting_layout)
+
+        notes_lbl = QLabel("Meeting Notes")
+        notes_lbl.setObjectName("sectionTitle")
         layout.addWidget(notes_lbl)
 
         self.notes_edit = QTextEdit()
-        self.notes_edit.setPlaceholderText("Type notes during the meeting...")
+        self.notes_edit.setPlaceholderText("Add context, decisions, or follow-ups while you talk…")
         layout.addWidget(self.notes_edit, stretch=1)
 
-        # Bottom: REC / STOP button
-        button_row = QHBoxLayout()
-        button_row.addStretch()
-        self.record_button = QPushButton("● REC")
-        self.record_button.setStyleSheet(
-            f"QPushButton {{ color: {RECORDING_COLOR}; border-color: {RECORDING_COLOR}; "
-            f"font-size: 12pt; padding: 10px 24px; }}"
-            f"QPushButton:hover {{ background-color: {BUTTON_HOVER_BG}; }}"
-        )
-        self.record_button.clicked.connect(self._on_record_clicked)
-        button_row.addWidget(self.record_button)
-        layout.addLayout(button_row)
-
-        # Status (hidden until processing)
-        self.status_label = QLabel("")
-        self.status_label.setStyleSheet(f"color: {LINK_COLOR}; font-size: 12pt; padding-top: 8px;")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.hide()
-        layout.addWidget(self.status_label)
-
-        # Done view (hidden until done)
-        self.done_widget = QWidget()
-        done_layout = QVBoxLayout(self.done_widget)
-        done_layout.setContentsMargins(0, 8, 0, 0)
-        done_layout.setSpacing(8)
-
-        self.done_label = QLabel("")
-        self.done_label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 12pt;")
-        self.done_label.setAlignment(Qt.AlignCenter)
-        self.done_label.setOpenExternalLinks(False)
-        self.done_label.linkActivated.connect(self._on_link_clicked)
-        done_layout.addWidget(self.done_label)
-
-        close_row = QHBoxLayout()
-        close_row.addStretch()
-        self.close_button = QPushButton("Close")
-        self.close_button.clicked.connect(self.close)
-        close_row.addWidget(self.close_button)
-        close_row.addStretch()
-        done_layout.addLayout(close_row)
-
-        self.done_widget.hide()
-        layout.addWidget(self.done_widget)
+        self._done_folder_path = ""
+        self._done_summary_path = ""
 
     # ---------- recording control ----------
 
@@ -321,7 +676,83 @@ class ScribeWindow(QMainWindow):
         else:
             self._start_recording()
 
+    def _set_record_button_state(self, *, recording: bool) -> None:
+        self.record_button.setText("Stop" if recording else "Start")
+        self.record_button.setIcon(self._recording_dot_icon(active=True) if recording else QIcon())
+        self.record_button.setObjectName("stopButton" if recording else "startButton")
+        self.record_button.style().unpolish(self.record_button)
+        self.record_button.style().polish(self.record_button)
+        self.record_button.update()
+
+        self._pulse_on = True
+        if recording:
+            self.recording_pulse_timer.start(650)
+        else:
+            self.recording_pulse_timer.stop()
+
+    def _fit_completion_actions(self) -> None:
+        for button, horizontal_room in (
+            (self.open_summary_button, 26),
+            (self.open_folder_button, 24),
+        ):
+            button.ensurePolished()
+            text_width = button.fontMetrics().horizontalAdvance(button.text())
+            button.setFixedWidth(text_width + horizontal_room)
+        self.completion_options.setFixedSize(
+            self.open_summary_button.width() + self.open_folder_button.width() + 8,
+            30,
+        )
+
+    def _clear_retry_status(self) -> None:
+        self.retry_indicator.hide()
+        self.retry_label.hide()
+
+    @staticmethod
+    def _recording_dot_icon(*, active: bool) -> QIcon:
+        pixmap = QPixmap(14, 10)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        color = QColor(theme.RECORDING_COLOR if active else "#74343C")
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(2, 2, 6, 6)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _pulse_recording_indicator(self) -> None:
+        self._pulse_on = not self._pulse_on
+        self.record_button.setIcon(self._recording_dot_icon(active=self._pulse_on))
+
+    def _pulse_processing_indicator(self) -> None:
+        self._processing_pulse_on = not self._processing_pulse_on
+        color = self._processing_color if self._processing_pulse_on else theme.DIM_TEXT
+        self.processing_indicator.setStyleSheet(
+            f"color: {color}; background: transparent; border: none;"
+        )
+
+    def _set_processing_state(self, text: str, color: str, *, pulse: bool) -> None:
+        self._processing_color = color
+        self._processing_pulse_on = True
+        self.processing_indicator.setStyleSheet(
+            f"color: {color}; background: transparent; border: none;"
+        )
+        self.processing_label.setText(text)
+        if pulse:
+            self.processing_pulse_timer.start(700)
+        else:
+            self.processing_pulse_timer.stop()
+
+    def _set_timer_recording(self, recording: bool) -> None:
+        self.timer_label.setProperty("recording", recording)
+        self.timer_label.style().unpolish(self.timer_label)
+        self.timer_label.style().polish(self.timer_label)
+        self.timer_label.update()
+
     def _start_recording(self):
+        if self.worker and self.worker.isRunning():
+            return
+        self._clear_retry_status()
         temp_root = PROJECT_ROOT / ".scribe_temp"
         temp_root.mkdir(parents=True, exist_ok=True)
         self.temp_dir = Path(tempfile.mkdtemp(dir=str(temp_root), prefix="rec_"))
@@ -342,17 +773,13 @@ class ScribeWindow(QMainWindow):
             return
 
         self.recording_started_at = datetime.now()
+        if self.meeting_started_at is None:
+            self.meeting_started_at = self.recording_started_at
         self.tick_seconds = 0
         self.timer_label.setText("00:00")
-        self.timer_label.setStyleSheet(f"color: {RECORDING_COLOR}; font-size: 18pt;")
+        self._set_timer_recording(True)
         self.elapsed_timer.start(1000)
-
-        self.record_button.setText("■ STOP")
-        self.record_button.setStyleSheet(
-            f"QPushButton {{ color: {TEXT_COLOR}; border-color: {TEXT_COLOR}; "
-            f"font-size: 12pt; padding: 10px 24px; }}"
-            f"QPushButton:hover {{ background-color: {BUTTON_HOVER_BG}; }}"
-        )
+        self._set_record_button_state(recording=True)
 
     def _stop_recording(self):
         if not self.capture:
@@ -364,33 +791,56 @@ class ScribeWindow(QMainWindow):
         loopback_wav = self.capture.loopback_path
         self.capture.cleanup()
         self.capture = None
-
-        # Prompt for participant if empty
-        participant = self.participant_input.text().strip()
-        if not participant:
-            participant, ok = QInputDialog.getText(
-                self, "Who was this meeting with?",
-                "Participant name (used for the folder + transcript labels):"
-            )
-            participant = participant.strip() if ok else ""
-        participant = participant or "Meeting"
-        self.participant_input.setText(participant)
-
+        self._set_record_button_state(recording=False)
+        self._set_timer_recording(False)
         self._show_processing()
+
+        # Prompt for the mode-specific meeting subject if empty.
+        meeting_subject = self.participant_input.text().strip()
+        if not meeting_subject:
+            meeting_subject, ok = self._prompt_for_meeting_subject()
+            meeting_subject = meeting_subject.strip() if ok else ""
+        meeting_subject = meeting_subject or "Meeting"
+        self.participant_input.setText(meeting_subject)
+        meeting_dir = self._meeting_directory_for_session(meeting_subject)
 
         self.worker = MeetingWorker(
             mic_wav=mic_wav,
             loopback_wav=loopback_wav,
             user_name=self.user_name,
-            participant=participant,
+            meeting_subject=meeting_subject,
+            meeting_mode=self.meeting_mode,
             notes_text=self.notes_edit.toPlainText(),
             output_root=self.output_root,
-            started_at=self.recording_started_at or datetime.now(),
+            started_at=self.meeting_started_at or self.recording_started_at or datetime.now(),
+            save_audio=self.save_audio,
+            meeting_dir=meeting_dir,
         )
         self.worker.status_signal.connect(self._on_worker_status)
         self.worker.done_signal.connect(self._on_worker_done)
         self.worker.error_signal.connect(self._on_worker_error)
         self.worker.start()
+
+    def _prompt_for_meeting_subject(self) -> tuple[str, bool]:
+        group = self.meeting_mode == MODE_GROUP
+        dialog = QInputDialog(self)
+        dialog.setWindowFlags(
+            (dialog.windowFlags() | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+            & ~Qt.WindowContextHelpButtonHint
+        )
+        dialog.setWindowTitle("Name this meeting" if group else "Who was this meeting with?")
+        dialog.setLabelText(
+            "Meeting name (used for the folder and documents):"
+            if group
+            else "Participant name (used for the folder and transcript labels):"
+        )
+        dialog.setInputMode(QInputDialog.TextInput)
+        dialog.setMinimumWidth(410)
+        dialog.setStyleSheet(theme.application_stylesheet())
+        apply_window_icon(dialog, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
+        enable_dark_titlebar(dialog)
+        accepted = dialog.exec_() == QDialog.Accepted
+        return dialog.textValue(), accepted
 
     def _tick_timer(self):
         self.tick_seconds += 1
@@ -401,38 +851,76 @@ class ScribeWindow(QMainWindow):
     # ---------- view transitions ----------
 
     def _show_processing(self):
+        self._set_record_button_state(recording=False)
+        self._set_timer_recording(False)
+        self.processing_timer_label.setText(self.timer_label.text())
         self.participant_input.setEnabled(False)
         self.notes_edit.setEnabled(False)
-        self.record_button.hide()
-        self.status_label.setText("Processing...")
-        self.status_label.show()
+        self.processing_label.setToolTip("")
+        self._set_processing_state("Preparing Transcript…", theme.ACCENT_COLOR, pulse=True)
+        self.action_stack.setCurrentWidget(self.processing_controls_widget)
 
     def _on_worker_status(self, msg: str):
-        self.status_label.setText(msg)
+        display = {
+            "Transcribing your audio...": "Transcribing Audio…",
+            "Transcribing other audio...": "Transcribing Audio…",
+            "Generating summary...": "Generating Summary…",
+        }.get(msg, msg)
+        self._set_processing_state(display, theme.ACCENT_COLOR, pulse=True)
+
+    @staticmethod
+    def _concise_error(message: str) -> str:
+        lowered = message.lower()
+        if "no speech detected" in lowered:
+            return "No Speech Detected"
+        if "elevenlabs http 400" in lowered:
+            return "Couldn’t Process Audio"
+        first_line = next((line.strip() for line in message.splitlines() if line.strip()), "")
+        if not first_line:
+            return "Couldn’t Finish"
+        return first_line if len(first_line) <= 34 else f"{first_line[:33].rstrip()}…"
 
     def _on_worker_error(self, msg: str):
-        self.status_label.hide()
-        self.done_label.setText(
-            f'<span style="color: {RECORDING_COLOR};">Error:</span><br>{msg}'
+        self._set_record_button_state(recording=False)
+        if "no speech detected" in msg.lower():
+            self.processing_pulse_timer.stop()
+            self.participant_input.setEnabled(True)
+            self.notes_edit.setEnabled(True)
+            self.timer_label.setText("00:00")
+            self._set_timer_recording(False)
+            self.retry_label.setToolTip(msg)
+            self.retry_indicator.show()
+            self.retry_label.show()
+            self.action_stack.setCurrentWidget(self.record_controls_widget)
+            return
+        self.processing_label.setToolTip(msg)
+        self._set_processing_state(
+            self._concise_error(msg), theme.ERROR_COLOR, pulse=False
         )
-        self.done_widget.show()
+        self.action_stack.setCurrentWidget(self.processing_controls_widget)
 
     def _on_worker_done(self, folder_path: str, summary_path: str):
-        self.status_label.hide()
-        folder_url = QUrl.fromLocalFile(folder_path).toString()
-        summary_url = QUrl.fromLocalFile(summary_path).toString()
-        self.done_label.setText(
-            f'<div style="color: {TEXT_COLOR};">Done.</div><br>'
-            f'<a href="{summary_url}" style="color: {LINK_COLOR};">Open summary</a>'
-            f' &nbsp;·&nbsp; '
-            f'<a href="{folder_url}" style="color: {LINK_COLOR};">Open folder</a>'
-        )
-        self.done_widget.show()
+        self._set_record_button_state(recording=False)
+        self.processing_pulse_timer.stop()
+        self._done_folder_path = folder_path
+        self._done_summary_path = summary_path
+        self.action_stack.setCurrentWidget(self.done_controls_widget)
 
-    def _on_link_clicked(self, url: str):
-        QDesktopServices.openUrl(QUrl(url))
+    def _open_summary(self):
+        if self._done_summary_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._done_summary_path))
+
+    def _open_folder(self):
+        if self._done_folder_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._done_folder_path))
 
     # ---------- shutdown ----------
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        enable_dark_titlebar(self)
+        apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
+        self._fit_completion_actions()
 
     def closeEvent(self, event):
         if self.capture and self.capture.is_recording():
@@ -450,6 +938,7 @@ class ScribeWindow(QMainWindow):
                 self.capture.cleanup()
             except Exception:
                 pass
+            self._set_record_button_state(recording=False)
             if self.temp_dir and self.temp_dir.exists():
                 shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -474,16 +963,19 @@ def main():
     if lock is None:
         sys.exit(0)
 
+    set_app_user_model_id(SCRIBE_APP_ID)
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
-    set_app_user_model_id("Koe.Scribe.App")
-    icon_path = PROJECT_ROOT / "assets" / "koe-icon.ico"
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    if SCRIBE_ICON.exists():
+        app.setWindowIcon(QIcon(str(SCRIBE_ICON)))
 
-    window = ScribeWindow()
+    mode_dialog = MeetingModeDialog()
+    if mode_dialog.exec_() != QDialog.Accepted or not mode_dialog.selected_mode:
+        return
+
+    window = ScribeWindow(meeting_mode=mode_dialog.selected_mode)
     window.show()
     sys.exit(app.exec_())
 

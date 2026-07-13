@@ -3,11 +3,10 @@ Koe first-time setup — minimal terminal flow.
 
 Asks for:
   1. ElevenLabs API key (required, used for transcription)
-  2. OpenRouter key (optional, used for meeting summaries and cleanup benchmarks)
+  2. OpenRouter key (optional, used for meeting summaries)
   3. User name (labels your voice in Scribe transcripts)
 
-Writes .env and src/config.yaml, then exits. No model downloads, no GPU
-checks — transcription is cloud-only.
+Writes .env and src/config.yaml, then exits.
 """
 
 import os
@@ -35,12 +34,10 @@ def _input(prompt: str, default: str = "") -> str:
     return val if val else default
 
 
-def _save_env(elevenlabs_key: str, openrouter_key: str, groq_key: str = ""):
+def _save_env(elevenlabs_key: str, openrouter_key: str):
     env_lines = []
     if elevenlabs_key:
         env_lines.append(f"ELEVENLABS_API_KEY={elevenlabs_key}")
-    if groq_key:
-        env_lines.append(f"GROQ_API_KEY={groq_key}")
     if openrouter_key:
         env_lines.append(f"OPENROUTER_API_KEY={openrouter_key}")
     (KOE_DIR / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
@@ -55,36 +52,25 @@ def _save_config(user_name: str):
         },
         "recording_options": {
             "activation_key": "ctrl+shift+space",
-            "recording_mode": "press_to_toggle",
-            "sample_rate": 16000,
-            "silence_duration": 900,
         },
         "model_options": {
-            "transcription_provider": "elevenlabs",
             "common": {
                 "language": None,
-                "initial_prompt": (
-                    "Use proper punctuation including periods, commas, and question marks."
-                ),
+                "initial_prompt": None,
             },
             "elevenlabs": {
-                "model_id": "scribe_v2",
                 "keyterms_enabled": True,
-                "temperature": 0.0,
             },
         },
-        "post_processing": {
-            "ai_cleanup_enabled": False,
-            "ai_cleanup_threshold": 10,
-            "ai_cleanup_model": "google/gemini-3.5-flash",
-        },
         "misc": {
+            "hide_status_window": False,
             "noise_on_completion": True,
             "snippets_folder": None,
             "print_to_terminal": True,
         },
         "meeting_options": {
             "root_folder": None,
+            "save_audio": False,
         },
     }
 
@@ -107,7 +93,7 @@ def run_setup():
     """)
 
     _print_header("1. ElevenLabs API key (required)")
-    print("ElevenLabs runs Scribe v2 on their servers — no local GPU needed.")
+    print("ElevenLabs Scribe v2 handles transcription.")
     print("Get a key at: https://elevenlabs.io/app/settings/api-keys")
     print()
     elevenlabs_key = ""
@@ -117,8 +103,8 @@ def run_setup():
             print("ElevenLabs key is required for transcription.")
 
     _print_header("2. OpenRouter API key (optional)")
-    print("OpenRouter powers meeting summaries and optional cleanup benchmarks.")
-    print("Skip if you don't want either feature — transcription works without it.")
+    print("OpenRouter powers Scribe meeting summaries.")
+    print("Skip if you do not need summaries — transcription works without it.")
     print("Get a key at: https://openrouter.ai/keys")
     print()
     openrouter_key = _input("Enter OpenRouter API key (or press Enter to skip)")

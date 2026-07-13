@@ -1,43 +1,115 @@
-"""
-Settings window — minimal cloud-transcription config.
-
-Exposes the handful of things that change at runtime:
-  - Profile (your name)
-  - Output folders (meetings, snippets)
-  - Recording (hotkey, beep on completion)
-  - Transcription backend
-  - AI cleanup (toggle, threshold, model, prompt prefix)
-  - STT vocab hint
-"""
+"""Koe settings for the supported ElevenLabs-only desktop app."""
 
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QApplication, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QCheckBox, QWidget, QScrollArea, QFileDialog, QTextEdit, QSpinBox,
-    QComboBox,
+    QAbstractButton,
+    QApplication,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from ui.base_window import BaseWindow
 from ui import theme
+from ui.base_window import BaseWindow
 from utils import ConfigManager
 
 
-def _label(text: str, color: str = None, size_pt: int = None) -> QLabel:
-    lbl = QLabel(text)
-    style = []
-    if color:
-        style.append(f"color: {color};")
-    if size_pt:
-        style.append(f"font-size: {size_pt}pt;")
-    if style:
-        lbl.setStyleSheet(" ".join(style))
-    return lbl
+def _label(text: str, object_name: str | None = None) -> QLabel:
+    label = QLabel(text)
+    if object_name:
+        label.setObjectName(object_name)
+    return label
+
+
+class ToggleSwitch(QAbstractButton):
+    """Small native-painted switch that stays crisp at every display scale."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(38, 22)
+
+    def sizeHint(self) -> QSize:
+        return QSize(38, 22)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        track = QRectF(1, 2, self.width() - 2, self.height() - 4)
+        track_color = theme.ACCENT_COLOR if self.isChecked() else theme.SURFACE_HOVER
+        border_color = theme.ACCENT_COLOR if self.isChecked() else theme.BORDER_COLOR
+        if not self.isEnabled():
+            track_color = theme.INPUT_BG
+            border_color = theme.DIVIDER_COLOR
+        painter.setPen(QPen(QColor(border_color), 1))
+        painter.setBrush(QColor(track_color))
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
+
+        diameter = 14
+        knob_x = self.width() - diameter - 4 if self.isChecked() else 4
+        knob_color = theme.TEXT_COLOR if self.isEnabled() else theme.DIM_TEXT
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(knob_color))
+        painter.drawEllipse(QRectF(knob_x, 4, diameter, diameter))
+
+
+class ToggleRow(QWidget):
+    """A clean label-and-switch row with no shaded container."""
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 3, 0, 3)
+        layout.setSpacing(12)
+        self.label = QLabel(text)
+        self.label.setWordWrap(True)
+        self.label.setMinimumWidth(0)
+        self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self.label)
+        layout.addStretch()
+        self.switch = ToggleSwitch(self)
+        self.switch.setAccessibleName(text)
+        self.switch.toggled.connect(self.toggled.emit)
+        layout.addWidget(self.switch)
+
+    def text(self) -> str:
+        return self._text
+
+    def isChecked(self) -> bool:
+        return self.switch.isChecked()
+
+    def setChecked(self, checked: bool) -> None:
+        self.switch.setChecked(checked)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.switch.toggle()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class SettingsWindow(BaseWindow):
@@ -45,264 +117,317 @@ class SettingsWindow(BaseWindow):
     settings_saved = pyqtSignal()
 
     def __init__(self):
-        super().__init__("Settings", 540, 720)
-
-        # Set window icon
+        super().__init__("Koe Settings", 620, 700)
+        self._loading_values = True
+        self._changed_since_show = False
+        self._save_failed = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(350)
+        self._save_timer.timeout.connect(self._save_values)
         icon_path = Path(__file__).parent.parent.parent / "assets" / "koe-icon.ico"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
-
+        self.setStyleSheet(theme.application_stylesheet() + self._local_stylesheet())
         self._build_ui()
         self._load_values()
+        self._connect_autosave()
+        self._loading_values = False
+        QTimer.singleShot(0, self._refresh_content_size)
 
-    # ---------- styling ----------
-
-    def _stylesheet(self) -> str:
+    @staticmethod
+    def _local_stylesheet() -> str:
         return f"""
-            QWidget {{
-                background-color: {theme.BG_COLOR};
+            QFrame#settingsHeader {{ background: {theme.BG_COLOR}; }}
+            QLabel#autoSaveStatus {{
+                color: {theme.SUCCESS_COLOR};
+                font-size: 9pt;
+                font-weight: 600;
+            }}
+            QLabel#subsectionTitle {{
                 color: {theme.TEXT_COLOR};
-                font-family: 'Cascadia Code', Consolas, monospace;
+                font-size: 9pt;
+                font-weight: 600;
             }}
-            QLabel {{ color: {theme.TEXT_COLOR}; }}
-            QLineEdit, QTextEdit, QSpinBox, QComboBox {{
-                background-color: {theme.INPUT_BG};
-                color: {theme.TEXT_COLOR};
-                border: 1px solid {theme.INPUT_BORDER};
-                border-radius: 6px;
-                padding: 6px 8px;
-                font-family: 'Cascadia Code', Consolas, monospace;
-                font-size: 10pt;
+            QTextEdit:disabled {{
+                background: #0D121B;
+                border-color: {theme.DIVIDER_COLOR};
+                color: {theme.DIM_TEXT};
             }}
-            QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QComboBox:focus {{
-                border: 1px solid {theme.INPUT_FOCUS_BORDER};
-            }}
-            QComboBox::drop-down {{ border: none; width: 24px; }}
-            QPushButton {{
-                background-color: {theme.BUTTON_BG};
-                color: {theme.TEXT_COLOR};
-                border: 1px solid {theme.BUTTON_BORDER};
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-family: 'Cascadia Code', Consolas, monospace;
-                font-size: 10pt;
-            }}
-            QPushButton:hover {{ background-color: {theme.BUTTON_HOVER_BG}; }}
-            QCheckBox {{ color: {theme.TEXT_COLOR}; padding: 4px 0; }}
-            QCheckBox::indicator {{
-                width: 14px; height: 14px;
-                border: 1px solid {theme.INPUT_BORDER};
-                border-radius: 3px;
-                background: {theme.INPUT_BG};
-            }}
-            QCheckBox::indicator:checked {{ background: {theme.TEXT_COLOR}; }}
-            QScrollArea {{ border: none; background: {theme.BG_COLOR}; }}
-            QScrollBar:vertical {{
-                background: {theme.SCROLLBAR_BG}; width: 8px; border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {theme.SCROLLBAR_HANDLE}; border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {theme.SCROLLBAR_HANDLE_HOVER};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """
 
-    # ---------- UI scaffolding ----------
+    def _build_ui(self) -> None:
+        self.header = QFrame()
+        self.header.setObjectName("settingsHeader")
+        header_layout = QHBoxLayout(self.header)
+        header_layout.setContentsMargins(28, 24, 28, 14)
+        header_layout.addWidget(_label("Settings", "windowTitle"))
+        header_layout.addStretch()
+        self.save_status_label = _label("", "autoSaveStatus")
+        self.save_status_label.hide()
+        header_layout.addWidget(self.save_status_label, 0, Qt.AlignVCenter)
+        self.main_layout.addWidget(self.header)
 
-    def _build_ui(self):
-        # Wrap the whole content in a scroll area so the window stays compact
-        self.setStyleSheet(self._stylesheet())
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(28, 8, 28, 24)
+        self.content_layout.setSpacing(14)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(16, 8, 16, 16)
-        layout.setSpacing(14)
-
-        title = _label("settings", theme.TEXT_COLOR, 16)
-        f = QFont("Cascadia Code", 16, QFont.Bold)
-        title.setFont(f)
-        layout.addWidget(title)
-
-        # ----- profile -----
-        layout.addWidget(self._section_label("PROFILE"))
-        layout.addWidget(_label("Your name", theme.SECONDARY_TEXT, 9))
+        self.content_layout.addWidget(_label("Your Name", "sectionTitle"))
         self.user_name_input = QLineEdit()
-        self.user_name_input.setPlaceholderText("Used to label your audio in Scribe transcripts")
-        layout.addWidget(self.user_name_input)
+        self.user_name_input.setPlaceholderText("Your name")
+        self.content_layout.addWidget(self.user_name_input)
 
-        # ----- output folders -----
-        layout.addWidget(self._section_label("OUTPUT FOLDERS"))
-        self.meetings_input = self._folder_picker("Meetings folder", layout, default_hint="<koe>/Meetings")
-        self.snippets_input = self._folder_picker("Snippets folder", layout, default_hint="<koe>/Snippets")
+        storage = self._card("Storage", "Choose where transcripts and snippets live.")
+        self.snippets_input = self._folder_picker(
+            "Snippets Folder", storage.layout(), "Leave empty for <koe>/Snippets"
+        )
+        self.meetings_input = self._folder_picker(
+            "Meetings Folder", storage.layout(), "Leave empty for <koe>/Meetings"
+        )
+        self.save_meeting_audio_checkbox = ToggleRow("Save Scribe meeting audio")
+        storage.layout().addWidget(self.save_meeting_audio_checkbox)
+        self.content_layout.addWidget(storage)
 
-        # ----- recording -----
-        layout.addWidget(self._section_label("RECORDING"))
-        layout.addWidget(_label("Activation hotkey", theme.SECONDARY_TEXT, 9))
+        recording = self._card("Recording")
+        recording.layout().addWidget(_label("Activation Hotkey", "subsectionTitle"))
         self.hotkey_input = QLineEdit()
         self.hotkey_input.setPlaceholderText("ctrl+shift+space")
-        layout.addWidget(self.hotkey_input)
+        recording.layout().addWidget(self.hotkey_input)
+        self.beep_checkbox = ToggleRow("Play a sound when a snippet is ready")
+        self.status_checkbox = ToggleRow("Show the snippet status card")
+        recording.layout().addWidget(self.beep_checkbox)
+        recording.layout().addWidget(self.status_checkbox)
+        self.content_layout.addWidget(recording)
 
-        self.beep_checkbox = QCheckBox("Play sound on snippet completion")
-        layout.addWidget(self.beep_checkbox)
-
-        # ----- transcription -----
-        layout.addWidget(self._section_label("TRANSCRIPTION"))
-        layout.addWidget(_label("Backend", theme.SECONDARY_TEXT, 9))
-        self.provider_combo = QComboBox()
-        self.provider_combo.addItem("ElevenLabs Scribe v2", "elevenlabs")
-        self.provider_combo.addItem("Groq Whisper Large v3", "groq")
-        layout.addWidget(self.provider_combo)
-
-        self.keyterms_checkbox = QCheckBox("Send vocab hint as ElevenLabs keyterms")
-        layout.addWidget(self.keyterms_checkbox)
-
-        # ----- AI cleanup -----
-        layout.addWidget(self._section_label("AI CLEANUP (snippets)"))
-        self.cleanup_enabled_checkbox = QCheckBox("Enable AI cleanup")
-        layout.addWidget(self.cleanup_enabled_checkbox)
-
-        threshold_row = QHBoxLayout()
-        threshold_row.addWidget(_label("Minimum duration (seconds):", theme.SECONDARY_TEXT, 9))
-        self.threshold_spin = QSpinBox()
-        self.threshold_spin.setRange(0, 300)
-        self.threshold_spin.setSingleStep(5)
-        threshold_row.addWidget(self.threshold_spin)
-        threshold_row.addStretch()
-        layout.addLayout(threshold_row)
-
-        layout.addWidget(_label("Cleanup model (OpenRouter slug)", theme.SECONDARY_TEXT, 9))
-        self.cleanup_model_input = QLineEdit()
-        self.cleanup_model_input.setPlaceholderText("google/gemini-3.5-flash")
-        layout.addWidget(self.cleanup_model_input)
-
-        layout.addWidget(_label("Cleanup prompt prefix", theme.SECONDARY_TEXT, 9))
-        self.cleanup_prompt_edit = QTextEdit()
-        self.cleanup_prompt_edit.setAcceptRichText(False)
-        self.cleanup_prompt_edit.setMinimumHeight(140)
-        layout.addWidget(self.cleanup_prompt_edit)
-
-        # ----- STT hint -----
-        layout.addWidget(self._section_label("STT VOCAB HINT"))
-        layout.addWidget(_label("Comma-separated proper nouns to bias transcription", theme.SECONDARY_TEXT, 9))
+        transcription = self._card("Transcription")
+        self.transcription_card = transcription
+        transcription.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        transcription.layout().setAlignment(Qt.AlignTop)
+        transcription.layout().setSpacing(9)
+        self.keyterms_checkbox = ToggleRow(
+            "Use vocabulary hints for names and technical terms"
+        )
+        self.keyterms_checkbox.label.setWordWrap(False)
+        self.keyterms_checkbox.layout().setContentsMargins(0, 0, 0, 0)
+        transcription.layout().addWidget(self.keyterms_checkbox)
+        transcription.layout().addWidget(_label("Vocabulary", "subsectionTitle"))
         self.initial_prompt_edit = QTextEdit()
         self.initial_prompt_edit.setAcceptRichText(False)
-        self.initial_prompt_edit.setMinimumHeight(80)
-        layout.addWidget(self.initial_prompt_edit)
+        self.initial_prompt_edit.setPlaceholderText(
+            "Comma-separated names, products, and technical terms"
+        )
+        self.initial_prompt_edit.setMinimumHeight(96)
+        self.initial_prompt_edit.setMaximumHeight(240)
+        transcription.layout().addWidget(self.initial_prompt_edit)
+        self.content_layout.addWidget(transcription)
 
-        # ----- save row -----
-        button_row = QHBoxLayout()
-        button_row.addStretch()
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.close)
-        button_row.addWidget(cancel_btn)
-        save_btn = QPushButton("Save")
-        save_btn.clicked.connect(self._save_and_close)
-        button_row.addWidget(save_btn)
-        layout.addLayout(button_row)
+        self.scroll.setWidget(self.content)
+        self.main_layout.addWidget(self.scroll, 1)
 
-        layout.addStretch()
+    @staticmethod
+    def _card(title: str, description: str | None = None) -> QFrame:
+        card = QFrame()
+        card.setObjectName("card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 18)
+        layout.setSpacing(9)
+        layout.addWidget(_label(title, "sectionTitle"))
+        if description:
+            description_label = _label(description, "windowSubtitle")
+            description_label.setWordWrap(True)
+            layout.addWidget(description_label)
+            layout.addSpacing(2)
+        return card
 
-        scroll.setWidget(content)
-        self.main_layout.addWidget(scroll)
-
-    def _section_label(self, text: str) -> QLabel:
-        lbl = _label(text, theme.SECONDARY_TEXT, 9)
-        f = QFont("Cascadia Code", 9, QFont.Bold)
-        lbl.setFont(f)
-        return lbl
-
-    def _folder_picker(self, label_text: str, parent_layout: QVBoxLayout, default_hint: str) -> QLineEdit:
-        parent_layout.addWidget(_label(label_text, theme.SECONDARY_TEXT, 9))
+    def _folder_picker(
+        self,
+        label_text: str,
+        parent_layout: QVBoxLayout,
+        placeholder: str,
+    ) -> QLineEdit:
+        parent_layout.addWidget(_label(label_text, "subsectionTitle"))
         row = QHBoxLayout()
+        row.setSpacing(8)
         field = QLineEdit()
-        field.setPlaceholderText(f"leave empty for default ({default_hint})")
-        row.addWidget(field)
+        field.setPlaceholderText(placeholder)
+        row.addWidget(field, 1)
         browse = QPushButton("Browse")
-        browse.setMinimumWidth(80)
+        browse.setFixedWidth(78)
         browse.clicked.connect(lambda: self._browse(field))
         row.addWidget(browse)
         parent_layout.addLayout(row)
         return field
 
-    def _browse(self, field: QLineEdit):
-        start = field.text() or str(Path.home() / "Desktop")
-        folder = QFileDialog.getExistingDirectory(self, "Select Folder", start)
+    def _browse(self, field: QLineEdit) -> None:
+        start = field.text() or str(Path.home())
+        folder = QFileDialog.getExistingDirectory(self, "Select folder", start)
         if folder:
             field.setText(folder)
 
-    # ---------- load + save ----------
-
-    def _load_values(self):
-        self.user_name_input.setText(ConfigManager.get_config_value("profile", "user_name") or "")
-        self.meetings_input.setText(ConfigManager.get_config_value("meeting_options", "root_folder") or "")
-        self.snippets_input.setText(ConfigManager.get_config_value("misc", "snippets_folder") or "")
+    def _load_values(self) -> None:
+        self._loading_values = True
+        self.user_name_input.setText(
+            ConfigManager.get_config_value("profile", "user_name") or ""
+        )
+        self.meetings_input.setText(
+            ConfigManager.get_config_value("meeting_options", "root_folder") or ""
+        )
+        self.snippets_input.setText(
+            ConfigManager.get_config_value("misc", "snippets_folder") or ""
+        )
+        self.save_meeting_audio_checkbox.setChecked(
+            bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
+        )
         self.hotkey_input.setText(
-            ConfigManager.get_config_value("recording_options", "activation_key") or "ctrl+shift+space"
+            ConfigManager.get_config_value("recording_options", "activation_key")
+            or "ctrl+shift+space"
         )
         self.beep_checkbox.setChecked(
             bool(ConfigManager.get_config_value("misc", "noise_on_completion"))
         )
-        provider = ConfigManager.get_config_value("model_options", "transcription_provider") or "elevenlabs"
-        provider_idx = self.provider_combo.findData(provider)
-        self.provider_combo.setCurrentIndex(provider_idx if provider_idx >= 0 else 0)
+        self.status_checkbox.setChecked(
+            not bool(ConfigManager.get_config_value("misc", "hide_status_window"))
+        )
         self.keyterms_checkbox.setChecked(
-            bool(ConfigManager.get_config_value("model_options", "elevenlabs", "keyterms_enabled"))
-        )
-
-        self.cleanup_enabled_checkbox.setChecked(
-            bool(ConfigManager.get_config_value("post_processing", "ai_cleanup_enabled"))
-        )
-        self.threshold_spin.setValue(
-            int(ConfigManager.get_config_value("post_processing", "ai_cleanup_threshold") or 10)
-        )
-        self.cleanup_model_input.setText(
-            ConfigManager.get_config_value("post_processing", "ai_cleanup_model") or ""
-        )
-        self.cleanup_prompt_edit.setPlainText(
-            ConfigManager.get_config_value("post_processing", "ai_cleanup_prompt") or ""
+            bool(
+                ConfigManager.get_config_value(
+                    "model_options", "elevenlabs", "keyterms_enabled"
+                )
+            )
         )
         self.initial_prompt_edit.setPlainText(
-            ConfigManager.get_config_value("model_options", "common", "initial_prompt") or ""
+            ConfigManager.get_config_value("model_options", "common", "initial_prompt")
+            or ""
+        )
+        self._sync_vocabulary_editor()
+        self._loading_values = False
+
+    def _connect_autosave(self) -> None:
+        for field in (
+            self.user_name_input,
+            self.meetings_input,
+            self.snippets_input,
+            self.hotkey_input,
+        ):
+            field.textChanged.connect(self._schedule_save)
+        for toggle in (
+            self.save_meeting_audio_checkbox,
+            self.beep_checkbox,
+            self.status_checkbox,
+            self.keyterms_checkbox,
+        ):
+            toggle.toggled.connect(self._schedule_save)
+        self.keyterms_checkbox.toggled.connect(self._sync_vocabulary_editor)
+        self.initial_prompt_edit.textChanged.connect(self._schedule_save)
+        self.initial_prompt_edit.textChanged.connect(self._refresh_content_size)
+
+    def _sync_vocabulary_editor(self, *_args) -> None:
+        enabled = self.keyterms_checkbox.isChecked()
+        self.initial_prompt_edit.setEnabled(enabled)
+        self.initial_prompt_edit.setToolTip(
+            "" if enabled else "Turn on vocabulary hints to edit this list."
         )
 
-    def _save_and_close(self):
-        ConfigManager.set_config_value(self.user_name_input.text().strip() or None,
-                                       "profile", "user_name")
-        ConfigManager.set_config_value(self.meetings_input.text().strip() or None,
-                                       "meeting_options", "root_folder")
-        ConfigManager.set_config_value(self.snippets_input.text().strip() or None,
-                                       "misc", "snippets_folder")
-        ConfigManager.set_config_value(self.hotkey_input.text().strip() or "ctrl+shift+space",
-                                       "recording_options", "activation_key")
-        ConfigManager.set_config_value(self.beep_checkbox.isChecked(),
-                                       "misc", "noise_on_completion")
-        ConfigManager.set_config_value(self.provider_combo.currentData() or "elevenlabs",
-                                       "model_options", "transcription_provider")
-        ConfigManager.set_config_value(self.keyterms_checkbox.isChecked(),
-                                       "model_options", "elevenlabs", "keyterms_enabled")
+    def _refresh_content_size(self, *_args) -> None:
+        document_height = self.initial_prompt_edit.document().documentLayout().documentSize().height()
+        editor_height = max(96, min(240, int(document_height) + 28))
+        self.initial_prompt_edit.setFixedHeight(editor_height)
+        QTimer.singleShot(0, self._fit_window_to_content)
 
-        ConfigManager.set_config_value(self.cleanup_enabled_checkbox.isChecked(),
-                                       "post_processing", "ai_cleanup_enabled")
-        ConfigManager.set_config_value(self.threshold_spin.value(),
-                                       "post_processing", "ai_cleanup_threshold")
+    def _fit_window_to_content(self) -> None:
+        self.content.adjustSize()
+        desired_height = self.header.sizeHint().height() + self.content.sizeHint().height() + 8
+        screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        maximum_height = screen.availableGeometry().height() - 48 if screen else 860
+        self.resize(self.width(), max(560, min(desired_height, maximum_height)))
+
+    def _schedule_save(self, *_args) -> None:
+        if self._loading_values:
+            return
+        self._changed_since_show = True
+        self.save_status_label.show()
+        self.save_status_label.setText("Saving…")
+        self._save_timer.start()
+
+    def _save_values(self) -> None:
         ConfigManager.set_config_value(
-            self.cleanup_model_input.text().strip() or "google/gemini-3.5-flash",
-            "post_processing", "ai_cleanup_model",
+            self.user_name_input.text().strip() or None, "profile", "user_name"
         )
-        ConfigManager.set_config_value(self.cleanup_prompt_edit.toPlainText() or None,
-                                       "post_processing", "ai_cleanup_prompt")
-        ConfigManager.set_config_value(self.initial_prompt_edit.toPlainText() or None,
-                                       "model_options", "common", "initial_prompt")
+        ConfigManager.set_config_value(
+            self.meetings_input.text().strip() or None,
+            "meeting_options",
+            "root_folder",
+        )
+        ConfigManager.set_config_value(
+            self.snippets_input.text().strip() or None, "misc", "snippets_folder"
+        )
+        ConfigManager.set_config_value(
+            self.save_meeting_audio_checkbox.isChecked(),
+            "meeting_options",
+            "save_audio",
+        )
+        ConfigManager.set_config_value(
+            self.hotkey_input.text().strip() or "ctrl+shift+space",
+            "recording_options",
+            "activation_key",
+        )
+        ConfigManager.set_config_value(
+            self.beep_checkbox.isChecked(), "misc", "noise_on_completion"
+        )
+        ConfigManager.set_config_value(
+            not self.status_checkbox.isChecked(), "misc", "hide_status_window"
+        )
+        ConfigManager.set_config_value(
+            self.keyterms_checkbox.isChecked(),
+            "model_options",
+            "elevenlabs",
+            "keyterms_enabled",
+        )
+        ConfigManager.set_config_value(
+            self.initial_prompt_edit.toPlainText().strip() or None,
+            "model_options",
+            "common",
+            "initial_prompt",
+        )
+        try:
+            ConfigManager.save_config()
+            self._save_failed = False
+            self.save_status_label.show()
+            self.save_status_label.setStyleSheet("")
+            self.save_status_label.setText("Saved")
+            self.save_status_label.setToolTip("")
+        except Exception as exc:
+            self._save_failed = True
+            self.save_status_label.show()
+            self.save_status_label.setText("Couldn’t Save")
+            self.save_status_label.setStyleSheet(f"color: {theme.ERROR_COLOR};")
+            self.save_status_label.setToolTip(str(exc))
 
-        ConfigManager.save_config()
-        self.settings_saved.emit()
-        self.close()
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
-    def closeEvent(self, event):
+    def showEvent(self, event) -> None:
+        self._load_values()
+        self._changed_since_show = False
+        self.save_status_label.setStyleSheet("")
+        self.save_status_label.clear()
+        self.save_status_label.hide()
+        self._refresh_content_size()
+        super().showEvent(event)
+
+    def closeEvent(self, event) -> None:
+        if self._save_timer.isActive():
+            self._save_timer.stop()
+            self._save_values()
+        if self._changed_since_show and not self._save_failed:
+            self.settings_saved.emit()
         self.settings_closed.emit()
         event.accept()

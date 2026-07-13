@@ -1,28 +1,14 @@
-# Koe — Groq-cloud transcription + OpenRouter cleanup/summary.
-# No local model weights, no CUDA, no torch. ~20 packages instead of ~80.
+PyAudioWPatch==0.2.12.7
+PyQt5==5.15.11
+PyYAML==6.0.3
+numpy==2.4.3
+pynput==1.8.1
+pyperclip==1.11.0
+python-dotenv==1.2.1
+pywin32==311
+requests==2.32.5
+scipy==1.17.1
+sounddevice==0.5.5
 
-# UI
-PyQt5==5.15.10
-PyQt5-Qt5==5.15.2
-PyQt5-sip==12.13.0
-
-# Audio capture
-sounddevice==0.4.6                # mic
-PyAudioWPatch==0.2.12.8           # WASAPI loopback (Windows system audio)
-soundfile==0.12.1
-scipy==1.11.4                     # high-quality resampling
-numpy==1.24.3
-webrtcvad-wheels==2.0.11.post1
-
-# Hotkey
-pynput==1.7.6
-
-# Clipboard
-pyperclip==1.8.2
-
-# HTTP (Groq + OpenRouter)
-requests==2.31.0
-python-dotenv==1.0.0
-
-# Config
-PyYAML==6.0.1
+# Regression suite
+pytest==9.0.2

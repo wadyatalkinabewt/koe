@@ -1,253 +1,220 @@
-import sys
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot, QTimer, QRectF
-from PyQt5.QtGui import QFont, QPixmap, QIcon, QPainter, QBrush, QColor, QPainterPath, QPen, QMouseEvent
-from PyQt5.QtWidgets import QApplication, QLabel, QHBoxLayout, QVBoxLayout, QWidget, QMainWindow
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from PyQt5.QtCore import QTimer, QRectF, Qt, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QColor, QBrush, QMouseEvent, QPainter, QPainterPath, QPen
+from PyQt5.QtWidgets import (
+    QApplication, QHBoxLayout, QLabel, QMainWindow, QPushButton, QWidget,
+)
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from ui import theme
 
-# Debug logging
+
 _DEBUG_LOG = Path(__file__).parent.parent.parent / "logs" / "debug.log"
 
-def _debug(msg: str):
-    """Write debug message to file with timestamp."""
+
+def _debug(message: str) -> None:
     try:
-        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            f.write(f"[{timestamp}] [status_window] {msg}\n")
-    except:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as log_file:
+            log_file.write(f"[{datetime.now().strftime('%H:%M:%S')}] [status_window] {message}\n")
+    except Exception:
         pass
 
 
 class StatusWindow(QMainWindow):
+    """Compact always-on-top card for snippet capture and transcription state."""
+
     statusSignal = pyqtSignal(str)
     closeSignal = pyqtSignal()
-
-    # Terminal color scheme (from centralized theme)
-    BG_COLOR = QColor(10, 10, 15, 245)  # Near black with alpha
-    BORDER_COLOR = QColor(0, 255, 136)  # Terminal green (QColor for painting)
-    TEXT_COLOR = theme.TEXT_COLOR
-    SECONDARY_TEXT = theme.SECONDARY_TEXT
-    RECORDING_COLOR = theme.RECORDING_COLOR
+    cancelSignal = pyqtSignal()
+    dismissSignal = pyqtSignal()
 
     def __init__(self):
-        """
-        Initialize the status window.
-        """
         super().__init__()
         self.recording_start_time = None
-        self.timer = QTimer()
+        self._drag_pos = None
+        self._pulse_on = True
+        self.current_status = "idle"
+
+        self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_timer)
-        self.blink_timer = QTimer()
-        self.blink_timer.timeout.connect(self.toggle_blink)
-        self.blink_state = True
-        self._drag_pos = None  # For window dragging
-        self.initUI()
+        self.pulse_timer = QTimer(self)
+        self.pulse_timer.timeout.connect(self._pulse_indicator)
+
+        self._build_ui()
         self.statusSignal.connect(self.updateStatus)
 
-    def initUI(self):
-        """
-        Initialize the user interface.
-        """
-        self.setWindowTitle('Recording')
+    def _build_ui(self) -> None:
+        self.setWindowTitle("Koe")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(300, 60)  # Wider for DPI scaling on laptops
+        self.setFixedSize(207, 52)
 
-        self.main_widget = QWidget(self)
-        self.main_layout = QHBoxLayout(self.main_widget)
-        self.main_layout.setContentsMargins(16, 10, 16, 10)
-        self.main_layout.setSpacing(12)
+        central = QWidget(self)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(12, 9, 10, 9)
+        layout.setSpacing(7)
 
-        # Recording indicator (blinking dot)
         self.indicator = QLabel("●")
-        self.indicator.setFont(QFont('Cascadia Code', 14))
-        self.indicator.setStyleSheet(f"color: {self.RECORDING_COLOR};")
-        self.indicator.setFixedWidth(20)
-        self.main_layout.addWidget(self.indicator)
+        self.indicator.setStyleSheet(f"color: {theme.RECORDING_COLOR}; font-size: 14px;")
+        self.indicator.setFixedWidth(12)
+        layout.addWidget(self.indicator)
 
-        # Status and timer in vertical layout (centered)
-        text_layout = QVBoxLayout()
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(2)
+        self.status_label = QLabel("Listening")
+        self.status_label.setStyleSheet(
+            f"color: {theme.TEXT_COLOR}; font-family: {theme.FONT_FAMILY}; "
+            "font-size: 11pt; font-weight: 650;"
+        )
+        self.status_label.setFixedWidth(88)
+        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        layout.addWidget(self.status_label)
 
-        self.status_label = QLabel('> Recording_')
-        self.status_label.setFont(QFont('Cascadia Code', 11, QFont.Bold))
-        self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
-        self.status_label.setAlignment(Qt.AlignCenter)
+        self.timer_label = QLabel("00:00")
+        self.timer_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.timer_label.setFixedWidth(42)
+        self.timer_label.setStyleSheet(
+            f"color: {theme.SECONDARY_TEXT}; background: transparent; border: none; "
+            f"font-family: {theme.FONT_FAMILY}; font-size: 10pt; font-weight: 600;"
+        )
+        layout.addWidget(self.timer_label)
 
-        self.timer_label = QLabel('00:00')
-        self.timer_label.setFont(QFont('Cascadia Code', 10))
-        self.timer_label.setStyleSheet(f"color: {self.SECONDARY_TEXT};")
-        self.timer_label.setAlignment(Qt.AlignCenter)
+        self.cancel_button = QPushButton("×")
+        self.cancel_button.setObjectName("snippetCancelButton")
+        self.cancel_button.setAccessibleName("Cancel snippet")
+        self.cancel_button.setToolTip("Cancel without transcribing")
+        self.cancel_button.setCursor(Qt.PointingHandCursor)
+        self.cancel_button.setFixedSize(22, 22)
+        self.cancel_button.setStyleSheet(
+            "QPushButton { color: #F0A7AE; background: transparent; "
+            "border: none; border-radius: 7px; font-size: 15pt; font-weight: 500; "
+            "padding: 0; margin: 0; } "
+            "QPushButton:hover { color: #FF7884; background: #2A171D; } "
+            "QPushButton:pressed { color: #FF5F6D; background: #351A21; }"
+        )
+        self.cancel_button.clicked.connect(self._handle_close)
+        self.cancel_button.hide()
+        layout.addWidget(self.cancel_button)
+        self.setCentralWidget(central)
 
-        text_layout.addWidget(self.status_label)
-        text_layout.addWidget(self.timer_label)
+    def _handle_close(self) -> None:
+        if self.current_status == "recording":
+            self.cancel_button.setEnabled(False)
+            self.cancelSignal.emit()
+            return
+        if self.current_status != "transcribing":
+            return
+        self.cancel_button.setEnabled(False)
+        self.dismissSignal.emit()
+        self.current_status = "dismissed"
+        self.close()
 
-        self.main_layout.addLayout(text_layout, 1)  # Stretch factor of 1 to center
-
-        # Right spacer to balance the indicator and keep text truly centered
-        right_spacer = QLabel("")
-        right_spacer.setFixedWidth(20)
-        self.main_layout.addWidget(right_spacer)
-
-        self.setCentralWidget(self.main_widget)
-
-    def paintEvent(self, event):
-        """
-        Create a rounded rectangle with terminal styling.
-        """
+    def paintEvent(self, event) -> None:
         path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 6, 6)
+        path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 14, 14)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
-        # Fill background
-        painter.setBrush(QBrush(self.BG_COLOR))
-        painter.setPen(Qt.NoPen)
+        background = QColor(theme.SURFACE_COLOR)
+        background.setAlpha(250)
+        painter.setBrush(QBrush(background))
+        painter.setPen(QPen(QColor(theme.BORDER_COLOR), 1))
         painter.drawPath(path)
 
-        # Draw border
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(self.BORDER_COLOR, 1))
-        painter.drawPath(path)
-
-    def mousePressEvent(self, event: QMouseEvent):
-        """Start dragging on left mouse button press."""
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
             event.accept()
 
-    def mouseMoveEvent(self, event: QMouseEvent):
-        """Move window while dragging."""
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if event.buttons() == Qt.LeftButton and self._drag_pos is not None:
             self.move(event.globalPos() - self._drag_pos)
             event.accept()
 
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        """Stop dragging on mouse release."""
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._drag_pos = None
             event.accept()
 
-    def toggle_blink(self):
-        """Toggle the recording indicator visibility."""
-        self.blink_state = not self.blink_state
-        if self.blink_state:
-            self.indicator.setStyleSheet(f"color: {self.RECORDING_COLOR};")
-        else:
-            self.indicator.setStyleSheet("color: transparent;")
+    def _pulse_indicator(self) -> None:
+        self._pulse_on = not self._pulse_on
+        color = self._indicator_color if self._pulse_on else theme.DIM_TEXT
+        self.indicator.setStyleSheet(f"color: {color}; font-size: 14px;")
 
-    def update_timer(self):
-        """Update the timer display."""
-        if self.recording_start_time:
-            elapsed = time.time() - self.recording_start_time
-            minutes = int(elapsed // 60)
-            seconds = int(elapsed % 60)
-            self.timer_label.setText(f'{minutes:02d}:{seconds:02d}')
+    def update_timer(self) -> None:
+        if self.recording_start_time is None:
+            return
+        elapsed = time.time() - self.recording_start_time
+        minutes, seconds = divmod(int(elapsed), 60)
+        self.timer_label.setText(f"{minutes:02d}:{seconds:02d}")
 
-    def show(self):
-        """
-        Position the window in the bottom center of the screen and show it.
-        """
+    def show(self) -> None:
         screen = QApplication.primaryScreen()
-        screen_geometry = screen.geometry()
-        screen_width = screen_geometry.width()
-        screen_height = screen_geometry.height()
-        window_width = self.width()
-        window_height = self.height()
-
-        x = (screen_width - window_width) // 2
-        y = screen_height - window_height - 120
-
+        available = screen.availableGeometry()
+        x = available.x() + (available.width() - self.width()) // 2
+        y = available.y() + available.height() - self.height() - 36
         self.move(x, y)
         super().show()
-        self.activateWindow()  # Ensure window can receive key events
+        self.raise_()
+
+    def _set_state(self, title: str, color: str, *, cancellable: bool = False) -> None:
+        self._indicator_color = color
+        self.indicator.setStyleSheet(f"color: {color}; font-size: 14px;")
+        self.status_label.setText(title)
+        self.cancel_button.setEnabled(cancellable)
+        self.cancel_button.setVisible(cancellable)
 
     @pyqtSlot(str)
-    def updateStatus(self, status):
-        """
-        Update the status window based on the given status.
-        """
-        _debug(f"updateStatus() called with status: {status}")
-        # Safety check: don't update if window was closed (e.g., by cancel)
-        if not self.isVisible() and status != 'recording':
-            _debug(f"updateStatus() early return - window not visible")
+    def updateStatus(self, status: str) -> None:
+        _debug(f"updateStatus: {status}")
+        if not self.isVisible() and status != "recording":
             return
 
-        if status == 'recording':
-            _debug("updateStatus() handling 'recording'")
-            self.indicator.setText("●")
-            self.indicator.setStyleSheet(f"color: {self.RECORDING_COLOR};")
-            self.status_label.setText('> Recording_')
-            self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
-            self.timer_label.setText('00:00')
+        self.current_status = status
+
+        if status == "recording":
+            self._set_state("Listening", theme.RECORDING_COLOR, cancellable=True)
+            self.cancel_button.setAccessibleName("Cancel snippet")
+            self.cancel_button.setToolTip("Cancel without transcribing")
+            self.timer_label.setText("00:00")
             self.recording_start_time = time.time()
-            self.timer.start(1000)  # Update every second
-            self.blink_timer.start(500)  # Blink every 500ms
+            self.timer.start(1000)
+            self.pulse_timer.start(700)
             self.show()
-        elif status == 'transcribing':
-            _debug("updateStatus() handling 'transcribing'")
+        elif status == "transcribing":
             self.timer.stop()
-            # Keep blinking during transcription
-            self.indicator.setText("●")
-            self.indicator.setStyleSheet(f"color: {self.TEXT_COLOR};")
-            self.status_label.setText('> Transcribing_')
-            self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
-
-        elif status in ('complete', 'error'):
-            _debug(f"updateStatus() handling '{status}' - stopping timers")
+            self._set_state("Transcribing", theme.ACCENT_COLOR, cancellable=True)
+            self.cancel_button.setAccessibleName("Dismiss transcription")
+            self.cancel_button.setToolTip("Dismiss without copying to the clipboard")
+            self.pulse_timer.start(700)
+        elif status in ("complete", "cancelled"):
             self.timer.stop()
-            self.blink_timer.stop()
+            self.pulse_timer.stop()
             self.recording_start_time = None
-
-            if status == 'complete':
-                _debug("updateStatus() - closing immediately (beep is sufficient feedback)")
-                self.close()
-            elif status == 'error':
-                # Error status - showError() will display the message
-                # If no message provided via showError(), show generic error briefly
-                self.indicator.setText("✗")
-                self.indicator.setStyleSheet("color: #ff6666;")
-                if '> Error:' not in self.status_label.text():
-                    self.status_label.setText('> Error')
-                    self.status_label.setStyleSheet("color: #ff6666;")
-                QTimer.singleShot(3000, self.close)
-
-        else:
-            # Unknown status (e.g., 'idle') - do nothing
-            _debug(f"updateStatus() - unknown status '{status}', ignoring")
-            pass
+            self.cancel_button.hide()
+            self.close()
+        elif status == "error":
+            self.timer.stop()
+            self.pulse_timer.stop()
+            self.recording_start_time = None
+            self._set_state("Failed", theme.ERROR_COLOR, cancellable=False)
+            QTimer.singleShot(3500, self.close)
 
     @pyqtSlot(str)
-    def showError(self, error_msg):
-        """Show error message in status window before closing."""
+    def showError(self, error_msg: str) -> None:
         self.timer.stop()
-        self.blink_timer.stop()
-        self.indicator.setText("✗")
-        self.indicator.setStyleSheet("color: #ff6666;")
-        # Truncate long error messages
-        display_msg = error_msg[:30] + '...' if len(error_msg) > 30 else error_msg
-        self.status_label.setText(f'> Error: {display_msg}')
-        self.status_label.setStyleSheet("color: #ff6666;")
-        self.timer_label.setText('')
-        # Close after 3 seconds
-        QTimer.singleShot(3000, self.close)
+        self.pulse_timer.stop()
+        self.current_status = "error"
+        self._set_state("Failed", theme.ERROR_COLOR, cancellable=False)
+        self.timer_label.setText("—")
+        QTimer.singleShot(3500, self.close)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-
-    status_window = StatusWindow()
-    status_window.statusSignal.emit('recording')
-
-    # Simulate status updates
-    QTimer.singleShot(5000, lambda: status_window.statusSignal.emit('transcribing'))
-    QTimer.singleShot(8000, lambda: status_window.statusSignal.emit('idle'))
-
+    window = StatusWindow()
+    window.updateStatus("recording")
     sys.exit(app.exec_())

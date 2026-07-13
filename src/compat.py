@@ -1,103 +1,166 @@
-"""
-Platform helpers (Windows-focused after Mac/Linux/server stack rip).
+"""Windows integration helpers for Koe's tray and desktop surfaces."""
 
-Kept as a thin abstraction so calling code stays clean — single-instance
-locks, sound playback, clipboard fallback, AppUserModelID for taskbar
-grouping. Mac/Linux fallbacks are best-effort and untested post-rip.
-"""
-
+import ctypes
+import subprocess
 import sys
-import os
+from ctypes import wintypes
 from pathlib import Path
-
-IS_WINDOWS = sys.platform == 'win32'
 
 
 def acquire_single_instance_lock(lock_name="KoeTranscriptionApp"):
-    """Acquire a single-instance lock. Exits if another instance is running.
-
-    Windows: named mutex via kernel32.
-    Other: file-based fcntl lock (best-effort).
-    """
-    if IS_WINDOWS:
-        import ctypes
-        ERROR_ALREADY_EXISTS = 183
-        mutex = ctypes.windll.kernel32.CreateMutexW(None, False, f"{lock_name}Mutex_v1")  # type: ignore
-        if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:  # type: ignore
-            print("[Koe] Another instance is already running. Exiting.")
-            sys.exit(0)
-        return mutex
-    try:
-        import fcntl
-        lock_path = Path.home() / f".{lock_name}.lock"
-        lock_file = open(lock_path, 'w')
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        lock_file.write(str(os.getpid()))
-        lock_file.flush()
-        return lock_file
-    except (IOError, OSError):
+    """Acquire Koe's named Windows mutex or exit when another instance owns it."""
+    error_already_exists = 183
+    mutex = ctypes.windll.kernel32.CreateMutexW(  # type: ignore[attr-defined]
+        None,
+        False,
+        f"{lock_name}Mutex_v1",
+    )
+    if ctypes.windll.kernel32.GetLastError() == error_already_exists:  # type: ignore[attr-defined]
         print("[Koe] Another instance is already running. Exiting.")
         sys.exit(0)
+    return mutex
 
 
-def release_single_instance_lock(lock_handle):
-    """Release the single-instance lock."""
+def release_single_instance_lock(lock_handle) -> None:
     if lock_handle is None:
         return
-    if IS_WINDOWS:
-        try:
-            import ctypes
-            ctypes.windll.kernel32.ReleaseMutex(lock_handle)  # type: ignore
-            ctypes.windll.kernel32.CloseHandle(lock_handle)  # type: ignore
-        except Exception:
-            pass
-    else:
-        try:
-            import fcntl
-            fcntl.flock(lock_handle, fcntl.LOCK_UN)
-            lock_handle.close()
-        except Exception:
-            pass
-
-
-def set_app_user_model_id(app_id="Koe.Transcription.App"):
-    """Set Windows AppUserModelID for proper taskbar grouping. No-op elsewhere."""
-    if not IS_WINDOWS:
-        return
     try:
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)  # type: ignore
+        ctypes.windll.kernel32.ReleaseMutex(lock_handle)  # type: ignore[attr-defined]
+        ctypes.windll.kernel32.CloseHandle(lock_handle)  # type: ignore[attr-defined]
     except Exception:
         pass
 
 
-def play_sound_file(file_path):
-    """Play a sound file. Windows uses winsound; other platforms best-effort."""
-    file_path = str(file_path)
-    if IS_WINDOWS:
-        try:
-            import winsound
-            winsound.PlaySound(file_path, winsound.SND_FILENAME)
-        except Exception:
-            pass
-        return
-    # Generic POSIX fallback (best-effort, untested post-rip)
+def set_app_user_model_id(app_id="Koe.Transcription.App") -> None:
     try:
-        import subprocess
-        subprocess.run(['afplay' if sys.platform == 'darwin' else 'aplay', file_path],
-                       check=True, capture_output=True)
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)  # type: ignore[attr-defined]
     except Exception:
         pass
 
 
-def clipboard_copy_fallback(text):
-    """Platform-specific clipboard fallback when pyperclip fails."""
-    import subprocess
-    if IS_WINDOWS:
+def apply_window_icon(window, icon_path, app_id=None) -> None:
+    """Apply Qt/native icons and optional taskbar identity metadata."""
+    from PyQt5.QtGui import QIcon
+
+    icon_path = Path(icon_path).resolve()
+    if not icon_path.exists():
+        return
+    window.setWindowIcon(QIcon(str(icon_path)))
+
+    try:
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        user32.LoadImageW.restype = wintypes.HANDLE
+        handles = []
+        hwnd = int(window.winId())
+        for icon_type, size in ((1, 32), (0, 16)):
+            handle = user32.LoadImageW(
+                None,
+                str(icon_path),
+                1,  # IMAGE_ICON
+                size,
+                size,
+                0x0010,  # LR_LOADFROMFILE
+            )
+            if handle:
+                user32.SendMessageW(hwnd, 0x0080, icon_type, handle)  # WM_SETICON
+                handles.append(handle)
+        window._koe_native_icon_handles = handles
+    except Exception:
+        pass
+
+    if app_id:
         try:
-            process = subprocess.Popen(['clip'], stdin=subprocess.PIPE)
-            process.communicate(text.encode('utf-16le'))
-            return True
+            from win32com.propsys import propsys, pscon
+
+            store = propsys.SHGetPropertyStoreForWindow(
+                int(window.winId()),
+                propsys.IID_IPropertyStore,
+            )
+            store.SetValue(
+                pscon.PKEY_AppUserModel_ID,
+                propsys.PROPVARIANTType(str(app_id)),
+            )
+            store.SetValue(
+                pscon.PKEY_AppUserModel_RelaunchIconResource,
+                propsys.PROPVARIANTType(f"{icon_path},0"),
+            )
+            store.Commit()
+            window._koe_taskbar_property_store = store
         except Exception:
-            return False
-    return False
+            pass
+
+
+def ensure_windows_shortcut(
+    shortcut_path,
+    *,
+    app_id,
+    target_path,
+    arguments,
+    working_directory,
+    icon_path,
+):
+    """Create/update a Windows shortcut registered to the supplied taskbar ID."""
+    shortcut_path = Path(shortcut_path).resolve()
+    shortcut_path.parent.mkdir(parents=True, exist_ok=True)
+    icon_path = Path(icon_path).resolve()
+
+    import win32com.client
+    from win32com.propsys import propsys, pscon
+
+    shortcut = win32com.client.Dispatch("WScript.Shell").CreateShortcut(
+        str(shortcut_path)
+    )
+    shortcut.TargetPath = str(Path(target_path).resolve())
+    shortcut.Arguments = str(arguments)
+    shortcut.WorkingDirectory = str(Path(working_directory).resolve())
+    shortcut.IconLocation = f"{icon_path},0"
+    shortcut.Description = "Koe Scribe meeting recorder"
+    shortcut.Save()
+
+    store = propsys.SHGetPropertyStoreFromParsingName(
+        str(shortcut_path),
+        None,
+        2,  # GPS_READWRITE
+        propsys.IID_IPropertyStore,
+    )
+    store.SetValue(
+        pscon.PKEY_AppUserModel_ID,
+        propsys.PROPVARIANTType(str(app_id)),
+    )
+    store.Commit()
+    return shortcut_path
+
+
+def enable_dark_titlebar(window) -> None:
+    try:
+        enabled = ctypes.c_int(1)
+        hwnd = ctypes.c_void_p(int(window.winId()))
+        for attribute in (20, 19):
+            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(  # type: ignore[attr-defined]
+                hwnd,
+                attribute,
+                ctypes.byref(enabled),
+                ctypes.sizeof(enabled),
+            )
+            if result == 0:
+                break
+    except Exception:
+        pass
+
+
+def play_sound_file(file_path) -> None:
+    try:
+        import winsound
+
+        winsound.PlaySound(str(file_path), winsound.SND_FILENAME)
+    except Exception:
+        pass
+
+
+def clipboard_copy_fallback(text) -> bool:
+    try:
+        process = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
+        process.communicate(str(text).encode("utf-16le"))
+        return process.returncode == 0
+    except Exception:
+        return False

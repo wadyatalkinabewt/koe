@@ -8,28 +8,35 @@ import os
 import sys
 import subprocess
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 
-def needs_setup() -> bool:
+# Koe is a small source-run desktop app; keep its working tree free of generated
+# bytecode directories during normal launches (including child Scribe windows).
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
+
+ELEVENLABS_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+
+
+def needs_setup(koe_dir: Path | None = None) -> bool:
     """Check if setup needs to run."""
-    koe_dir = Path(__file__).parent
+    koe_dir = koe_dir or Path(__file__).parent
 
-    # Check for setup complete marker
-    if (koe_dir / ".setup_complete").exists():
-        return False
-
-    # Check for existing config with a cloud transcription key.
+    # The marker is advisory only. Always revalidate the actual key so an old
+    # installation cannot bypass setup after the supported backend changes.
+    marker_path = koe_dir / ".setup_complete"
     env_path = koe_dir / ".env"
     config_path = koe_dir / "src" / "config.yaml"
 
     if env_path.exists() and config_path.exists():
-        with open(env_path) as f:
-            content = f.read()
-            if "ELEVENLABS_API_KEY=" in content or "GROQ_API_KEY=" in content:
-                # Has valid config, mark as complete
-                (koe_dir / ".setup_complete").touch()
-                return False
+        values = dotenv_values(env_path)
+        if any(str(values.get(name) or "").strip() for name in ELEVENLABS_KEY_NAMES):
+            marker_path.touch()
+            return False
+
+    marker_path.unlink(missing_ok=True)
 
     return True
 
@@ -45,7 +52,7 @@ def run_koe():
     """Run the main Koe application."""
     print('Starting Koe...')
     load_dotenv()
-    subprocess.run([sys.executable, os.path.join('src', 'main.py')])
+    subprocess.run([sys.executable, '-B', os.path.join('src', 'main.py')])
 
 
 if __name__ == '__main__':
