@@ -120,7 +120,7 @@ def test_record_audio_falls_back_when_default_input_fails(monkeypatch):
     assert np.array_equal(audio, np.tile(frame[:, 0], 4))
 
 
-def test_cancel_discards_audio_before_archive_or_transcription(monkeypatch):
+def test_cancel_discards_audio_before_transcription(monkeypatch):
     import result_thread
     from result_thread import ResultThread
 
@@ -136,11 +136,6 @@ def test_cancel_discards_audio_before_archive_or_transcription(monkeypatch):
         return np.ones(1600, dtype=np.int16)
 
     monkeypatch.setattr(thread, "_record_audio", record_then_cancel)
-    monkeypatch.setattr(
-        result_thread,
-        "save_voice_clone_audio",
-        lambda *_args, **_kwargs: pytest.fail("cancelled audio must not be archived"),
-    )
     monkeypatch.setattr(
         result_thread,
         "transcribe",

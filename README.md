@@ -42,11 +42,10 @@ Listening -> Transcribing -> clipboard
 
 While listening, the status-card `x` discards the recording. During
 transcription, it dismisses the card and suppresses clipboard and sound output
-without cancelling the archive/transcription work.
+without cancelling the transcription request.
 
 The newest five transcripts rotate through `Snippets/snippet_1.md` to
-`snippet_5.md`. Every valid raw recording is also retained without rotation in
-`Snippets/Eleven Labs voice clone/` for voice-clone training.
+`snippet_5.md`. Raw snippet audio is discarded after transcription.
 
 ## Scribe
 

@@ -2,8 +2,8 @@
 
 Koe is a Windows-only tray application with two workflows:
 
-1. Snippets: global hotkey capture -> ElevenLabs Scribe v2 -> clipboard,
-   five rotating Markdown files, and an unrotated voice-clone WAV archive.
+1. Snippets: global hotkey capture -> ElevenLabs Scribe v2 -> clipboard and
+   five rotating Markdown files.
 2. Scribe: microphone plus Windows loopback -> ElevenLabs Scribe v2 ->
    stream-labelled meeting transcript -> optional OpenRouter summary.
 
@@ -36,7 +36,7 @@ transcripts, vocabulary, or local paths in review packets.
 - `run.py`: setup gate and app bootstrap.
 - `src/main.py`: tray, hotkey lifecycle, clipboard, and Scribe launch.
 - `src/result_thread.py`: snippet microphone capture and lifecycle.
-- `src/transcription.py`: ElevenLabs requests and snippet/archive storage.
+- `src/transcription.py`: ElevenLabs requests and rolling snippet storage.
 - `src/meeting/capture.py`: microphone and WASAPI loopback capture.
 - `src/meeting/app.py`: Scribe UI and worker.
 - `src/meeting/transcript.py`: Markdown transcript rendering.

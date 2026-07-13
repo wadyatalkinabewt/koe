@@ -28,7 +28,6 @@ _DEBUG_LOG.parent.mkdir(exist_ok=True)
 
 MAX_SNIPPETS = 5
 MAX_DEBUG_SNIPPETS = 5
-VOICE_CLONE_FOLDER = "Eleven Labs voice clone"
 CHUNK_SECONDS = 10 * 60
 GROUP_TRANSCRIPTION_TIMEOUT = 15 * 60
 MAX_ELEVENLABS_FILE_BYTES = 5_000_000_000
@@ -55,28 +54,6 @@ def _get_snippets_dir() -> Path:
     snippets_dir = Path(configured) if configured else Path(__file__).parent.parent / "Snippets"
     snippets_dir.mkdir(parents=True, exist_ok=True)
     return snippets_dir
-
-
-def save_voice_clone_audio(audio_data: np.ndarray, sample_rate: int = 16000) -> Path | None:
-    """Archive a completed snippet as lossless mono PCM WAV."""
-    if audio_data is None or len(audio_data) == 0:
-        return None
-    try:
-        archive_dir = _get_snippets_dir() / VOICE_CLONE_FOLDER
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
-        path = archive_dir / f"snippet_{timestamp}.wav"
-        audio_int16 = np.asarray(audio_data, dtype=np.int16).reshape(-1)
-        with wave.open(str(path), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(int(sample_rate or 16000))
-            wav_file.writeframes(audio_int16.tobytes())
-        _debug(f"Archived voice-clone audio: {path}")
-        return path
-    except Exception as exc:
-        _debug(f"save_voice_clone_audio error: {exc}")
-        return None
 
 
 def save_rolling_transcription(text: str) -> None:

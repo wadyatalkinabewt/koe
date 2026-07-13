@@ -8,7 +8,7 @@ from queue import Empty, Queue
 from pathlib import Path
 from datetime import datetime
 
-from transcription import save_voice_clone_audio, transcribe
+from transcription import transcribe
 from utils import ConfigManager
 
 # Debug logging to file with rotation
@@ -245,13 +245,9 @@ class ResultThread(QThread):
             _debug(f"  _record_audio() returned: {type(audio_data)}, size={audio_data.size if audio_data is not None else 'None'}")
 
             if self.cancel_requested:
-                _debug("  Snippet cancelled: discarding capture before archive/transcription")
+                _debug("  Snippet cancelled: discarding capture before transcription")
                 self.cancelledSignal.emit()
                 return
-
-            # Keep every valid snippet recording independently of transcription
-            # success and independently of the rolling five Markdown snippets.
-            save_voice_clone_audio(audio_data, self.sample_rate or 16000)
 
             if not self.is_running:
                 _debug("  Early exit after recording: is_running=False")
