@@ -1,9 +1,0 @@
-# Optional dependencies for scripts/transcribe_existing_meeting.py.
-# Keep these separate from requirements.txt; the main Koe app is cloud-only and
-# should not pull the GPU/pyannote stack by default.
-#
-# Install CUDA PyTorch first, then this file:
-#   py -3.13 -m pip install --user --index-url https://download.pytorch.org/whl/cu128 torch==2.11.0+cu128 torchaudio==2.11.0+cu128
-#   py -3.13 -m pip install --user -r requirements-diarization-gpu.txt
-
-pyannote.audio==4.0.4

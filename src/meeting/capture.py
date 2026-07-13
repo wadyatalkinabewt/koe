@@ -5,7 +5,7 @@ Captures mic + Windows loopback (system audio) simultaneously, writing both
 streams as raw WAV files to a temp dir. No live processing — transcription
 happens after stop() in the app layer.
 
-Mic is captured at 16kHz mono int16 (Whisper-ready). Loopback is captured at
+Mic is captured at 16kHz mono int16 (API-ready). Loopback is captured at
 the device's native rate/channels and downmixed/resampled later.
 """
 
@@ -212,7 +212,7 @@ def load_wav_as_int16(path: Path) -> tuple[np.ndarray, int, int]:
 
 def preprocess_loopback(audio: np.ndarray, sample_rate: int, channels: int,
                         target_rate: int = 16000, target_rms: float = 3000.0) -> np.ndarray:
-    """Convert loopback audio → 16kHz mono int16, normalized for Whisper.
+    """Convert loopback audio → 16kHz mono int16 for cloud transcription.
 
     Energy-preserving stereo→mono (sum/√n), polyphase resampling, RMS normalize.
     """
@@ -236,7 +236,7 @@ def preprocess_loopback(audio: np.ndarray, sample_rate: int, channels: int,
         down = sample_rate // g
         audio_f = resample_poly(audio_f, up, down)
 
-    # Normalize to target RMS (boost quiet system audio for Whisper)
+    # Normalize to target RMS so quiet system audio remains intelligible.
     rms = np.sqrt(np.mean(audio_f ** 2))
     if rms > 1e-3:
         gain = min(target_rms / rms, 8.0)  # cap gain to avoid runaway on near-silent audio

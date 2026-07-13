@@ -1,106 +1,121 @@
-import sys
 import os
+import sys
 import time
-from PyQt5.QtCore import Qt, QTimer, QRectF
-from PyQt5.QtGui import QFont, QPainter, QBrush, QColor, QPainterPath, QPen
-from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget, QMainWindow
+from pathlib import Path
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from PyQt5.QtCore import QTimer, QRectF, Qt
+from PyQt5.QtGui import QColor, QBrush, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from ui import theme
 
 
 class InitializationWindow(QMainWindow):
-    # Terminal color scheme (from centralized theme)
-    BG_COLOR = QColor(10, 10, 15, 245)  # Near black with alpha
-    BORDER_COLOR = QColor(0, 255, 136)  # Terminal green (QColor for painting)
-    TEXT_COLOR = theme.TEXT_COLOR
+    """Short-lived startup card using the same visual language as snippet status."""
 
-    MIN_DISPLAY_TIME = 1.5  # Minimum seconds to display
+    MIN_DISPLAY_TIME = 1.2
 
     def __init__(self):
-        """Initialize the initialization window."""
         super().__init__()
         self.show_time = None
-        self.initUI()
+        self._build_ui()
 
-    def initUI(self):
-        """Initialize the user interface."""
-        self.setWindowTitle('Koe')
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+    def _build_ui(self) -> None:
+        self.setWindowTitle("Koe")
+        self.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+            | Qt.WindowDoesNotAcceptFocus
+        )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(300, 60)
+        self.setFixedSize(240, 68)
 
-        self.main_widget = QWidget(self)
-        self.main_layout = QVBoxLayout(self.main_widget)
-        self.main_layout.setContentsMargins(16, 10, 16, 10)
-        self.main_layout.setSpacing(0)
+        central = QWidget(self)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(12)
+        layout.addStretch()
 
-        # Status label
-        self.status_label = QLabel('> Initializing_')
-        self.status_label.setFont(QFont('Cascadia Code', 12, QFont.Bold))
-        self.status_label.setStyleSheet(f"color: {self.TEXT_COLOR};")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(self.status_label)
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(34, 34)
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "koe-icon.png"
+        if icon_path.exists():
+            pixmap = QPixmap(str(icon_path)).scaled(
+                32,
+                32,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            self.icon_label.setPixmap(pixmap)
+        layout.addWidget(self.icon_label)
 
-        self.setCentralWidget(self.main_widget)
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(3)
+        title = QLabel("Koe")
+        title.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        title.setStyleSheet(
+            f"color: {theme.TEXT_COLOR}; font-family: {theme.FONT_FAMILY}; "
+            "font-size: 12pt; font-weight: 650;"
+        )
+        self.status_label = QLabel("Initializing…")
+        self.status_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.status_label.setStyleSheet(
+            f"color: {theme.SECONDARY_TEXT}; font-family: {theme.FONT_FAMILY}; font-size: 9pt;"
+        )
+        text_layout.addWidget(title)
+        text_layout.addWidget(self.status_label)
+        layout.addLayout(text_layout)
+        layout.addStretch()
+        self.setCentralWidget(central)
 
-    def paintEvent(self, event):
-        """Create a rounded rectangle with terminal styling."""
+    def paintEvent(self, event) -> None:
         path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 6, 6)
+        path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 14, 14)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
-        # Fill background
-        painter.setBrush(QBrush(self.BG_COLOR))
-        painter.setPen(Qt.NoPen)
+        background = QColor(theme.SURFACE_COLOR)
+        background.setAlpha(250)
+        painter.setBrush(QBrush(background))
+        painter.setPen(QPen(QColor(theme.BORDER_COLOR), 1))
         painter.drawPath(path)
 
-        # Draw border
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(self.BORDER_COLOR, 1))
-        painter.drawPath(path)
-
-    def show(self):
-        """Position the window in the bottom center of the screen and show it."""
+    def show(self) -> None:
         screen = QApplication.primaryScreen()
-        screen_geometry = screen.geometry()
-        screen_width = screen_geometry.width()
-        screen_height = screen_geometry.height()
-        window_width = self.width()
-        window_height = self.height()
-
-        x = (screen_width - window_width) // 2
-        y = screen_height - window_height - 120
-
+        available = screen.availableGeometry()
+        x = available.x() + (available.width() - self.width()) // 2
+        y = available.y() + available.height() - self.height() - 36
         self.move(x, y)
         super().show()
+        self.raise_()
         self.show_time = time.time()
 
-    def close(self):
-        """Close the window after minimum display time."""
+    def close(self) -> bool:
         if self.show_time:
-            elapsed = time.time() - self.show_time
-            remaining = self.MIN_DISPLAY_TIME - elapsed
+            remaining = self.MIN_DISPLAY_TIME - (time.time() - self.show_time)
             if remaining > 0:
-                # Delay close to meet minimum display time
                 QTimer.singleShot(int(remaining * 1000), self._do_close)
-                return
-        self._do_close()
+                return False
+        return self._do_close()
 
-    def _do_close(self):
-        """Actually close the window."""
-        super().close()
+    def _do_close(self) -> bool:
+        return super().close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-
-    init_window = InitializationWindow()
-    init_window.show()
-
-    # Simulate closing after 3 seconds
-    QTimer.singleShot(3000, init_window.close)
-
+    window = InitializationWindow()
+    window.show()
+    QTimer.singleShot(2500, window.close)
     sys.exit(app.exec_())

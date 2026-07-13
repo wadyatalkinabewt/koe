@@ -3,7 +3,6 @@ import traceback
 import wave
 import numpy as np
 import sounddevice as sd
-import webrtcvad
 from PyQt5.QtCore import QThread, QMutex, pyqtSignal
 from queue import Empty, Queue
 from pathlib import Path
@@ -181,19 +180,26 @@ class ResultThread(QThread):
     statusSignal = pyqtSignal(str)
     resultSignal = pyqtSignal(str)
     errorSignal = pyqtSignal(str)  # Emits error message for notifications
+    cancelledSignal = pyqtSignal()
 
     def __init__(self):
         super().__init__()
         self.is_recording = False
         self.is_running = True
         self.sample_rate = None
+        self.cancel_requested = False
         self.mutex = QMutex()
 
-    def stop_recording(self):
+    def stop_recording(self, reason: str = "unspecified"):
         """Stop the current recording session."""
         self.mutex.lock()
+        was_recording = self.is_recording
         self.is_recording = False
         self.mutex.unlock()
+        _debug(
+            f"ResultThread.stop_recording(reason={reason!r}, "
+            f"was_recording={was_recording})"
+        )
 
     def stop(self):
         """Stop the entire thread execution."""
@@ -207,6 +213,15 @@ class ResultThread(QThread):
         # signal processing, causing a deadlock when the worker thread
         # tries to emit resultSignal. Let the thread finish naturally.
 
+    def cancel_recording(self):
+        """Discard the active capture and exit without archiving or transcription."""
+        _debug("ResultThread.cancel_recording() called")
+        self.mutex.lock()
+        self.cancel_requested = True
+        self.is_running = False
+        self.is_recording = False
+        self.mutex.unlock()
+
     def run(self):
         """Main execution method for the thread."""
         _debug("ResultThread.run() STARTED")
@@ -214,6 +229,8 @@ class ResultThread(QThread):
         try:
             if not self.is_running:
                 _debug("  Early exit: is_running=False")
+                if self.cancel_requested:
+                    self.cancelledSignal.emit()
                 return
 
             self.mutex.lock()
@@ -226,6 +243,11 @@ class ResultThread(QThread):
             _debug("  Starting _record_audio()")
             audio_data = self._record_audio()
             _debug(f"  _record_audio() returned: {type(audio_data)}, size={audio_data.size if audio_data is not None else 'None'}")
+
+            if self.cancel_requested:
+                _debug("  Snippet cancelled: discarding capture before transcription")
+                self.cancelledSignal.emit()
+                return
 
             if not self.is_running:
                 _debug("  Early exit after recording: is_running=False")
@@ -305,7 +327,7 @@ class ResultThread(QThread):
             self.resultSignal.emit('')
         finally:
             _debug("  Calling stop_recording()")
-            self.stop_recording()
+            self.stop_recording(reason="thread cleanup")
             _debug("ResultThread.run() FINISHED")
 
     def _record_audio(self):
@@ -316,26 +338,10 @@ class ResultThread(QThread):
         """
         _debug("  _record_audio() entered")
         try:
-            recording_options = ConfigManager.get_config_section('recording_options')
-            self.sample_rate = recording_options.get('sample_rate') or 16000
-            frame_duration_ms = 30  # 30ms frame duration for WebRTC VAD
+            self.sample_rate = 16000
+            frame_duration_ms = 30
             frame_size = int(self.sample_rate * (frame_duration_ms / 1000.0))
-            silence_duration_ms = recording_options.get('silence_duration') or 900
-            silence_frames = int(silence_duration_ms / frame_duration_ms)
             _debug(f"  Config loaded: sample_rate={self.sample_rate}, frame_size={frame_size}")
-
-            # 150ms delay before starting VAD to avoid mistaking the sound of key pressing for voice
-            initial_frames_to_skip = int(0.15 * self.sample_rate / frame_size)
-
-            # Create VAD only for recording modes that use it
-            recording_mode = recording_options.get('recording_mode') or 'continuous'
-            vad = None
-            if recording_mode in ('voice_activity_detection', 'continuous'):
-                _debug("  Creating VAD...")
-                vad = webrtcvad.Vad(2)  # VAD aggressiveness: 0 to 3, 3 being the most aggressive
-                speech_detected = False
-                silent_frame_count = 0
-                _debug("  VAD created")
 
             recording = []
 
@@ -352,44 +358,21 @@ class ResultThread(QThread):
                 except Exception as e:
                     callback_error[0] = str(e)
 
-            def process_frame(frame, use_vad=True):
-                nonlocal initial_frames_to_skip
-                nonlocal speech_detected, silent_frame_count
-
+            def process_frame(frame):
                 if frame is None or len(frame) == 0:
-                    return False
+                    return
 
                 frame = np.asarray(frame, dtype=np.int16)
                 recording.append(frame)
-
-                # Avoid trying to detect voice in initial frames.
-                if initial_frames_to_skip > 0:
-                    initial_frames_to_skip -= 1
-                    return False
-
-                if vad and use_vad and len(frame) == frame_size:
-                    if vad.is_speech(frame.tobytes(), self.sample_rate):
-                        silent_frame_count = 0
-                        if not speech_detected:
-                            ConfigManager.console_print("Speech detected.")
-                            speech_detected = True
-                    else:
-                        silent_frame_count += 1
-
-                    if speech_detected and silent_frame_count > silence_frames:
-                        _debug("  Silence detected, breaking loop")
-                        return True
-
-                return False
 
             _debug("  Opening audio stream...")
             stream, selected_device = _open_input_stream(
                 self.sample_rate,
                 frame_size,
-                recording_options.get('sound_device'),
+                None,
                 audio_callback,
             )
-            if selected_device != _normalise_sound_device(recording_options.get('sound_device')):
+            if selected_device is not None:
                 _debug(f"  Using fallback input device: {_device_label(selected_device)}")
 
             with stream:
@@ -406,7 +389,7 @@ class ResultThread(QThread):
                     except Empty:
                         continue
 
-                    should_stop = process_frame(frame)
+                    process_frame(frame)
 
                     # Drain any backlog so callback bursts do not overwrite audio.
                     while True:
@@ -414,12 +397,13 @@ class ResultThread(QThread):
                             queued_frame = audio_queue.get_nowait()
                         except Empty:
                             break
-                        should_stop = process_frame(queued_frame) or should_stop
+                        process_frame(queued_frame)
 
-                    if should_stop:
-                        break
-
-                _debug("  Recording loop exited")
+                _debug(
+                    "  Recording loop exited "
+                    f"(is_running={self.is_running}, is_recording={self.is_recording}, "
+                    f"callback_error={callback_error[0]!r})"
+                )
 
                 # Capture frames already delivered by the audio callback before
                 # the stream closes. Without this, the last callback burst can be
@@ -431,7 +415,7 @@ class ResultThread(QThread):
                         frame = audio_queue.get(timeout=0.03)
                     except Empty:
                         continue
-                    process_frame(frame, use_vad=False)
+                    process_frame(frame)
                     flushed_frames += 1
 
                 while True:
@@ -439,7 +423,7 @@ class ResultThread(QThread):
                         frame = audio_queue.get_nowait()
                     except Empty:
                         break
-                    process_frame(frame, use_vad=False)
+                    process_frame(frame)
                     flushed_frames += 1
 
                 if flushed_frames:
@@ -452,9 +436,7 @@ class ResultThread(QThread):
             ConfigManager.console_print(f'Recording finished. Size: {audio_data.size} samples, Duration: {duration:.2f} seconds')
             _debug(f"  Recording finished: {audio_data.size} samples, {duration:.2f}s")
 
-            min_duration_ms = recording_options.get('min_duration') or 100
-
-            if (duration * 1000) < min_duration_ms:
+            if (duration * 1000) < 100:
                 ConfigManager.console_print(f'Discarded due to being too short.')
                 _debug("  Recording too short, returning None")
                 return None

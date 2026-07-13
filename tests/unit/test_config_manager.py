@@ -63,16 +63,16 @@ class TestConfigManager:
 
         schema_item = {
             "type": "str",
-            "value": "whisper",
-            "options": ["whisper", "parakeet"]
+            "value": "alpha",
+            "options": ["alpha", "beta"]
         }
 
         # Valid option
-        assert manager._validate_config_value("whisper", schema_item, "engine")
-        assert manager._validate_config_value("parakeet", schema_item, "engine")
+        assert manager._validate_config_value("alpha", schema_item, "choice")
+        assert manager._validate_config_value("beta", schema_item, "choice")
 
         # Invalid option
-        assert not manager._validate_config_value("invalid", schema_item, "engine")
+        assert not manager._validate_config_value("invalid", schema_item, "choice")
 
     def test_deep_update_preserves_structure(self):
         """Deep update should merge nested dicts properly."""
@@ -194,3 +194,56 @@ class TestConfigSchema:
 
         for section in required_sections:
             assert section in schema, f"Missing required section: {section}"
+
+        save_audio = schema["meeting_options"]["save_audio"]
+        assert save_audio["type"] == "bool"
+        assert save_audio["value"] is False
+
+
+def test_retired_config_keys_are_ignored_while_supported_values_load(temp_dir):
+    from utils import ConfigManager
+
+    manager = ConfigManager()
+    manager.schema = manager.load_config_schema()
+    manager.config = manager.load_default_config()
+    config_path = temp_dir / "config.yaml"
+    config_path.write_text(
+        """
+model_options:
+  retired_setting: ignored
+  common:
+    language: en
+retired_section:
+  enabled: true
+misc:
+  noise_on_completion: false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manager.load_user_config(str(config_path))
+
+    assert manager.config["model_options"]["common"]["language"] == "en"
+    assert "retired_setting" not in manager.config["model_options"]
+    assert "retired_section" not in manager.config
+    assert manager.config["misc"]["noise_on_completion"] is False
+
+
+def test_malformed_scalar_cannot_replace_supported_config_section(temp_dir):
+    from utils import ConfigManager
+
+    manager = ConfigManager()
+    manager.schema = manager.load_config_schema()
+    manager.config = manager.load_default_config()
+    original_model_options = manager.config["model_options"].copy()
+    config_path = temp_dir / "config.yaml"
+    config_path.write_text(
+        "model_options: elevenlabs\nmisc:\n  noise_on_completion: false\n",
+        encoding="utf-8",
+    )
+
+    manager.load_user_config(str(config_path))
+
+    assert manager.config["model_options"] == original_model_options
+    assert manager.config["misc"]["noise_on_completion"] is False

@@ -1,29 +1,23 @@
-# Koe Configuration
-# Copy this file to config.yaml and customize as needed
-# All settings have sensible defaults - only override what you need
+# Koe configuration. Copy to config.yaml and override only what you need.
 
 profile:
-  user_name: null          # Your name - labels your mic audio in Scribe
-  my_voice_embedding: null # Your enrolled voice (from speaker_embeddings/)
+  user_name: null
 
 meeting_options:
-  root_folder: null        # Where meetings are saved (default: koe/Meetings)
+  root_folder: null
+  save_audio: false
 
 recording_options:
   activation_key: ctrl+shift+space
-  recording_mode: press_to_toggle
-  filter_snippets_to_my_voice: false
 
 model_options:
-  transcription_provider: elevenlabs # elevenlabs or groq. No automatic fallback.
   common:
-    language: null         # Auto-detect, or set to "en", "es", etc.
-    initial_prompt: "Alex, Acme, Civis, Hetzner, Hermes, Koe"
+    language: null
+    initial_prompt: null
   elevenlabs:
-    model_id: scribe_v2
-    keyterms_enabled: true # Sends initial_prompt entries as keyterms; may add STT surcharge.
-    temperature: 0.0
+    keyterms_enabled: true
 
 misc:
+  hide_status_window: false
   noise_on_completion: true
-  snippets_folder: null    # Where snippets are saved (default: koe/Snippets)
+  snippets_folder: null

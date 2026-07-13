@@ -1,102 +1,23 @@
-from PyQt5.QtCore import Qt, QRectF
-from PyQt5.QtGui import QPainter, QBrush, QColor, QFont, QPainterPath, QGuiApplication
-from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QMainWindow
+from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget
+
+from compat import enable_dark_titlebar
 
 
 class BaseWindow(QMainWindow):
-    def __init__(self, title, width, height):
-        """
-        Initialize the base window.
-        """
-        super().__init__()
-        self.initUI(title, width, height)
-        self.setWindowPosition()
-        self.is_dragging = False
+    """Native, resizable base window with Koe's dark title-bar treatment."""
 
-    def initUI(self, title, width, height):
-        """
-        Initialize the user interface.
-        """
+    def __init__(self, title: str, width: int, height: int):
+        super().__init__()
         self.setWindowTitle(title)
-        self.setWindowFlags(Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(width, height)
+        self.resize(width, height)
+        self.setMinimumSize(min(width, 480), min(height, 420))
 
         self.main_widget = QWidget(self)
         self.main_layout = QVBoxLayout(self.main_widget)
-        self.main_layout.setContentsMargins(10, 10, 10, 10)
-
-        # Create a widget for the title bar (close button only)
-        title_bar = QWidget()
-        title_bar_layout = QHBoxLayout(title_bar)
-        title_bar_layout.setContentsMargins(0, 0, 0, 0)
-
-        close_button = QPushButton('×')
-        close_button.setFixedSize(25, 25)
-        close_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: none;
-                color: #404040;
-            }
-            QPushButton:hover {
-                color: #000000;
-            }
-        """)
-        close_button.clicked.connect(self.handleCloseButton)
-
-        title_bar_layout.addStretch()
-        title_bar_layout.addWidget(close_button)
-
-        self.main_layout.addWidget(title_bar)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
         self.setCentralWidget(self.main_widget)
 
-    def setWindowPosition(self):
-        """
-        Set the window position to the center of the screen.
-        """
-        center_point = QGuiApplication.primaryScreen().availableGeometry().center()
-        frame_geometry = self.frameGeometry()
-        frame_geometry.moveCenter(center_point)
-        self.move(frame_geometry.topLeft())
-
-    def handleCloseButton(self):
-        """
-        Close the window.
-        """
-        self.close()
-
-    def mousePressEvent(self, event):
-        """
-        Allow the window to be moved by clicking and dragging anywhere on the window.
-        """
-        if event.button() == Qt.LeftButton:
-            self.is_dragging = True
-            self.start_position = event.globalPos() - self.frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        """
-        Move the window when dragging.
-        """
-        if Qt.LeftButton and self.is_dragging:
-            self.move(event.globalPos() - self.start_position)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        """
-        Stop dragging the window.
-        """
-        self.is_dragging = False
-
-    def paintEvent(self, event):
-        """
-        Create a rounded rectangle with a semi-transparent white background.
-        """
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()), 20, 20)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(QBrush(QColor(255, 255, 255, 220)))
-        painter.setPen(Qt.NoPen)
-        painter.drawPath(path)
+    def showEvent(self, event):
+        super().showEvent(event)
+        enable_dark_titlebar(self)

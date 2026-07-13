@@ -169,15 +169,28 @@ class ConfigManager:
         """Load user configuration and merge with default config."""
         def deep_update(source, overrides):
             for key, value in overrides.items():
-                if isinstance(value, dict) and key in source:
-                    deep_update(source[key], value)
-                else:
-                    source[key] = value
+                # The schema is authoritative. Retired or misspelled settings
+                # are ignored instead of silently restoring removed features.
+                if key not in source:
+                    continue
+                source_value = source[key]
+                if isinstance(source_value, dict):
+                    # A malformed legacy scalar must not replace an entire
+                    # supported section and break later nested lookups.
+                    if not isinstance(value, dict):
+                        continue
+                    deep_update(source_value, value)
+                    continue
+                if isinstance(value, dict):
+                    continue
+                source[key] = value
 
         if config_path and os.path.isfile(config_path):
             try:
                 with open(config_path, 'r') as file:
-                    user_config = yaml.safe_load(file)
+                    user_config = yaml.safe_load(file) or {}
+                    if not isinstance(user_config, dict):
+                        return
                     # Validate before merging
                     self._validate_config_section(user_config, self.schema)
                     deep_update(self.config, user_config)
@@ -244,110 +257,32 @@ class ConfigManager:
             print(message)
 
 class TextProcessor:
-    """Centralized utility for processing and cleaning transcribed text."""
+    """Word-preserving formatting for ElevenLabs snippet output."""
 
     @staticmethod
-    def remove_prompt_leak(text):
-        """Remove initial prompt if it leaked into transcription."""
-        try:
-            model_options = ConfigManager.get_config_section('model_options')
-            initial_prompt = model_options.get('common', {}).get('initial_prompt', '')
-            if initial_prompt:
-                # Split prompt into lines and sentences, filter each separately
-                prompt_parts = []
-                for line in initial_prompt.strip().split('\n'):
-                    line = line.strip()
-                    if line:
-                        prompt_parts.append(line)
-                        # Also split on periods for sentence-level matching
-                        for sentence in line.split('.'):
-                            sentence = sentence.strip()
-                            if len(sentence) > 10:  # Only match substantial sentences
-                                prompt_parts.append(sentence)
-
-                # Remove any prompt parts that appear in the text
-                for part in prompt_parts:
-                    if part in text:
-                        text = text.replace(part, '')
-        except Exception:
-            pass  # Don't fail transcription if config access fails
+    def normalize_spacing(text):
+        """Normalize whitespace and punctuation spacing without changing words."""
+        text = re.sub(r'\s+', ' ', (text or '').strip())
+        text = re.sub(r'\s+([,.?!])', r'\1', text)
+        text = re.sub(r'([,.?!])\s*\1+', r'\1', text)
         return text
 
     @staticmethod
-    def remove_filler_words(text):
-        """Remove common filler words and hallucinated continuations/outros."""
-        import re
-
-        # Filler words to remove (case insensitive)
-        fillers = [
-            r'\bum+\b', r'\buh+\b', r'\bah+\b', r'\beh+\b',
-            r'\bhmm+\b', r'\bmm+\b', r'\bhm+\b',
-        ]
-
-        # Whisper hallucinations - ONLY remove at end of transcription.
-        # KEEP STRICT: Alex wraps up snippets conversationally (e.g. "okay cool,
-        # get on with it", "alright take care", "yeah that's all"). Earlier
-        # versions of this list stripped those legit endings — do not add
-        # generic wrap-up patterns back. Only patterns here should be
-        # unambiguous Whisper training-data artifacts (YouTube boilerplate) or
-        # non-speech audio tags.
-        trailing_hallucinations = [
-            # YouTube outros (punctuation lenient — handles . ! ? ... combos)
-            r"\s*we'?ll be right back[.!?]*\s*$",
-            r"\s*thank(s| you)( (you|all|so much))? for watching[.!?]*\s*$",
-            r"\s*thanks for watching[.!?]*\s*$",
-            r"\s*subscribe to (my|the|our) channel[.!?]*\s*$",
-            r"\s*please (like and )?subscribe[.!?]*\s*$",
-            r"\s*see you in the next (one|video|time)[.!?]*\s*$",
-            r"\s*don'?t forget to (like and )?subscribe[.!?]*\s*$",
-            r"\s*like (and )?subscribe[.!?]*\s*$",
-            r"\s*hit the (like|bell|subscribe)( button)?[.!?]*\s*$",
-            # Non-speech audio descriptions
-            r"\s*\[music\]\s*$",
-            r"\s*\[applause\]\s*$",
-            r"\s*♪.*$",
-            r"\s*\u266a.*$", # Another form of the music note from server.py
-        ]
-        
-        # Iterate to catch stacked artifacts (e.g. "Thanks for watching. Thanks for watching!")
-        prev = None
-        while prev != text:
-            prev = text
-            for pattern in trailing_hallucinations:
-                text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-            text = text.rstrip()
-
-        for filler in fillers:
-            text = re.sub(filler, '', text, flags=re.IGNORECASE)
-
-        # Clean up resulting issues
-        text = re.sub(r'\s+', ' ', text)  # Multiple spaces to single
-        text = re.sub(r'\s+([,.?!])', r'\1', text)  # Space before punctuation
-        text = re.sub(r'([,.?!])\s*\1+', r'\1', text)  # Duplicate punctuation
-        text = re.sub(r',\s*\.', '.', text)  # Comma followed by period
-        text = re.sub(r'^\s*,\s*', '', text)  # Leading comma
-        return text.strip()
-
-    @staticmethod
     def ensure_ending_punctuation(text):
-        """Ensure text ends with proper punctuation."""
-        text = text.strip()
+        """Ensure non-empty text ends with sentence punctuation."""
+        text = (text or '').strip()
         if text and text[-1] not in '.?!':
             text += '.'
         return text
 
     @classmethod
     def process(cls, transcription, add_trailing_space=False):
-        """Apply all post-processing steps to the transcription."""
+        """Format a transcript while preserving every spoken word."""
         if not transcription or not transcription.strip():
             return transcription
 
-        text = transcription.strip()
-        text = cls.remove_prompt_leak(text)
-        text = cls.remove_filler_words(text)
+        text = cls.normalize_spacing(transcription)
         text = cls.ensure_ending_punctuation(text)
-        
         if add_trailing_space:
-            text += ' '  # Trailing space for easy pasting in some apps
-            
+            text += ' '
         return text
