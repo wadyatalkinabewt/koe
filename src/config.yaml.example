@@ -15,7 +15,7 @@ model_options:
     language: null
     initial_prompt: null
   elevenlabs:
-    keyterms_enabled: true
+    keyterms_enabled: false
 
 misc:
   hide_status_window: false

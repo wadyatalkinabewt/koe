@@ -1,9 +1,8 @@
-"""Scribe meeting-mode UI and background transcription workflow.
+"""Scribe meeting-mode UI and single-upload transcription workflow.
 
-One-on-one meetings use deterministic microphone/loopback labels. Group
-meetings keep the microphone owner deterministic and diarize the loopback file
-with ElevenLabs speaker-library matching. Completed meetings may optionally
-retain both original source WAVs; they are never merged.
+Microphone and loopback are overlaid into one mono request so an hour-long
+meeting is billed as one hour. The original mic track is used locally to map
+the host's diarized speaker label and may be retained with loopback on request.
 """
 
 import sys
@@ -24,10 +23,8 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QFrame,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
 from compat import apply_window_icon, enable_dark_titlebar, set_app_user_model_id
+from paths import default_meetings_dir, resource_path, scribe_temp_dir
 from utils import ConfigManager
 from ui import theme
 from ui.theme import (
@@ -37,13 +34,17 @@ from ui.theme import (
     SELECTION_BG, SELECTION_TEXT, SCROLLBAR_BG, SCROLLBAR_HANDLE,
     SCROLLBAR_HANDLE_HOVER,
 )
-from meeting.capture import AudioCapture, load_wav_as_int16, preprocess_loopback
+from meeting.capture import (
+    AudioCapture,
+    identify_microphone_speaker,
+    prepare_mono_meeting_mix,
+)
 
 
 MODE_ONE_ON_ONE = "one_on_one"
 MODE_GROUP = "group"
 SCRIBE_APP_ID = "Koe.Scribe.App"
-SCRIBE_ICON = PROJECT_ROOT / "assets" / "koe-icon.ico"
+SCRIBE_ICON = resource_path("assets", "koe-icon.ico")
 
 
 # ---------- single-instance lock ----------
@@ -205,13 +206,51 @@ def _persist_meeting_audio(mic_wav: Path, loopback_wav: Path, meeting_dir: Path)
         shutil.rmtree(stage_dir, ignore_errors=True)
 
 
-def _discard_temp_audio(mic_wav: Path, loopback_wav: Path) -> None:
+def _discard_temp_audio(*sources: Path) -> None:
     """Remove an unusable no-speech attempt without touching a meeting folder."""
-    for source in (mic_wav, loopback_wav):
+    for source in sources:
         source.unlink(missing_ok=True)
-    temp_dir = mic_wav.parent
-    if temp_dir.exists() and not any(temp_dir.iterdir()):
+    temp_dir = sources[0].parent if sources else None
+    if temp_dir and temp_dir.exists() and not any(temp_dir.iterdir()):
         temp_dir.rmdir()
+
+
+def _relabel_mixed_segments(
+    segments: list[dict],
+    microphone_label: str | None,
+    user_name: str,
+    meeting_subject: str,
+    meeting_mode: str,
+) -> list[dict]:
+    """Apply deterministic host attribution after one mixed diarized request."""
+    relabelled = [dict(segment) for segment in segments]
+    if microphone_label:
+        for segment in relabelled:
+            if segment.get("label") == microphone_label:
+                segment["label"] = user_name
+
+    other_labels = []
+    for segment in relabelled:
+        label = str(segment.get("label") or "").strip()
+        if label and label != user_name and label not in other_labels:
+            other_labels.append(label)
+
+    if meeting_mode == MODE_ONE_ON_ONE and len(other_labels) == 1:
+        only_other = other_labels[0]
+        for segment in relabelled:
+            if segment.get("label") == only_other:
+                segment["label"] = meeting_subject
+        return relabelled
+
+    generic_labels = [
+        label for label in other_labels if re.fullmatch(r"Speaker \d+", label, flags=re.IGNORECASE)
+    ]
+    generic_map = {label: f"Speaker {index}" for index, label in enumerate(generic_labels, 1)}
+    for segment in relabelled:
+        label = segment.get("label")
+        if label in generic_map:
+            segment["label"] = generic_map[label]
+    return relabelled
 
 
 # ---------- worker ----------
@@ -242,37 +281,39 @@ class MeetingWorker(QThread):
 
     def run(self):
         try:
-            from transcription import transcribe_file_segments, transcribe_segments
+            from transcription import transcribe_file_segments
             from meeting.summarizer import SummarizerClient
             from meeting.transcript import render_transcript
 
-            # ----- transcribe mic (already 16kHz mono) -----
-            self.status_signal.emit("Transcribing your audio...")
-            mic_audio, mic_sr, mic_ch = load_wav_as_int16(self.mic_wav)
-            if mic_sr != 16000 or mic_ch != 1:
-                mic_audio = preprocess_loopback(mic_audio, mic_sr, mic_ch, target_rate=16000)
-            mic_segments = transcribe_segments(mic_audio, label=self.user_name)
-
-            # ----- transcribe loopback -----
-            self.status_signal.emit("Transcribing other audio...")
-            if self.meeting_mode == MODE_GROUP:
-                lb_segments = transcribe_file_segments(
-                    self.loopback_wav,
-                    label="Speaker",
-                    diarize=True,
-                    use_speaker_library=True,
-                )
-            else:
-                lb_audio, lb_sr, lb_ch = load_wav_as_int16(self.loopback_wav)
-                lb_audio_16k = preprocess_loopback(lb_audio, lb_sr, lb_ch, target_rate=16000)
-                lb_segments = transcribe_segments(
-                    lb_audio_16k,
-                    label=self.meeting_subject,
-                )
-
-            all_segments = mic_segments + lb_segments
+            # ----- one mono upload for one-duration billing -----
+            self.status_signal.emit("Transcribing your meeting audio...")
+            mixed_wav = self.mic_wav.parent / "meeting-mix.wav"
+            mic_audio, loopback_audio, mixed_rate = prepare_mono_meeting_mix(
+                self.mic_wav,
+                self.loopback_wav,
+                mixed_wav,
+            )
+            all_segments = transcribe_file_segments(
+                mixed_wav,
+                label="Speaker",
+                diarize=True,
+                use_speaker_library=True,
+            )
+            microphone_label = identify_microphone_speaker(
+                all_segments,
+                mic_audio,
+                loopback_audio,
+                mixed_rate,
+            )
+            all_segments = _relabel_mixed_segments(
+                all_segments,
+                microphone_label,
+                self.user_name,
+                self.meeting_subject,
+                self.meeting_mode,
+            )
             if not all_segments:
-                _discard_temp_audio(self.mic_wav, self.loopback_wav)
+                _discard_temp_audio(self.mic_wav, self.loopback_wav, mixed_wav)
                 self.error_signal.emit("No speech detected in either stream.")
                 return
 
@@ -329,6 +370,7 @@ class MeetingWorker(QThread):
                     )
                     return
 
+            mixed_wav.unlink(missing_ok=True)
             self.mic_wav.unlink(missing_ok=True)
             self.loopback_wav.unlink(missing_ok=True)
             temp_dir = self.mic_wav.parent
@@ -411,7 +453,7 @@ class ScribeWindow(QMainWindow):
         configured = ConfigManager.get_config_value("meeting_options", "root_folder")
         if configured:
             return Path(configured).expanduser()
-        return PROJECT_ROOT / "Meetings"
+        return default_meetings_dir()
 
     def _meeting_directory_for_session(self, meeting_subject: str) -> Path:
         if self.meeting_started_at is None:
@@ -753,7 +795,7 @@ class ScribeWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             return
         self._clear_retry_status()
-        temp_root = PROJECT_ROOT / ".scribe_temp"
+        temp_root = scribe_temp_dir()
         temp_root.mkdir(parents=True, exist_ok=True)
         self.temp_dir = Path(tempfile.mkdtemp(dir=str(temp_root), prefix="rec_"))
 
@@ -864,6 +906,7 @@ class ScribeWindow(QMainWindow):
         display = {
             "Transcribing your audio...": "Transcribing Audio…",
             "Transcribing other audio...": "Transcribing Audio…",
+            "Transcribing your meeting audio...": "Transcribing Audio…",
             "Generating summary...": "Generating Summary…",
         }.get(msg, msg)
         self._set_processing_state(display, theme.ACCENT_COLOR, pulse=True)

@@ -8,9 +8,11 @@ Studio for stable routing. To switch models, change SummarizerClient.MODEL.
 import time
 import os
 from typing import Optional, Callable
-from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
+
+from paths import env_path
 
 
 class SummarizerClient:
@@ -30,6 +32,7 @@ class SummarizerClient:
         Args:
             api_key: OpenRouter API key (defaults to OPENROUTER_API_KEY env var)
         """
+        load_dotenv(env_path(), override=True)
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY not found in environment or provided")
@@ -262,46 +265,3 @@ If no action items exist, write "No action items assigned."
 {transcript_content}
 
 **Generate the summary now, following the format above exactly. Start with the H1 title line:**"""
-
-    @staticmethod
-    def calculate_mirrored_path(transcript_path: Path) -> Path:
-        """
-        Calculate the mirrored path in Summaries/ folder.
-
-        Example:
-            Transcripts/Standups/26_01_21_Daily.md
-            → Summaries/Standups/26_01_21_Daily.md
-
-        Args:
-            transcript_path: Path to transcript file
-
-        Returns:
-            Path where summary should be saved
-        """
-        # Find the "Transcripts" folder in the path
-        parts = transcript_path.parts
-
-        # Find index of "Transcripts" folder
-        transcripts_idx = None
-        for i, part in enumerate(parts):
-            if part == "Transcripts":
-                transcripts_idx = i
-                break
-
-        if transcripts_idx is None:
-            # Fallback: save in same directory (same filename, different folder not possible)
-            # In this case, append _summary to avoid overwriting
-            stem = transcript_path.stem
-            return transcript_path.with_name(f"{stem}_summary.md")
-
-        # Replace "Transcripts" with "Summaries"
-        new_parts = list(parts)
-        new_parts[transcripts_idx] = "Summaries"
-
-        # Keep same filename (no .summary suffix - files are in separate folders)
-        summary_path = Path(*new_parts)
-
-        # Ensure parent directory exists
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-
-        return summary_path

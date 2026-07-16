@@ -6,27 +6,27 @@ in the system tray. Audio capture happens in ResultThread; transcription
  is delegated to transcription.transcribe(), which calls ElevenLabs Scribe v2.
 """
 
-import os
 import sys
 import time
 import threading
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import pyperclip
-from PyQt5.QtCore import QObject, QPoint, QProcess, QRect, QSize, Qt
+from PyQt5.QtCore import QObject, QPoint, QProcess, QRect, QSize, Qt, QTimer
 from PyQt5.QtGui import QCursor, QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox
 
 from compat import (
     acquire_single_instance_lock,
     release_single_instance_lock,
-    ensure_windows_shortcut,
     set_app_user_model_id,
     clipboard_copy_fallback,
     play_sound_file,
 )
+from commands import CommandServer
 from key_listener import KeyListener
+from paths import config_path, install_root, logs_dir, resource_path, source_root
 from result_thread import ResultThread
 from ui.settings_window import SettingsWindow
 from ui.status_window import StatusWindow
@@ -34,11 +34,12 @@ from ui.initialization_window import InitializationWindow
 from ui import theme
 from utils import ConfigManager
 
-_DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
+_DEBUG_LOG = logs_dir() / "debug.log"
 
 
 def _debug(msg: str):
     try:
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
             f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
     except Exception:
@@ -61,9 +62,14 @@ class KoeApp(QObject):
     # Minimum recording time before hotkey can stop. Prevents accidental double-press from discarding recordings.
     MIN_RECORDING_SECONDS = 1.0
 
-    def __init__(self, qapp=None, init_window=None):
+    def __init__(self, qapp=None, init_window=None, initial_command: str | None = None):
         super().__init__()
         self._instance_lock = acquire_single_instance_lock()
+        self._command_server = CommandServer()
+        self._command_server.command_received.connect(self.handle_command)
+        if not self._command_server.start():
+            _debug("Could not start shortcut command server")
+        self._pending_command = initial_command
         self.recording_start_time = None
         self.processing_result = False
         self.suppress_current_result = False
@@ -77,7 +83,7 @@ class KoeApp(QObject):
 
         if not qapp:
             set_app_user_model_id()
-            icon_path = str(Path(__file__).parent.parent / "assets" / "koe-icon.ico")
+            icon_path = str(resource_path("assets", "koe-icon.ico"))
             self.app.setWindowIcon(QIcon(icon_path))
             self.app.setQuitOnLastWindowClosed(False)
             if not init_window:
@@ -116,8 +122,13 @@ class KoeApp(QObject):
         if self.init_window:
             self.init_window.close()
 
+        if self._pending_command:
+            command = self._pending_command
+            self._pending_command = None
+            QTimer.singleShot(250, lambda: self.handle_command(command))
+
     def create_tray_icon(self):
-        icon_path = str(Path(__file__).parent.parent / "assets" / "koe-icon.ico")
+        icon_path = str(resource_path("assets", "koe-icon.ico"))
         self.tray_icon = QSystemTrayIcon(QIcon(icon_path), self.app)
 
         self.tray_menu = QMenu()
@@ -152,45 +163,40 @@ class KoeApp(QObject):
 
     def start_meeting_mode(self):
         """Launch Scribe as a separate process."""
-        project_root = Path(__file__).resolve().parent.parent
-        python_path = Path(sys.executable).resolve()
-        pythonw_path = python_path.with_name("pythonw.exe")
-        if not pythonw_path.exists():
-            pythonw_path = python_path
-
-        if sys.platform == "win32":
-            try:
-                start_menu = (
-                    Path(os.environ["APPDATA"])
-                    / "Microsoft"
-                    / "Windows"
-                    / "Start Menu"
-                    / "Programs"
-                )
-                shortcut = ensure_windows_shortcut(
-                    start_menu / "Koe Scribe.lnk",
-                    app_id="Koe.Scribe.App",
-                    target_path=pythonw_path,
-                    arguments="-m src.meeting.app",
-                    working_directory=project_root,
-                    icon_path=project_root / "assets" / "koe-icon.ico",
-                )
-                if shortcut:
-                    os.startfile(str(shortcut))
-                    return
-            except Exception as exc:
-                _debug(f"Scribe shortcut launch failed; using direct fallback: {exc}")
-
-        QProcess.startDetached(
-            str(pythonw_path),
-            ["-m", "src.meeting.app"],
-            str(project_root),
+        if getattr(sys, "frozen", False):
+            executable = sys.executable
+            arguments = ["--scribe-window"]
+            working_directory = install_root()
+        else:
+            python_path = Path(sys.executable).resolve()
+            pythonw_path = python_path.with_name("pythonw.exe")
+            executable = str(pythonw_path if pythonw_path.exists() else python_path)
+            arguments = ["-B", str(source_root() / "run.py"), "--scribe-window"]
+            working_directory = source_root()
+        started = QProcess.startDetached(
+            str(executable),
+            arguments,
+            str(working_directory),
         )
+        started_ok = started[0] if isinstance(started, tuple) else bool(started)
+        if not started_ok:
+            _debug("Scribe process did not start")
+
+    def handle_command(self, command: str) -> None:
+        """Dispatch a desktop shortcut command on Qt's main thread."""
+        if not self._components_initialized:
+            self._pending_command = command
+            return
+        if command == "snippet":
+            self.on_activation()
+        elif command == "scribe":
+            self.start_meeting_mode()
 
     def cleanup(self):
         key_listener = getattr(self, "key_listener", None)
         if key_listener:
             key_listener.stop()
+        self._command_server.stop()
         if self._instance_lock:
             release_single_instance_lock(self._instance_lock)
 
@@ -270,7 +276,7 @@ class KoeApp(QObject):
     def on_settings_closed(self):
         if self._components_initialized:
             return
-        if not os.path.exists(os.path.join("src", "config.yaml")):
+        if not config_path().is_file():
             QMessageBox.information(
                 self.settings_window,
                 "Using Default Values",
@@ -386,7 +392,7 @@ class KoeApp(QObject):
 
             if not suppressed and ConfigManager.get_config_value("misc", "noise_on_completion"):
                 try:
-                    play_sound_file(Path(__file__).parent.parent / "assets" / "beep.wav")
+                    play_sound_file(resource_path("assets", "beep.wav"))
                 except Exception as e:
                     ConfigManager.console_print(f'Beep failed: {e}')
 
@@ -409,14 +415,14 @@ class KoeApp(QObject):
         sys.exit(self.app.exec_())
 
 
-if __name__ == "__main__":
+def main(initial_command: str | None = None):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
-    qapp = QApplication(sys.argv)
+    qapp = QApplication.instance() or QApplication(sys.argv)
     set_app_user_model_id()
 
-    icon_path = str(Path(__file__).parent.parent / "assets" / "koe-icon.ico")
+    icon_path = str(resource_path("assets", "koe-icon.ico"))
     qapp.setWindowIcon(QIcon(icon_path))
     qapp.setQuitOnLastWindowClosed(False)
 
@@ -424,5 +430,9 @@ if __name__ == "__main__":
     init_window.show()
     qapp.processEvents()
 
-    app = KoeApp(qapp=qapp, init_window=init_window)
-    app.run()
+    app = KoeApp(qapp=qapp, init_window=init_window, initial_command=initial_command)
+    return app.run()
+
+
+if __name__ == "__main__":
+    main()

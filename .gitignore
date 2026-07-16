@@ -20,9 +20,14 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+/build/
+/dist/
 
 # Local Windows launchers and temporary files
 *.lnk
 *.tmp
 Thumbs.db
 Desktop.ini
+
+# Operator-specific installer secret (never commit or reuse outside the private build)
+private-Operator.env

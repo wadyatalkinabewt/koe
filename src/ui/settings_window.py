@@ -25,6 +25,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from ui import theme
 from ui.base_window import BaseWindow
+from paths import resource_path
 from utils import ConfigManager
 
 
@@ -125,7 +126,7 @@ class SettingsWindow(BaseWindow):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(350)
         self._save_timer.timeout.connect(self._save_values)
-        icon_path = Path(__file__).parent.parent.parent / "assets" / "koe-icon.ico"
+        icon_path = resource_path("assets", "koe-icon.ico")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         self.setStyleSheet(theme.application_stylesheet() + self._local_stylesheet())
@@ -183,10 +184,10 @@ class SettingsWindow(BaseWindow):
 
         storage = self._card("Storage", "Choose where transcripts and snippets live.")
         self.snippets_input = self._folder_picker(
-            "Snippets Folder", storage.layout(), "Leave empty for <koe>/Snippets"
+            "Snippets Folder", storage.layout(), "Leave empty for Documents/Koe/Snippets"
         )
         self.meetings_input = self._folder_picker(
-            "Meetings Folder", storage.layout(), "Leave empty for <koe>/Meetings"
+            "Meetings Folder", storage.layout(), "Leave empty for Documents/Koe/Meetings"
         )
         self.save_meeting_audio_checkbox = ToggleRow("Save Scribe meeting audio")
         storage.layout().addWidget(self.save_meeting_audio_checkbox)

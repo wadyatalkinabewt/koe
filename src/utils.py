@@ -3,6 +3,8 @@ import os
 import re
 from pathlib import Path
 
+from paths import config_path, resource_path
+
 class ConfigManager:
     """Manages application configuration settings."""
     _instance = None
@@ -89,8 +91,7 @@ class ConfigManager:
     def load_config_schema(schema_path=None):
         """Load the configuration schema from a YAML file."""
         if schema_path is None:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            schema_path = os.path.join(base_dir, 'config_schema.yaml')
+            schema_path = resource_path("src", "config_schema.yaml")
 
         with open(schema_path, 'r') as file:
             schema = yaml.safe_load(file)
@@ -165,7 +166,7 @@ class ConfigManager:
                 # Recurse into nested sections
                 self._validate_config_section(user_value, schema_value, current_path)
 
-    def load_user_config(self, config_path=os.path.join('src', 'config.yaml')):
+    def load_user_config(self, config_file=None):
         """Load user configuration and merge with default config."""
         def deep_update(source, overrides):
             for key, value in overrides.items():
@@ -185,9 +186,10 @@ class ConfigManager:
                     continue
                 source[key] = value
 
-        if config_path and os.path.isfile(config_path):
+        config_file = Path(config_file) if config_file else config_path()
+        if config_file.is_file():
             try:
-                with open(config_path, 'r') as file:
+                with open(config_file, 'r', encoding='utf-8') as file:
                     user_config = yaml.safe_load(file) or {}
                     if not isinstance(user_config, dict):
                         return
@@ -198,7 +200,7 @@ class ConfigManager:
                 print("Error in configuration file. Using default configuration.")
 
     @classmethod
-    def save_config(cls, config_path=os.path.join('src', 'config.yaml')):
+    def save_config(cls, config_file=None):
         """Save the current configuration to a YAML file (atomic write with retries)."""
         instance = cls.get_instance()
         # Create user config dict matching the current config
@@ -207,7 +209,8 @@ class ConfigManager:
             user_config[section] = settings
 
         import time
-        filepath = Path(config_path)
+        filepath = Path(config_file) if config_file else config_path()
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         temp_path = filepath.with_suffix('.tmp')
         
         # Write to temp file first
@@ -247,8 +250,7 @@ class ConfigManager:
     @classmethod
     def config_file_exists(cls):
         """Check if a valid config file exists."""
-        config_path = os.path.join('src', 'config.yaml')
-        return os.path.isfile(config_path)
+        return config_path().is_file()
 
     @classmethod
     def console_print(cls, message):

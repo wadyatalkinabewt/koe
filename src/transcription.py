@@ -2,11 +2,11 @@
 
 The module has two public entry points:
 - ``transcribe`` returns paste-ready text for a hotkey snippet.
-- ``transcribe_segments`` returns timestamped, caller-labelled meeting segments.
+- ``transcribe_file_segments`` returns timestamped, diarized meeting segments.
 
 All speech-to-text requests use ElevenLabs Scribe v2 with no-verbatim mode.
-Flat/fixed-label audio may be split into ten-minute requests; group-meeting
-loopback uses a streamed full-file request so diarized speaker IDs stay coherent.
+Snippets may be split into ten-minute requests. Scribe streams its full mixed
+meeting file once so diarized speaker IDs stay coherent.
 """
 
 import io
@@ -20,11 +20,12 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 
+from paths import default_snippets_dir, env_path, logs_dir
 from utils import ConfigManager
 
 
-_DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
-_DEBUG_LOG.parent.mkdir(exist_ok=True)
+_DEBUG_LOG = logs_dir() / "debug.log"
+_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 MAX_SNIPPETS = 5
 MAX_DEBUG_SNIPPETS = 5
@@ -51,7 +52,7 @@ def _debug(message: str) -> None:
 
 def _get_snippets_dir() -> Path:
     configured = ConfigManager.get_config_value("misc", "snippets_folder")
-    snippets_dir = Path(configured) if configured else Path(__file__).parent.parent / "Snippets"
+    snippets_dir = Path(configured) if configured else default_snippets_dir()
     snippets_dir.mkdir(parents=True, exist_ok=True)
     return snippets_dir
 
@@ -81,7 +82,7 @@ def save_rolling_transcription(text: str) -> None:
 def save_transcription_debug(raw: str, final: str, duration_sec: float) -> None:
     """Keep five local text snapshots for transcription diagnostics."""
     try:
-        debug_dir = Path(__file__).parent.parent / "logs" / "transcription_debug"
+        debug_dir = logs_dir() / "transcription_debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
         oldest = debug_dir / f"snippet_debug_{MAX_DEBUG_SNIPPETS}.md"
         if oldest.exists():
@@ -111,7 +112,7 @@ def save_transcription_debug(raw: str, final: str, duration_sec: float) -> None:
 
 
 def _load_env() -> None:
-    load_dotenv(Path(__file__).parent.parent / ".env")
+    load_dotenv(env_path(), override=True)
 
 
 def _api_key_from_env(*names: str) -> str:
@@ -213,11 +214,14 @@ def _elevenlabs_request_data(
         ("timestamps_granularity", "word"),
         ("file_format", "other"),
         ("no_verbatim", "true"),
+        # Keep Scribe billing tied to the duration of one mono timeline. This is
+        # deliberately explicit rather than relying on the API default.
+        ("use_multi_channel", "false"),
     ]
     language = common.get("language")
     if language:
         data.append(("language_code", str(language)))
-    if elevenlabs.get("keyterms_enabled", True):
+    if elevenlabs.get("keyterms_enabled", False):
         data.extend(("keyterms", term) for term in _initial_prompt_keyterms())
     if diarize:
         data.append(("diarize", "true"))
@@ -459,49 +463,6 @@ def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> s
     final = " ".join(parts).strip()
     _debug(f"transcribe_elevenlabs finished: {len(final)} chars")
     return final
-
-
-def transcribe_elevenlabs_segments(
-    audio_data: np.ndarray,
-    label: str = "Speaker",
-    sample_rate: int = 16000,
-) -> list[dict]:
-    """Return timestamped Scribe v2 segments for one labelled audio stream."""
-    api_key = _api_key_from_env(*ELEVENLABS_API_KEY_NAMES)
-    if not api_key:
-        _debug("ELEVENLABS_API_KEY not set")
-        return []
-
-    sample_rate = int(sample_rate or 16000)
-    audio_int16 = _ensure_int16(audio_data)
-    request_data = _elevenlabs_request_data()
-    max_samples = _chunk_max_samples(sample_rate)
-    segments: list[dict] = []
-    for start in range(0, len(audio_int16), max_samples):
-        result = _transcribe_elevenlabs_audio(
-            audio_int16[start:start + max_samples],
-            request_data,
-            api_key,
-            sample_rate,
-            timeout=180,
-        )
-        if result:
-            segments.extend(_segments_from_elevenlabs_words(
-                result,
-                label=label,
-                offset_sec=start / sample_rate,
-            ))
-    _debug(f"transcribe_elevenlabs_segments finished: {len(segments)} segments")
-    return segments
-
-
-def transcribe_segments(
-    audio_data: np.ndarray,
-    label: str = "Speaker",
-    sample_rate: int = 16000,
-) -> list[dict]:
-    """Scribe meeting entry point for one caller-labelled stream."""
-    return transcribe_elevenlabs_segments(audio_data, label=label, sample_rate=sample_rate)
 
 
 def post_process_transcription(transcription: str) -> str:

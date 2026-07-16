@@ -9,11 +9,12 @@ from pathlib import Path
 from datetime import datetime
 
 from transcription import transcribe
+from paths import logs_dir
 from utils import ConfigManager
 
 # Debug logging to file with rotation
-_DEBUG_LOG = Path(__file__).parent.parent / "logs" / "debug.log"
-_DEBUG_LOG.parent.mkdir(exist_ok=True)
+_DEBUG_LOG = logs_dir() / "debug.log"
+_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
 _MAX_LOG_SIZE = 1 * 1024 * 1024  # 1MB
 _MAX_TAIL_AUDIO_DEBUG_FILES = 5
 _TAIL_AUDIO_DEBUG_SECONDS = 20

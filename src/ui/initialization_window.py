@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from ui import theme
+from paths import resource_path
 
 
 class InitializationWindow(QMainWindow):
@@ -50,7 +51,7 @@ class InitializationWindow(QMainWindow):
         self.icon_label = QLabel()
         self.icon_label.setFixedSize(34, 34)
         self.icon_label.setAlignment(Qt.AlignCenter)
-        icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "koe-icon.png"
+        icon_path = resource_path("assets", "koe-icon.png")
         if icon_path.exists():
             pixmap = QPixmap(str(icon_path)).scaled(
                 32,

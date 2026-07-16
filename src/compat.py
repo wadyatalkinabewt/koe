@@ -90,47 +90,6 @@ def apply_window_icon(window, icon_path, app_id=None) -> None:
             pass
 
 
-def ensure_windows_shortcut(
-    shortcut_path,
-    *,
-    app_id,
-    target_path,
-    arguments,
-    working_directory,
-    icon_path,
-):
-    """Create/update a Windows shortcut registered to the supplied taskbar ID."""
-    shortcut_path = Path(shortcut_path).resolve()
-    shortcut_path.parent.mkdir(parents=True, exist_ok=True)
-    icon_path = Path(icon_path).resolve()
-
-    import win32com.client
-    from win32com.propsys import propsys, pscon
-
-    shortcut = win32com.client.Dispatch("WScript.Shell").CreateShortcut(
-        str(shortcut_path)
-    )
-    shortcut.TargetPath = str(Path(target_path).resolve())
-    shortcut.Arguments = str(arguments)
-    shortcut.WorkingDirectory = str(Path(working_directory).resolve())
-    shortcut.IconLocation = f"{icon_path},0"
-    shortcut.Description = "Koe Scribe meeting recorder"
-    shortcut.Save()
-
-    store = propsys.SHGetPropertyStoreFromParsingName(
-        str(shortcut_path),
-        None,
-        2,  # GPS_READWRITE
-        propsys.IID_IPropertyStore,
-    )
-    store.SetValue(
-        pscon.PKEY_AppUserModel_ID,
-        propsys.PROPVARIANTType(str(app_id)),
-    )
-    store.Commit()
-    return shortcut_path
-
-
 def enable_dark_titlebar(window) -> None:
     try:
         enabled = ctypes.c_int(1)

@@ -135,7 +135,6 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     ).y()
     assert "esc to close" not in labels
     assert not hasattr(window, "provider_combo")
-    assert not hasattr(window, "cleanup_enabled_checkbox")
 
     window._loading_values = True
     window.keyterms_checkbox.setChecked(False)

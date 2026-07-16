@@ -74,14 +74,3 @@ def render_transcript(
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
-
-
-def replace_speaker_label(segments: List[Dict], placeholder: str, real_name: str) -> List[Dict]:
-    """Replace any segment whose label == placeholder with real_name."""
-    out = []
-    for seg in segments:
-        new_seg = dict(seg)
-        if new_seg.get("label") == placeholder:
-            new_seg["label"] = real_name
-        out.append(new_seg)
-    return out

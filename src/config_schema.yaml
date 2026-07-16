@@ -10,7 +10,7 @@ meeting_options:
   root_folder:
     value: null
     type: str
-    description: "Root folder for Scribe output. null = <koe-repo>/Meetings."
+    description: "Root folder for Scribe output. null = Documents/Koe/Meetings."
   save_audio:
     value: false
     type: bool
@@ -29,7 +29,7 @@ model_options:
       description: "Comma-separated vocabulary sent to ElevenLabs as keyterms."
   elevenlabs:
     keyterms_enabled:
-      value: true
+      value: false
       type: bool
       description: "Send the configured vocabulary as ElevenLabs keyterms."
 
@@ -43,7 +43,7 @@ recording_options:
 # App behavior
 misc:
   print_to_terminal:
-    value: true
+    value: false
     type: bool
     description: "Print status and transcript text when a console is attached."
   hide_status_window:
@@ -57,4 +57,4 @@ misc:
   snippets_folder:
     value: null
     type: str
-    description: "Snippet output folder. null = <koe-repo>/Snippets."
+    description: "Snippet output folder. null = Documents/Koe/Snippets."

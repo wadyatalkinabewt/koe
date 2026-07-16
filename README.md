@@ -1,115 +1,121 @@
 # Koe
 
-Koe is a Windows tray app for two speech-to-text workflows:
+Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
 
-- **Snippets:** press `Ctrl+Shift+Space`, speak, press it again, and receive the
-  transcript on the clipboard.
-- **Scribe:** record microphone and Windows system audio into a timestamped
-  meeting transcript with an optional summary.
+- **Snippet:** press `Ctrl+Shift+Space`, speak, and press it again to copy the
+  transcript to the clipboard.
+- **Scribe:** record a meeting, keep notes, produce a labelled transcript, and
+  optionally generate a structured OpenRouter summary.
 
-ElevenLabs Scribe v2 is the only transcription backend. Every request uses
-`no_verbatim=true`. OpenRouter is used only for optional Scribe summaries.
+Every transcription request uses `no_verbatim=true`. ElevenLabs is the single
+speech-to-text path.
 
 ## Install
 
-Koe is developed and tested on Windows 11 with Python 3.13.
+Run `Koe-Operator-Setup.exe`. It installs per-user, so administrator access is not
+required, and creates two desktop and Start Menu shortcuts:
 
-```powershell
-cd C:\Projects\koe
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-python run.py --setup
-```
+Because this private build is not commercially code-signed, Windows may show
+SmartScreen on first launch. Choose **More info → Run anyway** once.
 
-`ELEVENLABS_API_KEY` is required. `OPENROUTER_API_KEY` is optional and only
-affects meeting summaries. Both belong in `.env`, which is excluded from Git.
+- **Koe Snippet** starts Koe if needed, then starts or stops a snippet.
+- **Koe Scribe** starts Koe if needed, then opens the meeting chooser.
 
-Start Koe with:
+The shortcuts target `Koe.exe` directly. Python and VBS are not required on the
+installed computer.
 
-```powershell
-pythonw run.py
-```
+First run asks for the user's name and ElevenLabs API key. The key is validated
+through ElevenLabs' user endpoint without consuming transcription credits.
+Vocabulary hints start disabled with an empty vocabulary because ElevenLabs
+charges extra when keyterm prompting is enabled.
 
-The local `Start Koe.lnk` launches the same entry point without a console.
+## Scribe billing and speaker labels
 
-## Snippets
+Koe opens both capture devices before either starts, records microphone and
+Windows loopback separately, overlays them into one aligned mono WAV, and sends
+that file once with `use_multi_channel=false`. A one-hour meeting therefore
+produces one one-hour transcription upload rather than two one-hour channel
+uploads.
 
-The activation hotkey toggles one recording:
+The original microphone track is never transcribed separately. Koe uses its
+timing and energy locally to identify which diarized label belongs to the name
+in Settings. Other speakers keep ElevenLabs speaker-library names when known,
+or readable `Speaker 1`, `Speaker 2`, and so on when unknown.
 
-```text
-Listening -> Transcribing -> clipboard
-```
-
-While listening, the status-card `x` discards the recording. During
-transcription, it dismisses the card and suppresses clipboard and sound output
-without cancelling the transcription request.
-
-The newest five transcripts rotate through `Snippets/snippet_1.md` to
-`snippet_5.md`. Raw snippet audio is discarded after transcription.
-
-## Scribe
-
-Choose **Start Scribe** from the tray menu, then choose the meeting shape:
-
-- **One:** microphone audio is labelled with your name; Windows system audio is
-  labelled with the other participant's name.
-- **Multiple:** microphone audio keeps your name; system audio is diarized by
-  ElevenLabs with speaker-library matching enabled.
-
-Scribe records microphone and Windows loopback as separate sources, transcribes
-valid streams, and interleaves their word timestamps. An empty source is
-skipped; **No Speech Detected** appears only when neither source yields speech.
-
-Completed meetings are written under `Meetings/YY_MM_DD_Subject/`:
+If **Save Scribe meeting audio** is enabled, the original source tracks are
+kept with the meeting:
 
 ```text
 transcript.md
 summary.md
 notes.md           # only when notes were entered
-microphone.wav     # only when Save Scribe meeting audio is enabled
-meeting-audio.wav  # only when Save Scribe meeting audio is enabled
+microphone.wav     # only when audio retention is enabled
+meeting-audio.wav  # only when audio retention is enabled
 ```
 
-The two WAV files are deliberately not merged.
+## Data locations
 
-## Settings
-
-Settings autosave and apply without restarting Koe or interrupting an active
-snippet. They control:
-
-- your Scribe name;
-- snippet and meeting folders;
-- Scribe audio retention;
-- the activation hotkey;
-- completion sound and snippet-card visibility;
-- ElevenLabs vocabulary hints.
-
-Runtime preferences live in ignored `src/config.yaml`. The supported schema is
-`src/config_schema.yaml`, and `src/config.yaml.example` is the safe template.
-
-## Repository
+Code and private data are deliberately separate:
 
 ```text
-assets/       icons and completion sound
-scripts/      console-free Windows launcher
-src/          application source
-tests/        regression tests for the finished behavior
-run.py        setup/key validation and tray-process bootstrap
+%LOCALAPPDATA%\Programs\Koe\     installed application
+%LOCALAPPDATA%\Koe\.env          API keys
+%LOCALAPPDATA%\Koe\config.yaml   settings
+%LOCALAPPDATA%\Koe\logs\         diagnostic logs
+%LOCALAPPDATA%\Koe\scribe-temp\  in-progress Scribe audio
+<Windows Documents>\Koe\Snippets\
+<Windows Documents>\Koe\Meetings\
 ```
 
-The following are runtime data, not source control content:
+Koe asks Windows for the current user's Documents location, so workplace or
+OneDrive folder redirection is respected.
 
-- `Meetings/`, `Snippets/`, and `logs/` contain private user data;
-- `.scribe_temp/` is recreated for in-progress Scribe audio and cleaned after a
-  successful attempt;
-- `.setup_complete` is a local setup marker;
-- Python and test cache directories are disposable.
+Uninstalling or upgrading Koe does not remove the API keys, settings,
+transcripts, snippets, or meeting audio.
+
+## Development
+
+Koe is developed and tested on Windows 11 with Python 3.13.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe run.py
+```
+
+Source runs and packaged runs use the same per-user data locations. Override
+them only in tests with `KOE_APPDATA_DIR` and `KOE_DOCUMENTS_DIR`.
+
+## Build the private installer
+
+1. Copy `packaging\private-Operator.env.example` to the ignored
+   `packaging\private-Operator.env`.
+2. Add the dedicated, spending-capped `OPENROUTER_API_KEY`. Never add an
+   ElevenLabs key; first-run setup collects that from the user.
+3. Build:
+
+```powershell
+.\packaging\build.ps1
+```
+
+The only handoff artifact is `dist\Koe-Operator-Setup.exe`. The dedicated
+OpenRouter key is embedded in that private installer and copied to `.env` only
+when the destination does not already have one, so keep the installer private.
+
+### Managed Windows devices
+
+This private build is not publicly code-signed. A managed device that enables
+Defender ASR rule `01443614-cd74-433a-b99e-2ecdc07bfc25` may block both the
+installer and `Koe.exe` because a brand-new private executable has no Microsoft
+cloud reputation. That is a policy decision, not a malware finding. The safe
+resolution is an IT-managed per-rule exclusion for Koe's fully qualified path
+or a publicly trusted distribution/signing route; do not disable Defender.
 
 ## Verification
 
 ```powershell
-python -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
 $files = @('run.py') + (Get-ChildItem src -Recurse -Filter *.py | ForEach-Object FullName)
-python -m py_compile $files
+.\.venv\Scripts\python.exe -m py_compile $files
 git diff --check
 ```

@@ -1,1 +1,1 @@
-"""Scribe records mic + loopback, transcribes with ElevenLabs, and summarizes through OpenRouter."""
+"""Scribe mixes mic and loopback into one ElevenLabs upload, then summarizes via OpenRouter."""

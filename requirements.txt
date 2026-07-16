@@ -9,6 +9,3 @@ pywin32==311
 requests==2.32.5
 scipy==1.17.1
 sounddevice==0.5.5
-
-# Regression suite
-pytest==9.0.2

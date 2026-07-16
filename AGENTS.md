@@ -2,68 +2,83 @@
 
 Koe is a Windows-only tray application with two workflows:
 
-1. Snippets: global hotkey capture -> ElevenLabs Scribe v2 -> clipboard and
+1. Snippets: global toggle hotkey -> ElevenLabs Scribe v2 -> clipboard and
    five rotating Markdown files.
-2. Scribe: microphone plus Windows loopback -> ElevenLabs Scribe v2 ->
-   stream-labelled meeting transcript -> optional OpenRouter summary.
+2. Scribe: microphone plus Windows loopback -> one aligned mono upload ->
+   diarized meeting transcript -> optional OpenRouter summary.
 
 ## Invariants
 
 - ElevenLabs Scribe v2 is the only speech-to-text backend.
 - Every transcription request uses `no_verbatim=true`.
-- Snippets receive no AI cleanup pass; local formatting may only normalize
-  whitespace, punctuation, and the paste-friendly trailing space.
+- Snippet formatting may only normalize whitespace, punctuation, and the
+  paste-friendly trailing space.
 - OpenRouter is confined to `src/meeting/summarizer.py` and Scribe summaries.
-- The snippet hotkey is press-to-toggle. Do not restore continuous, hold, VAD,
-  local-model, GPU, Whisper, Groq, or backend-selection paths.
+- The snippet hotkey is press-to-toggle. ElevenLabs remains the only
+  transcription path.
 - Settings autosave and must not restart Koe or interrupt an active snippet.
 - The snippet status card keeps fixed geometry across Listening/Transcribing.
-- A Scribe source shorter than ElevenLabs' 100 ms minimum is skipped. Report No
-  Speech Detected only when neither stream yields speech.
-- One-on-one Scribe uses deterministic mic/loopback labels. Group Scribe keeps
-  the mic owner deterministic and diarizes loopback with speaker-library
-  matching.
+- Scribe sends one mono meeting file with `use_multi_channel=false`. Never
+  reintroduce separate billable mic and loopback transcription requests or
+  multichannel billing.
+- The original mic track is local attribution evidence only. Its detected
+  diarized label maps to the current Settings name.
+- Group Scribe always enables diarization and speaker-library matching.
+- Operator install defaults keep vocabulary hints disabled and vocabulary empty.
 
 ## Data boundaries
 
-Never delete or rewrite user data under `Meetings/`, `Snippets/`, or `logs/`.
-Never commit `.env`, `src/config.yaml`, `.scribe_temp/`, `.setup_complete`, or
-the private runtime-data directories. Do not expose API keys, recordings,
-transcripts, vocabulary, or local paths in review packets.
+Runtime state belongs outside the repository:
+
+- `%LOCALAPPDATA%\Koe`: secrets, settings, logs, and Scribe temp audio.
+- `%USERPROFILE%\Documents\Koe`: durable snippets and meetings.
+
+Never delete or rewrite those directories without explicit user approval.
+Never commit `.env`, `config.yaml`, private build secrets, recordings,
+transcripts, vocabulary, or local paths. Installer upgrades and uninstall must
+preserve runtime state.
 
 ## Source map
 
-- `run.py`: setup gate and app bootstrap.
+- `run.py`: GUI setup gate and command-aware app bootstrap.
 - `src/main.py`: tray, hotkey lifecycle, clipboard, and Scribe launch.
+- `src/commands.py`: localhost single-instance shortcut command channel.
+- `src/paths.py`: installed resources and per-user runtime locations.
 - `src/result_thread.py`: snippet microphone capture and lifecycle.
-- `src/transcription.py`: ElevenLabs requests and rolling snippet storage.
-- `src/meeting/capture.py`: microphone and WASAPI loopback capture.
-- `src/meeting/app.py`: Scribe UI and worker.
+- `src/transcription.py`: ElevenLabs requests and rotating snippet storage.
+- `src/meeting/capture.py`: mic/loopback capture, mono mixing, and host mapping.
+- `src/meeting/app.py`: Scribe UI and single-upload worker.
 - `src/meeting/transcript.py`: Markdown transcript rendering.
 - `src/meeting/summarizer.py`: optional OpenRouter summary client.
+- `src/ui/setup_window.py`: first-run GUI onboarding.
 - `src/ui/theme.py`: shared desktop visual system.
 - `src/config_schema.yaml`: authoritative preference schema.
+- `packaging/`: PyInstaller and Inno Setup release definitions.
 
 ## Working rules
 
-- Read this file and the live source before changing behavior.
+- Read this file and live source before changing behavior.
 - Preserve unrelated user changes and private output data.
-- Prefer deleting retired paths over keeping compatibility switches for them.
-- Do not add a second launcher, backend, cleanup stage, or configuration source.
+- Prefer deleting retired paths over keeping compatibility switches.
+- Do not add a VBS/Python installed launcher, second backend, cleanup stage, or
+  second configuration source.
 - Keep the dark-slate/indigo/coral visual system consistent across all surfaces.
 - Use `apply_patch` for source edits. Verify resolved paths before bulk deletion.
+- `packaging/private-Operator.env` is ignored and must contain only the dedicated,
+  spending-capped OpenRouter key. Operator's ElevenLabs key comes from onboarding.
+- Release one `Koe-Operator-Setup.exe`; do not produce a parallel portable zip.
 
 ## Verification
 
 Run focused tests first, then:
 
 ```powershell
-python -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
 $files = @('run.py') + (Get-ChildItem src -Recurse -Filter *.py | ForEach-Object FullName)
-python -m py_compile $files
+.\.venv\Scripts\python.exe -m py_compile $files
 git diff --check
 ```
 
-For UI changes, render representative Qt states offscreen. Before restarting
-Koe, confirm no live snippet or Scribe recording would be interrupted; then
-confirm the `run.py` parent and `src/main.py` child remain running.
+Before restarting Koe, confirm no live snippet or Scribe recording would be
+interrupted. For a release, compile the installer, inspect its shortcuts and
+preservation flags, and test first-run onboarding on a clean Windows profile.

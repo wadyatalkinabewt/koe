@@ -13,13 +13,15 @@ from PyQt5.QtWidgets import (
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from ui import theme
+from paths import logs_dir
 
 
-_DEBUG_LOG = Path(__file__).parent.parent.parent / "logs" / "debug.log"
+_DEBUG_LOG = logs_dir() / "debug.log"
 
 
 def _debug(message: str) -> None:
     try:
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(_DEBUG_LOG, "a", encoding="utf-8") as log_file:
             log_file.write(f"[{datetime.now().strftime('%H:%M:%S')}] [status_window] {message}\n")
     except Exception:

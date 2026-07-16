@@ -24,6 +24,7 @@ def test_request_is_fixed_to_scribe_v2_no_verbatim(monkeypatch):
     assert ("model_id", "scribe_v2") in data
     assert ("no_verbatim", "true") in data
     assert ("tag_audio_events", "false") in data
+    assert ("use_multi_channel", "false") in data
     assert not any(key in ("diarize", "use_speaker_library") for key, _value in data)
     assert not any(key == "language_code" for key, _value in data)
     assert [value for key, value in data if key == "keyterms"] == ["Koe", "ElevenLabs"]
@@ -56,6 +57,7 @@ def test_group_request_enables_diarization_and_speaker_library(monkeypatch):
     assert ("diarize", "true") in data
     assert ("use_speaker_library", "true") in data
     assert ("no_verbatim", "true") in data
+    assert ("use_multi_channel", "false") in data
 
 
 def test_speaker_labels_split_on_changes_and_preserve_library_ids():
@@ -184,33 +186,6 @@ def test_snippet_call_path_sends_no_verbatim(monkeypatch):
 
     assert result == "Clear result. "
     assert ("no_verbatim", "true") in captured["data"]
-
-
-def test_scribe_call_path_sends_no_verbatim(monkeypatch):
-    import transcription
-
-    captured = {}
-    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
-    monkeypatch.setattr(transcription, "_api_key_from_env", lambda *_names: "test-key")
-    monkeypatch.setattr(transcription, "_normalize_quiet_audio", lambda audio: audio)
-
-    def fake_post(_buffer, data, _api_key, timeout):
-        captured["data"] = data
-        return {
-            "text": "Hello there.",
-            "words": [
-                {"type": "word", "text": "Hello", "start": 0.0, "end": 0.3},
-                {"type": "word", "text": "there.", "start": 0.3, "end": 0.6},
-            ],
-        }, None
-
-    monkeypatch.setattr(transcription, "_elevenlabs_post", fake_post)
-    segments = transcription.transcribe_segments(
-        np.ones(1600, dtype=np.int16), label="Alex", sample_rate=16000
-    )
-
-    assert ("no_verbatim", "true") in captured["data"]
-    assert segments == [{"start": 0.0, "end": 0.6, "text": "Hello there.", "label": "Alex"}]
 
 
 def test_local_formatting_preserves_spoken_words():

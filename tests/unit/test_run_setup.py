@@ -7,8 +7,8 @@ import run
 
 
 def _prepare(root: Path, env_text: str, marker: bool = False) -> None:
-    (root / "src").mkdir()
-    (root / "src" / "config.yaml").write_text("profile: {}\n", encoding="utf-8")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.yaml").write_text("profile: {}\n", encoding="utf-8")
     (root / ".env").write_text(env_text, encoding="utf-8")
     if marker:
         (root / ".setup_complete").touch()
