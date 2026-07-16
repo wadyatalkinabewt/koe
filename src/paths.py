@@ -1,4 +1,4 @@
-"""Stable resource and per-user data locations for source and packaged Koe."""
+"""Stable resource and data locations for source and packaged Koe."""
 
 from __future__ import annotations
 
@@ -55,6 +55,8 @@ def app_data_dir() -> Path:
     override = os.environ.get("KOE_APPDATA_DIR")
     if override:
         return Path(override).expanduser().resolve()
+    if not is_frozen():
+        return source_root()
     local_app_data = os.environ.get("LOCALAPPDATA")
     base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
     return base / APP_NAME
@@ -64,6 +66,8 @@ def documents_dir() -> Path:
     override = os.environ.get("KOE_DOCUMENTS_DIR")
     if override:
         return Path(override).expanduser().resolve()
+    if not is_frozen():
+        return source_root()
     return _known_documents_dir() / APP_NAME
 
 
@@ -84,6 +88,8 @@ def logs_dir() -> Path:
 
 
 def scribe_temp_dir() -> Path:
+    if not is_frozen() and not os.environ.get("KOE_APPDATA_DIR"):
+        return source_root() / ".scribe_temp"
     return app_data_dir() / "scribe-temp"
 
 
@@ -96,5 +102,11 @@ def default_snippets_dir() -> Path:
 
 
 def ensure_runtime_dirs() -> None:
-    for path in (app_data_dir(), logs_dir(), default_meetings_dir(), default_snippets_dir()):
+    for path in (
+        app_data_dir(),
+        logs_dir(),
+        scribe_temp_dir(),
+        default_meetings_dir(),
+        default_snippets_dir(),
+    ):
         path.mkdir(parents=True, exist_ok=True)

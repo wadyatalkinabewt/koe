@@ -28,22 +28,28 @@ Koe is a Windows-only tray application with two workflows:
 
 ## Data boundaries
 
-Runtime state belongs outside the repository:
+Source/dev runs keep Alex's complete working state under the repository:
+
+- `C:\Projects\koe`: `.env`, `config.yaml`, `.setup_complete`, and local shortcuts.
+- `C:\Projects\koe\logs` and `C:\Projects\koe\.scribe_temp`: diagnostics and temporary audio.
+- `C:\Projects\koe\Snippets` and `C:\Projects\koe\Meetings`: durable output.
+
+Packaged installs retain normal per-user Windows storage:
 
 - `%LOCALAPPDATA%\Koe`: secrets, settings, logs, and Scribe temp audio.
 - `%USERPROFILE%\Documents\Koe`: durable snippets and meetings.
 
-Never delete or rewrite those directories without explicit user approval.
+Never delete or rewrite either runtime layout without explicit user approval.
 Never commit `.env`, `config.yaml`, private build secrets, recordings,
 transcripts, vocabulary, or local paths. Installer upgrades and uninstall must
-preserve runtime state.
+preserve packaged runtime state.
 
 ## Source map
 
 - `run.py`: GUI setup gate and command-aware app bootstrap.
 - `src/main.py`: tray, hotkey lifecycle, clipboard, and Scribe launch.
 - `src/commands.py`: localhost single-instance shortcut command channel.
-- `src/paths.py`: installed resources and per-user runtime locations.
+- `src/paths.py`: source-local and packaged per-user runtime locations.
 - `src/result_thread.py`: snippet microphone capture and lifecycle.
 - `src/transcription.py`: ElevenLabs requests and rotating snippet storage.
 - `src/meeting/capture.py`: mic/loopback capture, mono mixing, and host mapping.

@@ -55,7 +55,7 @@ meeting-audio.wav  # only when audio retention is enabled
 
 ## Data locations
 
-Code and private data are deliberately separate:
+The private installer uses normal per-user Windows locations:
 
 ```text
 %LOCALAPPDATA%\Programs\Koe\     installed application
@@ -77,14 +77,26 @@ transcripts, snippets, or meeting audio.
 
 Koe is developed and tested on Windows 11 with Python 3.13.
 
+Source runs keep the complete local development instance inside the checkout:
+
+```text
+C:\Projects\koe\.env
+C:\Projects\koe\config.yaml
+C:\Projects\koe\logs\
+C:\Projects\koe\.scribe_temp\
+C:\Projects\koe\Snippets\
+C:\Projects\koe\Meetings\
+C:\Projects\koe\.venv\
+```
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe run.py
 ```
 
-Source runs and packaged runs use the same per-user data locations. Override
-them only in tests with `KOE_APPDATA_DIR` and `KOE_DOCUMENTS_DIR`.
+Packaged builds continue to use the per-user locations above. Tests can
+override either layout with `KOE_APPDATA_DIR` and `KOE_DOCUMENTS_DIR`.
 
 ## Build the private installer
 
