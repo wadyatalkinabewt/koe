@@ -10,7 +10,7 @@ meeting_options:
   root_folder:
     value: null
     type: str
-    description: "Root folder for Scribe output. null = Documents/Koe/Meetings."
+    description: "Root folder for Scribe output. null = the current default meetings folder."
   save_audio:
     value: false
     type: bool
@@ -57,4 +57,4 @@ misc:
   snippets_folder:
     value: null
     type: str
-    description: "Snippet output folder. null = Documents/Koe/Snippets."
+    description: "Snippet output folder. null = the current default snippets folder."

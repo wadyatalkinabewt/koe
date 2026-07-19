@@ -25,7 +25,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from ui import theme
 from ui.base_window import BaseWindow
-from paths import resource_path
+from paths import default_meetings_dir, default_snippets_dir, resource_path
 from utils import ConfigManager
 
 
@@ -184,10 +184,14 @@ class SettingsWindow(BaseWindow):
 
         storage = self._card("Storage", "Choose where transcripts and snippets live.")
         self.snippets_input = self._folder_picker(
-            "Snippets Folder", storage.layout(), "Leave empty for Documents/Koe/Snippets"
+            "Snippets Folder",
+            storage.layout(),
+            f"Leave empty for {default_snippets_dir()}",
         )
         self.meetings_input = self._folder_picker(
-            "Meetings Folder", storage.layout(), "Leave empty for Documents/Koe/Meetings"
+            "Meetings Folder",
+            storage.layout(),
+            f"Leave empty for {default_meetings_dir()}",
         )
         self.save_meeting_audio_checkbox = ToggleRow("Save Scribe meeting audio")
         storage.layout().addWidget(self.save_meeting_audio_checkbox)

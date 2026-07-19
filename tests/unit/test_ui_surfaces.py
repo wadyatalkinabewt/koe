@@ -42,6 +42,7 @@ def reset_config_manager():
 
 
 def test_settings_autosaves_without_footer_or_retired_controls(qapp):
+    from paths import default_meetings_dir, default_snippets_dir
     from ui.settings_window import SettingsWindow, ToggleRow
 
     window = SettingsWindow()
@@ -133,6 +134,14 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert window.snippets_input.mapTo(window, QPoint()).y() < window.meetings_input.mapTo(
         window, QPoint()
     ).y()
+    assert window.snippets_input.placeholderText() == (
+        f"Leave empty for {default_snippets_dir()}"
+    )
+    assert window.meetings_input.placeholderText() == (
+        f"Leave empty for {default_meetings_dir()}"
+    )
+    assert "Documents/Koe" not in window.snippets_input.placeholderText()
+    assert "Documents/Koe" not in window.meetings_input.placeholderText()
     assert "esc to close" not in labels
     assert not hasattr(window, "provider_combo")
 
