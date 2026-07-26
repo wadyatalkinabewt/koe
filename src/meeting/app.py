@@ -349,15 +349,19 @@ class MeetingWorker(QThread):
 
             # ----- summary -----
             self.status_signal.emit("Generating summary...")
-            summary_path = meeting_dir / "summary.md"
+            pdf_summary = os.getenv("KOE_SUMMARY_FORMAT", "").strip().casefold() == "pdf"
+            summary_path = meeting_dir / ("summary.pdf" if pdf_summary else "summary.md")
             try:
                 doc = "\n\n".join(p for p in (notes_md, transcript_md) if p)
                 summary_text = SummarizerClient().summarize(doc)
-                summary_path.write_text(summary_text, encoding="utf-8")
             except Exception as e:
-                summary_path.write_text(
-                    f"# Summary\n\nSummary generation failed: {e}\n", encoding="utf-8"
-                )
+                summary_text = f"# Summary\n\nSummary generation failed: {e}\n"
+            if pdf_summary:
+                from meeting.summary_pdf import render_summary_pdf
+
+                render_summary_pdf(summary_text, summary_path)
+            else:
+                summary_path.write_text(summary_text, encoding="utf-8")
 
             # ----- optional durable audio, then temp cleanup -----
             if self.save_audio:

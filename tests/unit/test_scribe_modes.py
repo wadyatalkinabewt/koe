@@ -90,6 +90,8 @@ def test_group_worker_sends_one_mixed_request_and_saves_original_sources(tmp_pat
     monkeypatch.setattr(transcription, "transcribe_file_segments", fake_file_transcription)
     monkeypatch.setattr("meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1")
     monkeypatch.setattr(summarizer.SummarizerClient, "summarize", lambda _self, _doc: "# Summary\n\nDone.\n")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("KOE_SUMMARY_FORMAT", "pdf")
 
     worker = MeetingWorker(
         mic_wav=mic,
@@ -112,7 +114,9 @@ def test_group_worker_sends_one_mixed_request_and_saves_original_sources(tmp_pat
         "use_speaker_library": True,
     }
     assert (meeting_dir / "transcript.md").exists()
-    assert (meeting_dir / "summary.md").exists()
+    summary = meeting_dir / "summary.pdf"
+    assert summary.exists()
+    assert summary.read_bytes().startswith(b"%PDF-")
     assert (meeting_dir / "microphone.wav").exists()
     assert (meeting_dir / "meeting-audio.wav").exists()
     transcript = (meeting_dir / "transcript.md").read_text(encoding="utf-8")
@@ -178,6 +182,7 @@ def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(tmp_path
         "summarize",
         lambda _self, _doc: "# Summary\n\nDone.\n",
     )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     worker = MeetingWorker(
         mic_wav=mic,
         loopback_wav=loopback,
@@ -232,6 +237,7 @@ def test_group_worker_continues_when_loopback_stream_is_empty(tmp_path, monkeypa
         "summarize",
         lambda _self, _doc: "# Summary\n\nDone.\n",
     )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     worker = MeetingWorker(
         mic_wav=mic,
@@ -252,6 +258,7 @@ def test_group_worker_continues_when_loopback_stream_is_empty(tmp_path, monkeypa
     assert errors == []
     assert len(completed) == 1
     assert (meeting_dir / "transcript.md").exists()
+    assert (meeting_dir / "summary.md").read_text(encoding="utf-8") == "# Summary\n\nDone.\n"
     assert "Solo update." in (meeting_dir / "transcript.md").read_text(encoding="utf-8")
     assert not source_dir.exists()
 

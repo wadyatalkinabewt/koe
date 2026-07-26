@@ -42,12 +42,15 @@ timing and energy locally to identify which diarized label belongs to the name
 in Settings. Other speakers keep ElevenLabs speaker-library names when known,
 or readable `Speaker 1`, `Speaker 2`, and so on when unknown.
 
-If **Save Scribe meeting audio** is enabled, the original source tracks are
-kept with the meeting:
+The private Operator build writes the summary as a clean PDF that opens in the
+default PDF viewer. Source/dev Koe retains Markdown summaries. Transcripts and
+optional notes remain Markdown in both builds. If **Save Scribe meeting audio**
+is enabled, the original source tracks are also kept with the meeting:
 
 ```text
 transcript.md
-summary.md
+summary.pdf         # private Operator build
+summary.md          # source/dev build
 notes.md           # only when notes were entered
 microphone.wav     # only when audio retention is enabled
 meeting-audio.wav  # only when audio retention is enabled
@@ -113,6 +116,22 @@ override either layout with `KOE_APPDATA_DIR` and `KOE_DOCUMENTS_DIR`.
 The only handoff artifact is `dist\Koe-Operator-Setup.exe`. The dedicated
 OpenRouter key is embedded in that private installer and copied to `.env` only
 when the destination does not already have one, so keep the installer private.
+
+### Operator PDF-summary replacement
+
+The private Operator PDF build is published as a versioned `Koe.exe` asset on the
+private GitHub release. It enables PDF summaries at build time; source/dev Koe
+continues to write Markdown summaries.
+
+To apply the replacement:
+
+1. Exit Koe from its tray menu.
+2. Replace `%LOCALAPPDATA%\Programs\Koe\Koe.exe` with the release asset.
+3. Start Koe again from either desktop shortcut.
+
+The replacement executable contains no API keys. It continues to read the
+existing per-user `%LOCALAPPDATA%\Koe\.env`, so setup and credentials do not
+need to be repeated.
 
 ### Managed Windows devices
 

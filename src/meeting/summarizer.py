@@ -1,8 +1,9 @@
 """
 AI summarization client using OpenRouter.
 
-Default model is google/gemini-3.5-flash via OpenRouter, pinned to Google AI
-Studio for stable routing. To switch models, change SummarizerClient.MODEL.
+Default model is google/gemini-3.6-flash via OpenRouter. Provider selection is
+left to OpenRouter so account privacy policies and available endpoints are
+respected. To switch models, change SummarizerClient.MODEL.
 """
 
 import time
@@ -18,8 +19,7 @@ from paths import env_path
 class SummarizerClient:
     """Client for AI-powered meeting summarization via OpenRouter."""
 
-    MODEL = "google/gemini-3.5-flash"
-    PROVIDER_PIN = {"order": ["Google AI Studio"], "allow_fallbacks": False}
+    MODEL = "google/gemini-3.6-flash"
     MAX_RETRIES = 3
     INITIAL_RETRY_DELAY = 2.0  # seconds
     REQUEST_TIMEOUT = 300  # 5 minutes per attempt
@@ -62,7 +62,6 @@ class SummarizerClient:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 4096,
             "temperature": 0.0,
-            "provider": self.PROVIDER_PIN,
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -131,13 +130,19 @@ class SummarizerClient:
         }
 
         lines = transcript_content.split('\n')
+        fallback_title = None
 
-        for line in lines[:20]:  # Only check first 20 lines for metadata
+        for line in lines:
             line = line.strip()
 
-            # Title: first H1 heading
-            if line.startswith('# ') and metadata["title"] is None:
-                metadata["title"] = line[2:].strip()
+            # Host notes may precede the transcript. Prefer the meeting's H1
+            # over the generated "Notes — ..." heading, while retaining a
+            # fallback for documents that contain notes only.
+            if line.startswith('# '):
+                candidate = line[2:].strip()
+                fallback_title = fallback_title or candidate
+                if not candidate.casefold().startswith("notes —"):
+                    metadata["title"] = candidate
 
             # Date: **Date**: value
             if line.startswith('**Date**:'):
@@ -150,6 +155,11 @@ class SummarizerClient:
             # Participants: **Participants**: value
             if line.startswith('**Participants**:'):
                 metadata["participants"] = line.replace('**Participants**:', '').strip()
+
+            if all(metadata.values()):
+                break
+
+        metadata["title"] = metadata["title"] or fallback_title
 
         return metadata
 

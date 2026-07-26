@@ -24,6 +24,8 @@ htmlcov/
 venv/
 /build/
 /dist/
+/output/
+/tmp/
 
 # Local Windows launchers and temporary files
 *.lnk

@@ -25,6 +25,8 @@ Koe is a Windows-only tray application with two workflows:
   diarized label maps to the current Settings name.
 - Group Scribe always enables diarization and speaker-library matching.
 - Operator install defaults keep vocabulary hints disabled and vocabulary empty.
+- Operator's PDF-summary executable enables `KOE_SUMMARY_FORMAT=pdf` at build time;
+  source/dev Koe keeps Markdown summaries.
 
 ## Data boundaries
 
@@ -56,6 +58,7 @@ preserve packaged runtime state.
 - `src/meeting/app.py`: Scribe UI and single-upload worker.
 - `src/meeting/transcript.py`: Markdown transcript rendering.
 - `src/meeting/summarizer.py`: optional OpenRouter summary client.
+- `src/meeting/summary_pdf.py`: clean PDF rendering for Scribe summaries.
 - `src/ui/setup_window.py`: first-run GUI onboarding.
 - `src/ui/theme.py`: shared desktop visual system.
 - `src/config_schema.yaml`: authoritative preference schema.
@@ -73,6 +76,9 @@ preserve packaged runtime state.
 - `packaging/private-Operator.env` is ignored and must contain only the dedicated,
   spending-capped OpenRouter key. Operator's ElevenLabs key comes from onboarding.
 - Release one `Koe-Operator-Setup.exe`; do not produce a parallel portable zip.
+- A user-requested Operator in-place hotfix may be published as one private,
+  versioned `Koe.exe` release asset. Never commit generated executables, and
+  scan the binary for key-shaped values before uploading it.
 
 ## Verification
 
