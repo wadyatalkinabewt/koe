@@ -199,9 +199,9 @@ def test_one_on_one_relabels_host_and_single_remote_participant():
     result = _relabel_mixed_segments(
         segments,
         "Speaker 1",
-        "Operator",
+        "Alex",
         "Casey",
         MODE_ONE_ON_ONE,
     )
 
-    assert [segment["label"] for segment in result] == ["Operator", "Casey"]
+    assert [segment["label"] for segment in result] == ["Alex", "Casey"]

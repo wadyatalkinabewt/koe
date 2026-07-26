@@ -24,9 +24,8 @@ Koe is a Windows-only tray application with two workflows:
 - The original mic track is local attribution evidence only. Its detected
   diarized label maps to the current Settings name.
 - Group Scribe always enables diarization and speaker-library matching.
-- Operator install defaults keep vocabulary hints disabled and vocabulary empty.
-- Operator's PDF-summary executable enables `KOE_SUMMARY_FORMAT=pdf` at build time;
-  source/dev Koe keeps Markdown summaries.
+- PDF summaries are optional via `KOE_SUMMARY_FORMAT=pdf`; source/dev Koe keeps
+  Markdown summaries by default.
 
 ## Data boundaries
 
@@ -62,7 +61,6 @@ preserve packaged runtime state.
 - `src/ui/setup_window.py`: first-run GUI onboarding.
 - `src/ui/theme.py`: shared desktop visual system.
 - `src/config_schema.yaml`: authoritative preference schema.
-- `packaging/`: PyInstaller and Inno Setup release definitions.
 
 ## Working rules
 
@@ -73,12 +71,8 @@ preserve packaged runtime state.
   second configuration source.
 - Keep the dark-slate/indigo/coral visual system consistent across all surfaces.
 - Use `apply_patch` for source edits. Verify resolved paths before bulk deletion.
-- `packaging/private-Operator.env` is ignored and must contain only the dedicated,
-  spending-capped OpenRouter key. Operator's ElevenLabs key comes from onboarding.
-- Release one `Koe-Operator-Setup.exe`; do not produce a parallel portable zip.
-- A user-requested Operator in-place hotfix may be published as one private,
-  versioned `Koe.exe` release asset. Never commit generated executables, and
-  scan the binary for key-shaped values before uploading it.
+- Private packaging, handoff artifacts, and generated executables are ignored
+  and must never be committed.
 
 ## Verification
 
@@ -92,5 +86,4 @@ git diff --check
 ```
 
 Before restarting Koe, confirm no live snippet or Scribe recording would be
-interrupted. For a release, compile the installer, inspect its shortcuts and
-preservation flags, and test first-run onboarding on a clean Windows profile.
+interrupted.

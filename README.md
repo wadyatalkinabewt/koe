@@ -10,25 +10,6 @@ Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
 Every transcription request uses `no_verbatim=true`. ElevenLabs is the single
 speech-to-text path.
 
-## Install
-
-Run `Koe-Operator-Setup.exe`. It installs per-user, so administrator access is not
-required, and creates two desktop and Start Menu shortcuts:
-
-Because this private build is not commercially code-signed, Windows may show
-SmartScreen on first launch. Choose **More info → Run anyway** once.
-
-- **Koe Snippet** starts Koe if needed, then starts or stops a snippet.
-- **Koe Scribe** starts Koe if needed, then opens the meeting chooser.
-
-The shortcuts target `Koe.exe` directly. Python and VBS are not required on the
-installed computer.
-
-First run asks for the user's name and ElevenLabs API key. The key is validated
-through ElevenLabs' user endpoint without consuming transcription credits.
-Vocabulary hints start disabled with an empty vocabulary because ElevenLabs
-charges extra when keyterm prompting is enabled.
-
 ## Scribe billing and speaker labels
 
 Koe opens both capture devices before either starts, records microphone and
@@ -42,39 +23,19 @@ timing and energy locally to identify which diarized label belongs to the name
 in Settings. Other speakers keep ElevenLabs speaker-library names when known,
 or readable `Speaker 1`, `Speaker 2`, and so on when unknown.
 
-The private Operator build writes the summary as a clean PDF that opens in the
-default PDF viewer. Source/dev Koe retains Markdown summaries. Transcripts and
-optional notes remain Markdown in both builds. If **Save Scribe meeting audio**
-is enabled, the original source tracks are also kept with the meeting:
+Koe writes Markdown summaries by default. Set `KOE_SUMMARY_FORMAT=pdf` to write
+a clean PDF summary instead. Transcripts and optional notes remain Markdown. If
+**Save Scribe meeting audio** is enabled, the original source tracks are also
+kept with the meeting:
 
 ```text
 transcript.md
-summary.pdf         # private Operator build
-summary.md          # source/dev build
+summary.pdf         # when KOE_SUMMARY_FORMAT=pdf
+summary.md          # default
 notes.md           # only when notes were entered
 microphone.wav     # only when audio retention is enabled
 meeting-audio.wav  # only when audio retention is enabled
 ```
-
-## Data locations
-
-The private installer uses normal per-user Windows locations:
-
-```text
-%LOCALAPPDATA%\Programs\Koe\     installed application
-%LOCALAPPDATA%\Koe\.env          API keys
-%LOCALAPPDATA%\Koe\config.yaml   settings
-%LOCALAPPDATA%\Koe\logs\         diagnostic logs
-%LOCALAPPDATA%\Koe\scribe-temp\  in-progress Scribe audio
-<Windows Documents>\Koe\Snippets\
-<Windows Documents>\Koe\Meetings\
-```
-
-Koe asks Windows for the current user's Documents location, so workplace or
-OneDrive folder redirection is respected.
-
-Uninstalling or upgrading Koe does not remove the API keys, settings,
-transcripts, snippets, or meeting audio.
 
 ## Development
 
@@ -98,49 +59,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe run.py
 ```
 
-Packaged builds continue to use the per-user locations above. Tests can
-override either layout with `KOE_APPDATA_DIR` and `KOE_DOCUMENTS_DIR`.
-
-## Build the private installer
-
-1. Copy `packaging\private-Operator.env.example` to the ignored
-   `packaging\private-Operator.env`.
-2. Add the dedicated, spending-capped `OPENROUTER_API_KEY`. Never add an
-   ElevenLabs key; first-run setup collects that from the user.
-3. Build:
-
-```powershell
-.\packaging\build.ps1
-```
-
-The only handoff artifact is `dist\Koe-Operator-Setup.exe`. The dedicated
-OpenRouter key is embedded in that private installer and copied to `.env` only
-when the destination does not already have one, so keep the installer private.
-
-### Operator PDF-summary replacement
-
-The private Operator PDF build is published as a versioned `Koe.exe` asset on the
-private GitHub release. It enables PDF summaries at build time; source/dev Koe
-continues to write Markdown summaries.
-
-To apply the replacement:
-
-1. Exit Koe from its tray menu.
-2. Replace `%LOCALAPPDATA%\Programs\Koe\Koe.exe` with the release asset.
-3. Start Koe again from either desktop shortcut.
-
-The replacement executable contains no API keys. It continues to read the
-existing per-user `%LOCALAPPDATA%\Koe\.env`, so setup and credentials do not
-need to be repeated.
-
-### Managed Windows devices
-
-This private build is not publicly code-signed. A managed device that enables
-Defender ASR rule `01443614-cd74-433a-b99e-2ecdc07bfc25` may block both the
-installer and `Koe.exe` because a brand-new private executable has no Microsoft
-cloud reputation. That is a policy decision, not a malware finding. The safe
-resolution is an IT-managed per-rule exclusion for Koe's fully qualified path
-or a publicly trusted distribution/signing route; do not disable Defender.
+Tests can override the runtime layout with `KOE_APPDATA_DIR` and
+`KOE_DOCUMENTS_DIR`.
 
 ## Verification
 

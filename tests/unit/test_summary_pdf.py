@@ -7,7 +7,7 @@ def test_render_summary_pdf_creates_readable_pdf(tmp_path: Path):
     output = tmp_path / "summary.pdf"
     render_summary_pdf(
         """# Weekly Sync - 26 Jul 2026
-Duration: 34 minutes | Participants: Operator, Jane
+Duration: 34 minutes | Participants: Alex, Jane
 
 ---
 
@@ -21,7 +21,7 @@ The team reviewed progress and agreed on the next delivery date.
 - Keep the existing review process.
 
 ## Action Items
-##### Operator
+##### Alex
 - Send the revised proposal.
 """,
         output,

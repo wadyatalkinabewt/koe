@@ -186,7 +186,7 @@ def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(tmp_path
     worker = MeetingWorker(
         mic_wav=mic,
         loopback_wav=loopback,
-        user_name="Operator",
+        user_name="Alex",
         meeting_subject="Management Meeting",
         meeting_mode=MODE_GROUP,
         notes_text="",
@@ -206,7 +206,7 @@ def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(tmp_path
     assert ("use_multi_channel", "false") in request["data"]
     assert ("diarize", "true") in request["data"]
     assert ("use_speaker_library", "true") in request["data"]
-    assert "Operator" in (
+    assert "Alex" in (
         tmp_path / "Meetings" / "26_07_15_Management_Meeting" / "transcript.md"
     ).read_text(encoding="utf-8")
 
