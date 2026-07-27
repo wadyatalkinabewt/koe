@@ -22,7 +22,7 @@ from PyQt5.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QInputDialog, QMessageBox,
-    QStackedWidget, QFrame, QComboBox,
+    QStackedWidget, QFrame, QComboBox, QGridLayout,
 )
 
 from compat import apply_window_icon, enable_dark_titlebar, set_app_user_model_id
@@ -463,8 +463,16 @@ class ScribeWindow(QMainWindow):
 
         self.setWindowTitle("Scribe")
         apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
-        self.resize(760, 590)
-        self.setMinimumSize(660, 500)
+        self.setWindowFlags(
+            (
+                self.windowFlags()
+                | Qt.MSWindowsFixedSizeDialogHint
+                | Qt.WindowMinimizeButtonHint
+                | Qt.WindowCloseButtonHint
+            )
+            & ~Qt.WindowMaximizeButtonHint
+        )
+        self.setFixedSize(760, 590)
         self.setStyleSheet(self._stylesheet())
 
         self.capture: Optional[AudioCapture] = None
@@ -513,7 +521,14 @@ class ScribeWindow(QMainWindow):
             }}
             QComboBox#meetingTypeSelector {{
                 min-height: 18px;
-                padding: 9px 11px;
+                padding: 9px 34px 9px 11px;
+            }}
+            QComboBox#meetingTypeSelector::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 30px;
+                background: transparent;
+                border: none;
             }}
             QComboBox#meetingTypeSelector:hover {{
                 border-color: {theme.INPUT_FOCUS_BORDER};
@@ -627,9 +642,11 @@ class ScribeWindow(QMainWindow):
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(14)
 
-        meeting_layout = QHBoxLayout()
+        meeting_layout = QGridLayout()
         meeting_layout.setContentsMargins(0, 0, 0, 0)
-        meeting_layout.setSpacing(16)
+        meeting_layout.setHorizontalSpacing(16)
+        meeting_layout.setVerticalSpacing(7)
+        meeting_layout.setColumnStretch(0, 1)
 
         self.meeting_type_label = QLabel("Meeting Type")
         self.meeting_type_label.setObjectName("meetingFieldTitle")
@@ -661,18 +678,12 @@ class ScribeWindow(QMainWindow):
         self.participant_input = QLineEdit()
         self.participant_input.setPlaceholderText("Full name works best")
         self.participant_input.setMaximumWidth(360)
-        self.participant_widget = QWidget()
-        self.participant_widget.setMaximumWidth(360)
-        participant_box = QVBoxLayout(self.participant_widget)
-        participant_box.setContentsMargins(0, 0, 0, 0)
-        participant_box.setSpacing(7)
-        participant_box.addWidget(self.meeting_type_label)
-        participant_box.addWidget(self.meeting_type_combo)
-        participant_box.addWidget(self.meeting_field_label)
-        participant_box.addWidget(self.meeting_name_input)
-        participant_box.addWidget(self.participant_field_label)
-        participant_box.addWidget(self.participant_input)
-        meeting_layout.addWidget(self.participant_widget, 1)
+        meeting_layout.addWidget(self.meeting_type_label, 0, 0)
+        meeting_layout.addWidget(self.meeting_type_combo, 1, 0)
+        meeting_layout.addWidget(self.meeting_field_label, 2, 0)
+        meeting_layout.addWidget(self.meeting_name_input, 3, 0)
+        meeting_layout.addWidget(self.participant_field_label, 4, 0)
+        meeting_layout.addWidget(self.participant_input, 5, 0)
         self._update_mode_fields()
 
         self.action_stack = QStackedWidget()
@@ -782,7 +793,7 @@ class ScribeWindow(QMainWindow):
         done_controls.addWidget(self.completion_options)
         self.action_stack.addWidget(self.done_controls_widget)
 
-        meeting_layout.addWidget(self.action_stack, 0, Qt.AlignBottom)
+        meeting_layout.addWidget(self.action_stack, 1, 1, Qt.AlignVCenter)
         layout.addLayout(meeting_layout)
 
         notes_lbl = QLabel("Meeting Notes")
@@ -802,7 +813,7 @@ class ScribeWindow(QMainWindow):
         one_on_one = _is_one_on_one(self.meeting_mode)
         self.participant_field_label.setVisible(one_on_one)
         self.participant_input.setVisible(one_on_one)
-        self.participant_widget.updateGeometry()
+        self.centralWidget().updateGeometry()
 
     def _on_meeting_type_changed(self, index: int) -> None:
         selected_mode = self.meeting_type_combo.itemData(index)

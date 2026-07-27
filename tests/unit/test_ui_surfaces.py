@@ -71,8 +71,13 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert not window.keyterms_checkbox.label.wordWrap()
     window.show()
     qapp.processEvents()
+    original_size = window.size()
     window.resize(window.width(), 980)
     qapp.processEvents()
+    assert window.size() == original_size
+    assert window.minimumSize() == window.maximumSize() == window.size()
+    assert not window.windowFlags() & Qt.WindowMaximizeButtonHint
+    assert window.windowFlags() & Qt.MSWindowsFixedSizeDialogHint
     cards = window.findChildren(QFrame, "card")
     cards_by_title = {
         next(
@@ -96,9 +101,16 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
             for title, heading in card_headings.items()
         }
     ) == 1
+    profile = cards_by_title["Your Name"]
     storage = cards_by_title["Storage"]
     scribe_card = cards_by_title["Scribe"]
     transcription = cards_by_title["Transcription"]
+    assert window.user_name_input.parentWidget() is profile
+    assert all(
+        card.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
+        for card in cards_by_title.values()
+    )
+    assert all(card.layout().alignment() & Qt.AlignTop for card in cards_by_title.values())
     assert transcription is window.transcription_card
     assert transcription.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
     assert transcription.layout().alignment() & Qt.AlignTop
@@ -265,6 +277,13 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     scribe = ScribeWindow(MODE_ONLINE_ONE_ON_ONE)
     scribe.show()
     qapp.processEvents()
+    original_size = scribe.size()
+    scribe.resize(1100, 800)
+    qapp.processEvents()
+    assert scribe.size() == original_size == QSize(760, 590)
+    assert scribe.minimumSize() == scribe.maximumSize() == scribe.size()
+    assert not scribe.windowFlags() & Qt.WindowMaximizeButtonHint
+    assert scribe.windowFlags() & Qt.MSWindowsFixedSizeDialogHint
     labels = " ".join(label.text() for label in scribe.findChildren(QLabel))
     assert scribe.record_button.text() == "Start"
     assert scribe.record_button.objectName() == "startButton"
@@ -296,12 +315,15 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
         MODE_IN_PERSON_GROUP,
     ]
     assert scribe.meeting_type_combo.currentData() == MODE_ONLINE_ONE_ON_ONE
+    action_y = scribe.action_stack.mapTo(scribe, QPoint()).y()
+    assert action_y == scribe.meeting_type_combo.mapTo(scribe, QPoint()).y()
     scribe.meeting_type_combo.setCurrentIndex(
         scribe.meeting_type_combo.findData(MODE_ONLINE_GROUP)
     )
     qapp.processEvents()
     assert scribe.meeting_mode == MODE_ONLINE_GROUP
     assert not scribe.participant_input.isVisible()
+    assert scribe.action_stack.mapTo(scribe, QPoint()).y() == action_y
     assert ConfigManager.get_config_value(
         "meeting_options", "last_meeting_mode"
     ) == MODE_ONLINE_GROUP
@@ -310,6 +332,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     )
     qapp.processEvents()
     assert scribe.participant_input.isVisible()
+    assert scribe.action_stack.mapTo(scribe, QPoint()).y() == action_y
     assert "Meeting Notes" in labels
     assert "Scribe" not in labels
     assert "Capture the conversation" not in labels
@@ -321,6 +344,8 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.participant_input.maximumWidth() == 360
     assert "border: 1px" in scribe.styleSheet().lower()
     assert "background: transparent" in scribe.styleSheet().lower()
+    assert "qcombobox#meetingtypeselector::drop-down" in scribe.styleSheet().lower()
+    assert "border: none" in scribe.styleSheet().lower()
 
     scribe._set_record_button_state(recording=True)
     assert scribe.record_button.text() == "Stop"

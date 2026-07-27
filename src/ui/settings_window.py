@@ -119,6 +119,16 @@ class SettingsWindow(BaseWindow):
 
     def __init__(self):
         super().__init__("Koe Settings", 620, 700)
+        self._settings_width = 620
+        self.setWindowFlags(
+            (
+                self.windowFlags()
+                | Qt.MSWindowsFixedSizeDialogHint
+                | Qt.WindowMinimizeButtonHint
+                | Qt.WindowCloseButtonHint
+            )
+            & ~Qt.WindowMaximizeButtonHint
+        )
         self._loading_values = True
         self._changed_since_show = False
         self._save_failed = False
@@ -161,7 +171,7 @@ class SettingsWindow(BaseWindow):
         self.header = QFrame()
         self.header.setObjectName("settingsHeader")
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(28, 24, 28, 14)
+        header_layout.setContentsMargins(28, 24, 28, 10)
         header_layout.addWidget(_label("Settings", "windowTitle"))
         header_layout.addStretch()
         self.save_status_label = _label("", "autoSaveStatus")
@@ -174,13 +184,15 @@ class SettingsWindow(BaseWindow):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.content = QWidget()
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(28, 8, 28, 24)
+        self.content_layout.setContentsMargins(28, 4, 28, 24)
         self.content_layout.setSpacing(14)
+        self.content_layout.setAlignment(Qt.AlignTop)
 
-        self.content_layout.addWidget(_label("Your Name", "sectionTitle"))
+        profile = self._card("Your Name")
         self.user_name_input = QLineEdit()
         self.user_name_input.setPlaceholderText("Your name")
-        self.content_layout.addWidget(self.user_name_input)
+        profile.layout().addWidget(self.user_name_input)
+        self.content_layout.addWidget(profile)
 
         storage = self._card("Storage", "Choose where transcripts and snippets live.")
         self.snippets_input = self._folder_picker(
@@ -245,9 +257,11 @@ class SettingsWindow(BaseWindow):
     def _card(title: str, description: str | None = None) -> QFrame:
         card = QFrame()
         card.setObjectName("card")
+        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(18, 16, 18, 18)
         layout.setSpacing(9)
+        layout.setAlignment(Qt.AlignTop)
         layout.addWidget(_label(title, "sectionTitle"))
         if description:
             description_label = _label(description, "windowSubtitle")
@@ -360,7 +374,10 @@ class SettingsWindow(BaseWindow):
         desired_height = self.header.sizeHint().height() + self.content.sizeHint().height() + 8
         screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
         maximum_height = screen.availableGeometry().height() - 48 if screen else 860
-        self.resize(self.width(), max(560, min(desired_height, maximum_height)))
+        self.setFixedSize(
+            self._settings_width,
+            max(560, min(desired_height, maximum_height)),
+        )
 
     def _schedule_save(self, *_args) -> None:
         if self._loading_values:
