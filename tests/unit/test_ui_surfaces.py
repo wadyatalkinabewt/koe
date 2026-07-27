@@ -412,7 +412,14 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.open_folder_button.height() == 28
     assert scribe.completion_options.objectName() == "completionOptions"
     assert not hasattr(scribe, "completion_separator")
-    assert scribe.ready_label.font().pointSizeF() == 8.0
+    assert scribe.ready_label.font().pointSizeF() == 9.0
+    ready_dot_center = scribe.ready_indicator.mapTo(
+        scribe.action_stack, scribe.ready_indicator.rect().center()
+    ).y()
+    ready_text_center = scribe.ready_label.mapTo(
+        scribe.action_stack, scribe.ready_label.rect().center()
+    ).y()
+    assert abs(ready_dot_center - ready_text_center) <= 1
     assert (
         scribe.ready_indicator.mapTo(scribe.action_stack, QPoint()).x(),
         scribe.ready_label.mapTo(scribe.action_stack, QPoint()).x(),

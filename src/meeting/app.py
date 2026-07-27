@@ -660,16 +660,17 @@ class ScribeWindow(QMainWindow):
                 border: none;
                 padding: 0;
                 color: {theme.SECONDARY_TEXT};
+                font-size: 9pt;
                 font-weight: 600;
             }}
             QLabel#readyLabel {{
                 color: {theme.SECONDARY_TEXT};
-                font-size: 8pt;
+                font-size: 9pt;
                 font-weight: 600;
             }}
             QLabel#retryStatus {{
                 color: #FF9CA4;
-                font-size: 8pt;
+                font-size: 9pt;
                 font-weight: 600;
             }}
             QFrame#completionOptions {{
@@ -756,7 +757,8 @@ class ScribeWindow(QMainWindow):
         record_controls.setContentsMargins(0, 0, 0, 0)
         record_controls.setSpacing(8)
         self.retry_indicator = QLabel("●")
-        self.retry_indicator.setFixedWidth(9)
+        self.retry_indicator.setFixedSize(9, 34)
+        self.retry_indicator.setAlignment(Qt.AlignCenter)
         self.retry_indicator.setStyleSheet(
             f"color: {theme.ERROR_COLOR}; background: transparent; border: none;"
         )
@@ -764,6 +766,8 @@ class ScribeWindow(QMainWindow):
         record_controls.addWidget(self.retry_indicator)
         self.retry_label = QLabel("No Speech Detected")
         self.retry_label.setObjectName("retryStatus")
+        self.retry_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.retry_label.setFixedHeight(34)
         self.retry_label.setToolTip("No speech detected in either stream.")
         self.retry_label.hide()
         record_controls.addWidget(self.retry_label)
@@ -789,7 +793,7 @@ class ScribeWindow(QMainWindow):
         processing_controls.setContentsMargins(0, 0, 0, 0)
         processing_controls.setSpacing(8)
         self.processing_indicator = QLabel("●")
-        self.processing_indicator.setFixedWidth(9)
+        self.processing_indicator.setFixedSize(9, 34)
         self.processing_indicator.setAlignment(Qt.AlignCenter)
         self.processing_indicator.setStyleSheet(
             f"color: {theme.ACCENT_COLOR}; background: transparent; border: none;"
@@ -814,7 +818,7 @@ class ScribeWindow(QMainWindow):
         done_controls.setContentsMargins(0, 0, 0, 0)
         done_controls.setSpacing(8)
         self.ready_indicator = QLabel("●")
-        self.ready_indicator.setFixedWidth(9)
+        self.ready_indicator.setFixedSize(9, 28)
         self.ready_indicator.setAlignment(Qt.AlignCenter)
         self.ready_indicator.setStyleSheet(
             f"color: {theme.SUCCESS_COLOR}; background: transparent; border: none;"
@@ -822,6 +826,8 @@ class ScribeWindow(QMainWindow):
         done_controls.addWidget(self.ready_indicator)
         self.ready_label = QLabel("Ready")
         self.ready_label.setObjectName("readyLabel")
+        self.ready_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.ready_label.setFixedHeight(28)
         done_controls.addWidget(self.ready_label)
         done_controls.addStretch()
 
@@ -829,7 +835,7 @@ class ScribeWindow(QMainWindow):
         self.completion_options.setObjectName("completionOptions")
         completion_layout = QHBoxLayout(self.completion_options)
         completion_layout.setContentsMargins(0, 0, 0, 0)
-        completion_layout.setSpacing(8)
+        completion_layout.setSpacing(7)
         self.open_summary_button = QPushButton("Summary")
         self.open_summary_button.setObjectName("summaryButton")
         self.open_summary_button.setAccessibleName("Open summary")
@@ -887,14 +893,14 @@ class ScribeWindow(QMainWindow):
 
     def _fit_completion_actions(self) -> None:
         for button, horizontal_room in (
-            (self.open_summary_button, 26),
-            (self.open_folder_button, 24),
+            (self.open_summary_button, 24),
+            (self.open_folder_button, 22),
         ):
             button.ensurePolished()
             text_width = button.fontMetrics().horizontalAdvance(button.text())
             button.setFixedWidth(text_width + horizontal_room)
         self.completion_options.setFixedSize(
-            self.open_summary_button.width() + self.open_folder_button.width() + 8,
+            self.open_summary_button.width() + self.open_folder_button.width() + 7,
             30,
         )
 
