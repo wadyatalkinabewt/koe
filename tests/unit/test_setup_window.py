@@ -15,6 +15,7 @@ def test_first_run_defaults_disable_and_empty_vocabulary(monkeypatch):
 
     assert config["profile"]["user_name"] == "Alex"
     assert config["meeting_options"]["save_markdown"] is False
+    assert config["meeting_options"]["last_meeting_mode"] == "online_one_on_one"
     assert config["model_options"]["elevenlabs"]["keyterms_enabled"] is False
     assert config["model_options"]["common"]["initial_prompt"] is None
 

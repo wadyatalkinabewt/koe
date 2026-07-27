@@ -10,7 +10,8 @@ Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
 Every transcription request uses `no_verbatim=true`. ElevenLabs is the single
 speech-to-text path.
 
-Scribe asks for the meeting location and attendance:
+Scribe keeps the meeting type in the recording window and remembers the last
+selection:
 
 - **Online / One-on-One:** enter a meeting name and the other participant's
   name. Koe diarizes the recording, maps the microphone-aligned voice to the

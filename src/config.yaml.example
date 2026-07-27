@@ -7,6 +7,7 @@ meeting_options:
   root_folder: null
   save_audio: false
   save_markdown: false
+  last_meeting_mode: online_one_on_one
 
 recording_options:
   activation_key: ctrl+shift+space

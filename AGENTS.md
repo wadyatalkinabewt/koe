@@ -42,6 +42,8 @@ Koe is a Windows-only tray application with two workflows:
   transcript PDF and optional transcript Markdown. Never write `notes.md`.
 - Both one-on-one Scribe modes capture a separate meeting name and participant
   name; the meeting name drives the folder and document title.
+- Scribe selects its four meeting modes inside the main window, remembers the
+  last selection, and locks it once recording begins.
 - Scribe summaries require Summary, Key Decisions, Topics Discussed, Action
   Items, and Open Questions; incomplete model responses are retried.
 

@@ -201,6 +201,15 @@ class TestConfigSchema:
         save_markdown = schema["meeting_options"]["save_markdown"]
         assert save_markdown["type"] == "bool"
         assert save_markdown["value"] is False
+        last_mode = schema["meeting_options"]["last_meeting_mode"]
+        assert last_mode["type"] == "str"
+        assert last_mode["value"] == "online_one_on_one"
+        assert last_mode["options"] == [
+            "online_one_on_one",
+            "online_group",
+            "in_person_one_on_one",
+            "in_person_group",
+        ]
 
 
 def test_retired_config_keys_are_ignored_while_supported_values_load(temp_dir):

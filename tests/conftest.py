@@ -50,6 +50,7 @@ def mock_config():
             "root_folder": None,
             "save_audio": False,
             "save_markdown": False,
+            "last_meeting_mode": "online_one_on_one",
         },
         "misc": {
             "hide_status_window": False,

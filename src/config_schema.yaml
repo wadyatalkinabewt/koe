@@ -19,6 +19,15 @@ meeting_options:
     value: false
     type: bool
     description: "Also keep transcript.md and summary.md alongside the always-saved PDFs."
+  last_meeting_mode:
+    value: online_one_on_one
+    type: str
+    options:
+      - online_one_on_one
+      - online_group
+      - in_person_one_on_one
+      - in_person_group
+    description: "Last Scribe meeting type selected in the meeting window."
 
 # ElevenLabs transcription
 model_options:

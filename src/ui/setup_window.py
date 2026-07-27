@@ -73,6 +73,7 @@ def write_setup_files(user_name: str, elevenlabs_key: str, openrouter_key: str =
             "root_folder": None,
             "save_audio": False,
             "save_markdown": False,
+            "last_meeting_mode": "online_one_on_one",
         },
         "model_options": {
             "common": {"language": None, "initial_prompt": None},

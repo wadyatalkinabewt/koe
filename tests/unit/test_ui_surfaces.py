@@ -207,10 +207,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
         MODE_IN_PERSON_ONE_ON_ONE,
         MODE_ONLINE_GROUP,
         MODE_ONLINE_ONE_ON_ONE,
-        MeetingModeDialog,
         ScribeWindow,
     )
     from ui.status_window import StatusWindow
+    from utils import ConfigManager
 
     status = StatusWindow()
     status.updateStatus("recording")
@@ -262,52 +262,6 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert not status.isVisible()
     assert "#f0a7ae" in status.cancel_button.styleSheet().lower()
 
-    mode_dialog = MeetingModeDialog()
-    mode_options = [
-        button.text() for button in mode_dialog.findChildren(QPushButton)
-        if button.objectName() == "modeOption"
-    ]
-    mode_labels = " ".join(label.text() for label in mode_dialog.findChildren(QLabel))
-    assert mode_options == [
-        "One-on-One",
-        "Group Meeting",
-        "One-on-One",
-        "Group Meeting",
-    ]
-    assert mode_labels == "What kind of meeting is this? Online In Person"
-    assert all(len(line.split()) > 1 for line in mode_labels.splitlines())
-    assert mode_dialog.size() == QSize(440, 246)
-    assert all(button.width() == 142 for button in mode_dialog.findChildren(QPushButton))
-    mode_title = mode_dialog.findChild(QLabel, "modeTitle")
-    assert not mode_title.wordWrap()
-    mode_dialog.show()
-    qapp.processEvents()
-    mode_sections = [
-        label.text()
-        for label in mode_dialog.findChildren(QLabel)
-        if label.objectName() == "modeSection"
-    ]
-    assert mode_title.alignment() & Qt.AlignHCenter
-    assert mode_sections == ["Online", "In Person"]
-    assert len(mode_dialog.findChildren(QFrame, "modeOptions")) == 2
-    assert not mode_dialog.windowFlags() & Qt.WindowContextHelpButtonHint
-    mode_dialog.close()
-    expected_modes = [
-        MODE_ONLINE_ONE_ON_ONE,
-        MODE_ONLINE_GROUP,
-        MODE_IN_PERSON_ONE_ON_ONE,
-        MODE_IN_PERSON_GROUP,
-    ]
-    for index, expected_mode in enumerate(expected_modes):
-        selection_dialog = MeetingModeDialog()
-        selection_buttons = [
-            button
-            for button in selection_dialog.findChildren(QPushButton)
-            if button.objectName() == "modeOption"
-        ]
-        QTest.mouseClick(selection_buttons[index], Qt.LeftButton)
-        assert selection_dialog.selected_mode == expected_mode
-
     scribe = ScribeWindow(MODE_ONLINE_ONE_ON_ONE)
     scribe.show()
     qapp.processEvents()
@@ -319,6 +273,42 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.meeting_field_label.text() == "Meeting Name"
     assert scribe.participant_field_label.text() == "Participant Name"
     assert scribe.participant_input.placeholderText() == "Full name works best"
+    assert scribe.participant_input.isVisible()
+    assert scribe.meeting_type_label.text() == "Meeting Type"
+    assert scribe.meeting_type_combo.accessibleName() == "Meeting Type"
+    assert scribe.meeting_type_combo.maximumWidth() == 360
+    assert [
+        scribe.meeting_type_combo.itemText(index)
+        for index in range(scribe.meeting_type_combo.count())
+    ] == [
+        "Online — One-on-One",
+        "Online — Group Meeting",
+        "In Person — One-on-One",
+        "In Person — Group Meeting",
+    ]
+    assert [
+        scribe.meeting_type_combo.itemData(index)
+        for index in range(scribe.meeting_type_combo.count())
+    ] == [
+        MODE_ONLINE_ONE_ON_ONE,
+        MODE_ONLINE_GROUP,
+        MODE_IN_PERSON_ONE_ON_ONE,
+        MODE_IN_PERSON_GROUP,
+    ]
+    assert scribe.meeting_type_combo.currentData() == MODE_ONLINE_ONE_ON_ONE
+    scribe.meeting_type_combo.setCurrentIndex(
+        scribe.meeting_type_combo.findData(MODE_ONLINE_GROUP)
+    )
+    qapp.processEvents()
+    assert scribe.meeting_mode == MODE_ONLINE_GROUP
+    assert not scribe.participant_input.isVisible()
+    assert ConfigManager.get_config_value(
+        "meeting_options", "last_meeting_mode"
+    ) == MODE_ONLINE_GROUP
+    scribe.meeting_type_combo.setCurrentIndex(
+        scribe.meeting_type_combo.findData(MODE_ONLINE_ONE_ON_ONE)
+    )
+    qapp.processEvents()
     assert scribe.participant_input.isVisible()
     assert "Meeting Notes" in labels
     assert "Scribe" not in labels
@@ -437,23 +427,41 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.open_summary_button.width() < 120
     assert scribe.open_folder_button.width() < 110
     assert not hasattr(scribe, "close_button")
+
+    class FakeCapture:
+        def __init__(self, _temp_dir):
+            pass
+
+        @staticmethod
+        def start():
+            return True
+
+    monkeypatch.setattr("meeting.app.AudioCapture", FakeCapture)
+    scribe._start_recording()
+    assert not scribe.meeting_type_combo.isEnabled()
+    scribe.elapsed_timer.stop()
+    scribe.recording_pulse_timer.stop()
+    scribe.capture = None
     scribe.close()
 
     group_scribe = ScribeWindow(MODE_ONLINE_GROUP)
     assert group_scribe.meeting_field_label.text() == "Meeting Name"
     assert group_scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert group_scribe.meeting_type_combo.currentData() == MODE_ONLINE_GROUP
     assert not group_scribe.participant_input.isVisible()
     group_scribe.close()
 
     in_person_scribe = ScribeWindow(MODE_IN_PERSON_GROUP)
     assert in_person_scribe.meeting_field_label.text() == "Meeting Name"
     assert in_person_scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert in_person_scribe.meeting_type_combo.currentData() == MODE_IN_PERSON_GROUP
     assert not in_person_scribe.participant_input.isVisible()
     in_person_scribe.close()
 
     in_person_one_on_one = ScribeWindow(MODE_IN_PERSON_ONE_ON_ONE)
     in_person_one_on_one.show()
     qapp.processEvents()
+    assert in_person_one_on_one.meeting_type_combo.currentData() == MODE_IN_PERSON_ONE_ON_ONE
     assert in_person_one_on_one.participant_input.isVisible()
     in_person_one_on_one.close()
 
