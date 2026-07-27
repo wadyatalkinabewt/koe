@@ -197,6 +197,14 @@ class SettingsWindow(BaseWindow):
         storage.layout().addWidget(self.save_meeting_audio_checkbox)
         self.content_layout.addWidget(storage)
 
+        scribe = self._card(
+            "Scribe",
+            "PDF transcripts and summaries are always saved.",
+        )
+        self.save_markdown_checkbox = ToggleRow("Save Markdown copies")
+        scribe.layout().addWidget(self.save_markdown_checkbox)
+        self.content_layout.addWidget(scribe)
+
         recording = self._card("Recording")
         recording.layout().addWidget(_label("Activation Hotkey", "subsectionTitle"))
         self.hotkey_input = QLineEdit()
@@ -287,6 +295,9 @@ class SettingsWindow(BaseWindow):
         self.save_meeting_audio_checkbox.setChecked(
             bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
         )
+        self.save_markdown_checkbox.setChecked(
+            bool(ConfigManager.get_config_value("meeting_options", "save_markdown"))
+        )
         self.hotkey_input.setText(
             ConfigManager.get_config_value("recording_options", "activation_key")
             or "ctrl+shift+space"
@@ -321,6 +332,7 @@ class SettingsWindow(BaseWindow):
             field.textChanged.connect(self._schedule_save)
         for toggle in (
             self.save_meeting_audio_checkbox,
+            self.save_markdown_checkbox,
             self.beep_checkbox,
             self.status_checkbox,
             self.keyterms_checkbox,
@@ -374,6 +386,11 @@ class SettingsWindow(BaseWindow):
             self.save_meeting_audio_checkbox.isChecked(),
             "meeting_options",
             "save_audio",
+        )
+        ConfigManager.set_config_value(
+            self.save_markdown_checkbox.isChecked(),
+            "meeting_options",
+            "save_markdown",
         )
         ConfigManager.set_config_value(
             self.hotkey_input.text().strip() or "ctrl+shift+space",

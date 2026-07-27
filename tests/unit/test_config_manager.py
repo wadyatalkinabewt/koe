@@ -198,6 +198,9 @@ class TestConfigSchema:
         save_audio = schema["meeting_options"]["save_audio"]
         assert save_audio["type"] == "bool"
         assert save_audio["value"] is False
+        save_markdown = schema["meeting_options"]["save_markdown"]
+        assert save_markdown["type"] == "bool"
+        assert save_markdown["value"] is False
 
 
 def test_retired_config_keys_are_ignored_while_supported_values_load(temp_dir):

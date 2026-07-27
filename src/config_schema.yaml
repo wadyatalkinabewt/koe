@@ -15,6 +15,10 @@ meeting_options:
     value: false
     type: bool
     description: "Keep microphone.wav and meeting-audio.wav with completed Scribe output."
+  save_markdown:
+    value: false
+    type: bool
+    description: "Also keep transcript.md and summary.md alongside the always-saved PDFs."
 
 # ElevenLabs transcription
 model_options:

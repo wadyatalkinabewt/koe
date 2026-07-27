@@ -24,6 +24,13 @@ class SummarizerClient:
     INITIAL_RETRY_DELAY = 2.0  # seconds
     REQUEST_TIMEOUT = 300  # 5 minutes per attempt
     OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+    REQUIRED_SECTIONS = (
+        "## Summary",
+        "## Key Decisions",
+        "## Topics Discussed",
+        "## Action Items",
+        "## Open Questions",
+    )
 
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -97,6 +104,17 @@ class SummarizerClient:
                     continue
 
                 summary = data["choices"][0]["message"]["content"]
+                missing_sections = [
+                    section
+                    for section in self.REQUIRED_SECTIONS
+                    if section not in summary
+                ]
+                if missing_sections:
+                    last_error = (
+                        "Incomplete summary response; missing "
+                        + ", ".join(missing_sections)
+                    )
+                    continue
 
                 if status_callback:
                     status_callback("Summary generated successfully")
@@ -223,7 +241,10 @@ class SummarizerClient:
 ---
 
 ## Summary
-[2-4 paragraphs capturing the meeting's purpose, key outcomes, and overall context]
+[No more than 2 concise paragraphs and roughly 120 words total. Surface only
+the meeting's highest-value outcomes and current state. Move supporting detail
+into Topics Discussed. Tastefully bold 2-4 short, high-signal phrases using
+**bold Markdown**; do not bold full sentences or routine context.]
 
 ---
 

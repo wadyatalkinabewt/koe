@@ -21,11 +21,29 @@ Koe is a Windows-only tray application with two workflows:
 - Scribe sends one mono meeting file with `use_multi_channel=false`. Never
   reintroduce separate billable mic and loopback transcription requests or
   multichannel billing.
-- The original mic track is local attribution evidence only. Its detected
+- Every Scribe mode enables diarization and speaker-library matching. One-on-one
+  requests cap the expected result at two speakers.
+- Online group mic audio remains local attribution evidence only. Its detected
   diarized label maps to the current Settings name.
-- Group Scribe always enables diarization and speaker-library matching.
-- PDF summaries are optional via `KOE_SUMMARY_FORMAT=pdf`; source/dev Koe keeps
-  Markdown summaries by default.
+- Online one-on-one uses that same mic evidence when loopback is active, then
+  maps every other diarized voice to the entered participant.
+- In-person Scribe treats the microphone as a shared-room source, never forces
+  one microphone speaker to the Settings name, and still captures loopback for
+  remote callers. Effectively empty loopback is neither uploaded nor retained.
+- In-person or speakerphone one-on-one only assigns the entered participant
+  name after the speaker library identifies the Settings owner. Otherwise it
+  preserves honest generic speaker labels.
+- Every successful Scribe run writes `transcript.pdf` and `summary.pdf`.
+  Markdown copies are written only when **Save Markdown copies** is enabled.
+  The transcript PDF puts known names before cleanly renumbered anonymous
+  speakers and reserves Koe green for the participant matching the current
+  Settings name.
+- Meeting notes are appended under a clearly labelled Notes section in the
+  transcript PDF and optional transcript Markdown. Never write `notes.md`.
+- Both one-on-one Scribe modes capture a separate meeting name and participant
+  name; the meeting name drives the folder and document title.
+- Scribe summaries require Summary, Key Decisions, Topics Discussed, Action
+  Items, and Open Questions; incomplete model responses are retried.
 
 ## Data boundaries
 
@@ -56,6 +74,8 @@ preserve packaged runtime state.
 - `src/meeting/capture.py`: mic/loopback capture, mono mixing, and host mapping.
 - `src/meeting/app.py`: Scribe UI and single-upload worker.
 - `src/meeting/transcript.py`: Markdown transcript rendering.
+- `src/meeting/pdf_theme.py`: shared meeting PDF typography, colour, and header.
+- `src/meeting/transcript_pdf.py`: coloured-card PDF transcript rendering.
 - `src/meeting/summarizer.py`: optional OpenRouter summary client.
 - `src/meeting/summary_pdf.py`: clean PDF rendering for Scribe summaries.
 - `src/ui/setup_window.py`: first-run GUI onboarding.

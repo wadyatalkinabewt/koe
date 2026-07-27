@@ -6,6 +6,7 @@ profile:
 meeting_options:
   root_folder: null
   save_audio: false
+  save_markdown: false
 
 recording_options:
   activation_key: ctrl+shift+space

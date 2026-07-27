@@ -63,6 +63,9 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert hasattr(window, "save_meeting_audio_checkbox")
     assert window.save_meeting_audio_checkbox.text() == "Save Scribe meeting audio"
     assert isinstance(window.save_meeting_audio_checkbox, ToggleRow)
+    assert hasattr(window, "save_markdown_checkbox")
+    assert window.save_markdown_checkbox.text() == "Save Markdown copies"
+    assert isinstance(window.save_markdown_checkbox, ToggleRow)
     assert window.findChildren(QCheckBox) == []
     assert "microphone.wav and meeting-audio.wav" not in labels
     assert not window.keyterms_checkbox.label.wordWrap()
@@ -94,6 +97,7 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
         }
     ) == 1
     storage = cards_by_title["Storage"]
+    scribe_card = cards_by_title["Scribe"]
     transcription = cards_by_title["Transcription"]
     assert transcription is window.transcription_card
     assert transcription.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
@@ -130,6 +134,9 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     )
     assert transcription_heading_gap == storage_heading_gap
     assert transcription_detail_gap <= storage_detail_gap
+    assert "PDF transcripts and summaries are always saved." in {
+        label.text() for label in scribe_card.findChildren(QLabel)
+    }
     assert window.keyterms_checkbox.height() == window.keyterms_checkbox.switch.height()
     assert window.snippets_input.mapTo(window, QPoint()).y() < window.meetings_input.mapTo(
         window, QPoint()
@@ -195,7 +202,14 @@ def test_settings_debounces_changes_and_saves_automatically(qapp, monkeypatch):
 
 
 def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
-    from meeting.app import MODE_GROUP, MODE_ONE_ON_ONE, MeetingModeDialog, ScribeWindow
+    from meeting.app import (
+        MODE_IN_PERSON_GROUP,
+        MODE_IN_PERSON_ONE_ON_ONE,
+        MODE_ONLINE_GROUP,
+        MODE_ONLINE_ONE_ON_ONE,
+        MeetingModeDialog,
+        ScribeWindow,
+    )
     from ui.status_window import StatusWindow
 
     status = StatusWindow()
@@ -254,34 +268,58 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
         if button.objectName() == "modeOption"
     ]
     mode_labels = " ".join(label.text() for label in mode_dialog.findChildren(QLabel))
-    assert mode_options == ["One", "Multiple"]
-    assert mode_labels == "How many other people are\nin this meeting?"
+    assert mode_options == [
+        "One-on-One",
+        "Group Meeting",
+        "One-on-One",
+        "Group Meeting",
+    ]
+    assert mode_labels == "What kind of meeting is this? Online In Person"
     assert all(len(line.split()) > 1 for line in mode_labels.splitlines())
-    assert mode_dialog.size() == QSize(440, 176)
-    assert all(button.width() == 112 for button in mode_dialog.findChildren(QPushButton))
+    assert mode_dialog.size() == QSize(440, 246)
+    assert all(button.width() == 142 for button in mode_dialog.findChildren(QPushButton))
     mode_title = mode_dialog.findChild(QLabel, "modeTitle")
     assert not mode_title.wordWrap()
     mode_dialog.show()
     qapp.processEvents()
-    mode_options_frame = mode_dialog.findChild(QFrame, "modeOptions")
-    top_space = mode_title.mapTo(mode_dialog, QPoint()).y()
-    bottom_space = mode_dialog.height() - (
-        mode_options_frame.mapTo(mode_dialog, QPoint()).y() + mode_options_frame.height()
-    )
+    mode_sections = [
+        label.text()
+        for label in mode_dialog.findChildren(QLabel)
+        if label.objectName() == "modeSection"
+    ]
     assert mode_title.alignment() & Qt.AlignHCenter
-    assert abs(top_space - bottom_space) <= 1
+    assert mode_sections == ["Online", "In Person"]
+    assert len(mode_dialog.findChildren(QFrame, "modeOptions")) == 2
     assert not mode_dialog.windowFlags() & Qt.WindowContextHelpButtonHint
     mode_dialog.close()
+    expected_modes = [
+        MODE_ONLINE_ONE_ON_ONE,
+        MODE_ONLINE_GROUP,
+        MODE_IN_PERSON_ONE_ON_ONE,
+        MODE_IN_PERSON_GROUP,
+    ]
+    for index, expected_mode in enumerate(expected_modes):
+        selection_dialog = MeetingModeDialog()
+        selection_buttons = [
+            button
+            for button in selection_dialog.findChildren(QPushButton)
+            if button.objectName() == "modeOption"
+        ]
+        QTest.mouseClick(selection_buttons[index], Qt.LeftButton)
+        assert selection_dialog.selected_mode == expected_mode
 
-    scribe = ScribeWindow(MODE_ONE_ON_ONE)
+    scribe = ScribeWindow(MODE_ONLINE_ONE_ON_ONE)
     scribe.show()
     qapp.processEvents()
     labels = " ".join(label.text() for label in scribe.findChildren(QLabel))
     assert scribe.record_button.text() == "Start"
     assert scribe.record_button.objectName() == "startButton"
     assert scribe.record_button.size().width() == 72
-    assert scribe.participant_input.placeholderText().startswith("Add a name")
-    assert scribe.meeting_field_label.text() == "Meeting With"
+    assert scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert scribe.meeting_field_label.text() == "Meeting Name"
+    assert scribe.participant_field_label.text() == "Participant Name"
+    assert scribe.participant_input.placeholderText() == "Full name works best"
+    assert scribe.participant_input.isVisible()
     assert "Meeting Notes" in labels
     assert "Scribe" not in labels
     assert "Capture the conversation" not in labels
@@ -309,9 +347,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
         "exec_",
         lambda dialog: captured_flags.append(dialog.windowFlags()) or QDialog.Rejected,
     )
-    scribe._prompt_for_meeting_subject()
-    assert captured_flags
-    assert not captured_flags[0] & Qt.WindowContextHelpButtonHint
+    scribe._prompt_for_meeting_name()
+    scribe._prompt_for_participant_name()
+    assert len(captured_flags) == 2
+    assert all(not flags & Qt.WindowContextHelpButtonHint for flags in captured_flags)
 
     scribe.timer_label.setText("12:34")
     scribe._show_processing()
@@ -346,6 +385,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     ) == processing_anchor
     assert scribe.record_button.text() == "Start"
     assert scribe.timer_label.text() == "00:00"
+    assert scribe.meeting_name_input.isEnabled()
     assert scribe.participant_input.isEnabled()
     assert scribe.notes_edit.isEnabled()
     assert not hasattr(scribe, "status_label")
@@ -357,7 +397,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     second_meeting_dir = scribe._meeting_directory_for_session("Renamed Meeting")
     assert second_meeting_dir == first_meeting_dir
 
-    scribe._on_worker_done("C:/tmp/meeting", "C:/tmp/meeting/summary.md")
+    scribe._on_worker_done("C:/tmp/meeting", "C:/tmp/meeting/summary.pdf")
     assert scribe.action_stack.currentWidget() is scribe.done_controls_widget
     assert not scribe.processing_timer_label.isVisible()
     assert not hasattr(scribe, "done_pill")
@@ -392,10 +432,23 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert not hasattr(scribe, "close_button")
     scribe.close()
 
-    group_scribe = ScribeWindow(MODE_GROUP)
+    group_scribe = ScribeWindow(MODE_ONLINE_GROUP)
     assert group_scribe.meeting_field_label.text() == "Meeting Name"
-    assert group_scribe.participant_input.placeholderText().startswith("e.g. Weekly sync")
+    assert group_scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert not group_scribe.participant_input.isVisible()
     group_scribe.close()
+
+    in_person_scribe = ScribeWindow(MODE_IN_PERSON_GROUP)
+    assert in_person_scribe.meeting_field_label.text() == "Meeting Name"
+    assert in_person_scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert not in_person_scribe.participant_input.isVisible()
+    in_person_scribe.close()
+
+    in_person_one_on_one = ScribeWindow(MODE_IN_PERSON_ONE_ON_ONE)
+    in_person_one_on_one.show()
+    qapp.processEvents()
+    assert in_person_one_on_one.participant_input.isVisible()
+    in_person_one_on_one.close()
 
 
 def test_initialization_card_is_compact_and_uses_the_koe_icon(qapp):

@@ -15,6 +15,7 @@ import re
 import wave
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import requests
@@ -202,8 +203,11 @@ def _elevenlabs_request_data(
     *,
     diarize: bool = False,
     use_speaker_library: bool = False,
+    num_speakers: int | None = None,
 ) -> list[tuple[str, str]]:
     """Build the shared Scribe v2 form fields for every Koe STT request."""
+    if num_speakers is not None and not 1 <= int(num_speakers) <= 32:
+        raise ValueError("num_speakers must be between 1 and 32")
     model_options = ConfigManager.get_config_section("model_options") or {}
     common = model_options.get("common", {}) or {}
     elevenlabs = model_options.get("elevenlabs", {}) or {}
@@ -225,6 +229,8 @@ def _elevenlabs_request_data(
         data.extend(("keyterms", term) for term in _initial_prompt_keyterms())
     if diarize:
         data.append(("diarize", "true"))
+        if num_speakers is not None:
+            data.append(("num_speakers", str(int(num_speakers))))
         if use_speaker_library:
             data.append(("use_speaker_library", "true"))
     return data
@@ -312,6 +318,7 @@ def _segments_from_elevenlabs_words(
     label: str,
     offset_sec: float = 0.0,
     use_speaker_labels: bool = False,
+    label_resolver: Callable[[float, float], str] | None = None,
 ) -> list[dict]:
     words = result.get("words") if isinstance(result, dict) else None
     if not isinstance(words, list):
@@ -348,11 +355,14 @@ def _segments_from_elevenlabs_words(
             continue
         start = float(word.get("start") or 0.0)
         end = float(word.get("end") or start)
-        word_label = (
-            _display_speaker_label(word.get("speaker_id"), fallback=label)
-            if use_speaker_labels
-            else label
-        )
+        if use_speaker_labels:
+            word_label = _display_speaker_label(word.get("speaker_id"), fallback=label)
+        elif label_resolver is not None:
+            word_label = str(
+                label_resolver(start + offset_sec, end + offset_sec) or label
+            )
+        else:
+            word_label = label
         if current_words and current_label != word_label:
             flush()
         if current_words and last_end is not None and start - last_end > 1.2:
@@ -396,6 +406,8 @@ def transcribe_file_segments(
     *,
     diarize: bool = False,
     use_speaker_library: bool = False,
+    num_speakers: int | None = None,
+    label_resolver: Callable[[float, float], str] | None = None,
     timeout: float = GROUP_TRANSCRIPTION_TIMEOUT,
 ) -> list[dict]:
     """Stream one file-backed Scribe request, preserving diarized speaker identity."""
@@ -419,6 +431,7 @@ def transcribe_file_segments(
     request_data = _elevenlabs_request_data(
         diarize=diarize,
         use_speaker_library=use_speaker_library,
+        num_speakers=num_speakers,
     )
     result, error = _elevenlabs_post_file(
         file_path,
@@ -433,6 +446,7 @@ def transcribe_file_segments(
         result or {},
         label=label,
         use_speaker_labels=diarize,
+        label_resolver=label_resolver,
     )
 
 

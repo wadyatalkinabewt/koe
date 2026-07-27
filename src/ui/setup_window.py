@@ -69,7 +69,11 @@ def write_setup_files(user_name: str, elevenlabs_key: str, openrouter_key: str =
 
     config = {
         "profile": {"user_name": user_name.strip()},
-        "meeting_options": {"root_folder": None, "save_audio": False},
+        "meeting_options": {
+            "root_folder": None,
+            "save_audio": False,
+            "save_markdown": False,
+        },
         "model_options": {
             "common": {"language": None, "initial_prompt": None},
             "elevenlabs": {"keyterms_enabled": False},

@@ -1,8 +1,10 @@
 """Scribe meeting-mode UI and single-upload transcription workflow.
 
-Microphone and loopback are overlaid into one mono request so an hour-long
-meeting is billed as one hour. The original mic track is used locally to map
-the host's diarized speaker label and may be retained with loopback on request.
+Microphone and loopback are overlaid into one mono diarized request so an
+hour-long meeting is billed as one hour. Online meetings use the synchronized
+mic track to map the host when loopback is active. In-person and speakerphone
+recordings rely on speaker-library identity rather than falsely treating the
+entire shared microphone as the host.
 """
 
 import sys
@@ -38,13 +40,37 @@ from meeting.capture import (
     AudioCapture,
     identify_microphone_speaker,
     prepare_mono_meeting_mix,
+    wav_has_meaningful_audio,
+    write_mono_wav,
 )
 
 
-MODE_ONE_ON_ONE = "one_on_one"
-MODE_GROUP = "group"
+MODE_ONLINE_ONE_ON_ONE = "online_one_on_one"
+MODE_ONLINE_GROUP = "online_group"
+MODE_IN_PERSON_ONE_ON_ONE = "in_person_one_on_one"
+MODE_IN_PERSON_GROUP = "in_person_group"
+MEETING_MODES = {
+    MODE_ONLINE_ONE_ON_ONE,
+    MODE_ONLINE_GROUP,
+    MODE_IN_PERSON_ONE_ON_ONE,
+    MODE_IN_PERSON_GROUP,
+}
 SCRIBE_APP_ID = "Koe.Scribe.App"
 SCRIBE_ICON = resource_path("assets", "koe-icon.ico")
+
+
+def _is_one_on_one(meeting_mode: str) -> bool:
+    return meeting_mode in {
+        MODE_ONLINE_ONE_ON_ONE,
+        MODE_IN_PERSON_ONE_ON_ONE,
+    }
+
+
+def _is_in_person(meeting_mode: str) -> bool:
+    return meeting_mode in {
+        MODE_IN_PERSON_ONE_ON_ONE,
+        MODE_IN_PERSON_GROUP,
+    }
 
 
 # ---------- single-instance lock ----------
@@ -73,7 +99,7 @@ class MeetingModeDialog(QDialog):
             (self.windowFlags() | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
             & ~Qt.WindowContextHelpButtonHint
         )
-        self.setFixedSize(440, 176)
+        self.setFixedSize(440, 246)
         self.setStyleSheet(theme.application_stylesheet() + f"""
             QFrame#modeOptions {{
                 background: {theme.SURFACE_COLOR};
@@ -101,54 +127,78 @@ class MeetingModeDialog(QDialog):
                 font-size: 16pt;
                 font-weight: 700;
             }}
+            QLabel#modeSection {{
+                color: {theme.SECONDARY_TEXT};
+                font-size: 9pt;
+                font-weight: 600;
+            }}
         """)
         apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(26, 14, 26, 14)
+        layout.setContentsMargins(38, 18, 38, 18)
         layout.setSpacing(0)
-        layout.addStretch(1)
 
-        title = QLabel("How many other people are\nin this meeting?")
+        title = QLabel("What kind of meeting is this?")
         title.setObjectName("modeTitle")
         title.setWordWrap(False)
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
-        layout.addSpacing(16)
+        layout.addSpacing(14)
+        layout.addWidget(self._section_label("Online"))
+        layout.addSpacing(5)
+        layout.addWidget(
+            self._mode_row(
+                MODE_ONLINE_ONE_ON_ONE,
+                MODE_ONLINE_GROUP,
+            ),
+            0,
+            Qt.AlignHCenter,
+        )
+        layout.addSpacing(13)
+        layout.addWidget(self._section_label("In Person"))
+        layout.addSpacing(5)
+        layout.addWidget(
+            self._mode_row(
+                MODE_IN_PERSON_ONE_ON_ONE,
+                MODE_IN_PERSON_GROUP,
+            ),
+            0,
+            Qt.AlignHCenter,
+        )
 
-        option_row = QHBoxLayout()
-        option_row.setSpacing(0)
-        option_row.addStretch()
+    @staticmethod
+    def _section_label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("modeSection")
+        return label
 
+    def _mode_row(self, one_on_one_mode: str, group_mode: str) -> QFrame:
         options = QFrame()
         options.setObjectName("modeOptions")
-        options.setFixedSize(225, 40)
+        options.setFixedSize(286, 40)
         options_layout = QHBoxLayout(options)
         options_layout.setContentsMargins(0, 0, 0, 0)
         options_layout.setSpacing(0)
 
-        one_on_one = QPushButton("One")
-        one_on_one.setObjectName("modeOption")
-        one_on_one.setCursor(Qt.PointingHandCursor)
-        one_on_one.setFixedSize(112, 38)
-        one_on_one.clicked.connect(lambda: self._choose(MODE_ONE_ON_ONE))
-        options_layout.addWidget(one_on_one)
-
-        separator = QFrame()
-        separator.setObjectName("modeSeparator")
-        separator.setFixedSize(1, 24)
-        options_layout.addWidget(separator, 0, Qt.AlignVCenter)
-
-        group = QPushButton("Multiple")
-        group.setObjectName("modeOption")
-        group.setCursor(Qt.PointingHandCursor)
-        group.setFixedSize(112, 38)
-        group.clicked.connect(lambda: self._choose(MODE_GROUP))
-        options_layout.addWidget(group)
-        option_row.addWidget(options)
-        option_row.addStretch()
-        layout.addLayout(option_row)
-        layout.addStretch(1)
+        for index, (text, mode) in enumerate(
+            (
+                ("One-on-One", one_on_one_mode),
+                ("Group Meeting", group_mode),
+            )
+        ):
+            if index:
+                separator = QFrame()
+                separator.setObjectName("modeSeparator")
+                separator.setFixedSize(1, 24)
+                options_layout.addWidget(separator, 0, Qt.AlignVCenter)
+            button = QPushButton(text)
+            button.setObjectName("modeOption")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFixedSize(142, 38)
+            button.clicked.connect(lambda _checked=False, selected=mode: self._choose(selected))
+            options_layout.addWidget(button)
+        return options
 
     def _choose(self, mode: str) -> None:
         self.selected_mode = mode
@@ -169,12 +219,17 @@ def _unique_labels(segments: list[dict], preferred_first: str) -> list[str]:
     return labels
 
 
-def _persist_meeting_audio(mic_wav: Path, loopback_wav: Path, meeting_dir: Path) -> None:
-    """Stage and verify both source WAVs before promoting either durable file."""
-    destinations = {
-        mic_wav: meeting_dir / "microphone.wav",
-        loopback_wav: meeting_dir / "meeting-audio.wav",
-    }
+def _persist_meeting_audio(
+    mic_wav: Path,
+    loopback_wav: Path,
+    meeting_dir: Path,
+    *,
+    include_loopback: bool = True,
+) -> None:
+    """Stage and verify the selected source WAVs before promoting any file."""
+    destinations = {mic_wav: meeting_dir / "microphone.wav"}
+    if include_loopback:
+        destinations[loopback_wav] = meeting_dir / "meeting-audio.wav"
     if any(destination.exists() for destination in destinations.values()):
         raise FileExistsError("Meeting audio already exists in the output folder.")
 
@@ -219,8 +274,6 @@ def _relabel_mixed_segments(
     segments: list[dict],
     microphone_label: str | None,
     user_name: str,
-    meeting_subject: str,
-    meeting_mode: str,
 ) -> list[dict]:
     """Apply deterministic host attribution after one mixed diarized request."""
     relabelled = [dict(segment) for segment in segments]
@@ -228,19 +281,16 @@ def _relabel_mixed_segments(
         for segment in relabelled:
             if segment.get("label") == microphone_label:
                 segment["label"] = user_name
+    for segment in relabelled:
+        label = str(segment.get("label") or "").strip()
+        if label.casefold() == user_name.casefold():
+            segment["label"] = user_name
 
     other_labels = []
     for segment in relabelled:
         label = str(segment.get("label") or "").strip()
         if label and label != user_name and label not in other_labels:
             other_labels.append(label)
-
-    if meeting_mode == MODE_ONE_ON_ONE and len(other_labels) == 1:
-        only_other = other_labels[0]
-        for segment in relabelled:
-            if segment.get("label") == only_other:
-                segment["label"] = meeting_subject
-        return relabelled
 
     generic_labels = [
         label for label in other_labels if re.fullmatch(r"Speaker \d+", label, flags=re.IGNORECASE)
@@ -250,6 +300,35 @@ def _relabel_mixed_segments(
         label = segment.get("label")
         if label in generic_map:
             segment["label"] = generic_map[label]
+    return relabelled
+
+
+def _label_one_on_one(
+    segments: list[dict],
+    user_name: str,
+    participant_name: str,
+) -> list[dict]:
+    """Use an identified owner to safely name every other one-on-one voice."""
+    relabelled = [dict(segment) for segment in segments]
+    labels: list[str] = []
+    for segment in relabelled:
+        label = str(segment.get("label") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+
+    owner_labels = [
+        label for label in labels if label.casefold() == user_name.casefold()
+    ]
+    if not owner_labels:
+        return relabelled
+
+    owner_label = owner_labels[0]
+    for segment in relabelled:
+        label = str(segment.get("label") or "").strip()
+        if label == owner_label:
+            segment["label"] = user_name
+        elif label:
+            segment["label"] = participant_name
     return relabelled
 
 
@@ -266,17 +345,21 @@ class MeetingWorker(QThread):
                  user_name: str, meeting_subject: str, meeting_mode: str,
                  notes_text: str, output_root: Path,
                  started_at: datetime, save_audio: bool = False,
-                 meeting_dir: Optional[Path] = None):
+                 save_markdown: bool = False,
+                 meeting_dir: Optional[Path] = None,
+                 participant_name: str = ""):
         super().__init__()
         self.mic_wav = mic_wav
         self.loopback_wav = loopback_wav
         self.user_name = user_name or "You"
         self.meeting_subject = meeting_subject or "Meeting"
         self.meeting_mode = meeting_mode
+        self.participant_name = participant_name or "Participant"
         self.notes_text = notes_text
         self.output_root = output_root
         self.started_at = started_at
         self.save_audio = save_audio
+        self.save_markdown = save_markdown
         self.meeting_dir = Path(meeting_dir) if meeting_dir is not None else None
 
     def run(self):
@@ -284,6 +367,7 @@ class MeetingWorker(QThread):
             from transcription import transcribe_file_segments
             from meeting.summarizer import SummarizerClient
             from meeting.transcript import render_transcript
+            from meeting.transcript_pdf import render_transcript_pdf
 
             # ----- one mono upload for one-duration billing -----
             self.status_signal.emit("Transcribing your meeting audio...")
@@ -293,25 +377,35 @@ class MeetingWorker(QThread):
                 self.loopback_wav,
                 mixed_wav,
             )
+            loopback_meaningful = wav_has_meaningful_audio(self.loopback_wav)
+            if _is_in_person(self.meeting_mode) and not loopback_meaningful:
+                write_mono_wav(mixed_wav, mic_audio, mixed_rate)
             all_segments = transcribe_file_segments(
                 mixed_wav,
                 label="Speaker",
                 diarize=True,
                 use_speaker_library=True,
+                num_speakers=2 if _is_one_on_one(self.meeting_mode) else None,
             )
-            microphone_label = identify_microphone_speaker(
-                all_segments,
-                mic_audio,
-                loopback_audio,
-                mixed_rate,
-            )
+            microphone_label = None
+            if not _is_in_person(self.meeting_mode) and loopback_meaningful:
+                microphone_label = identify_microphone_speaker(
+                    all_segments,
+                    mic_audio,
+                    loopback_audio,
+                    mixed_rate,
+                )
             all_segments = _relabel_mixed_segments(
                 all_segments,
                 microphone_label,
                 self.user_name,
-                self.meeting_subject,
-                self.meeting_mode,
             )
+            if _is_one_on_one(self.meeting_mode):
+                all_segments = _label_one_on_one(
+                    all_segments,
+                    self.user_name,
+                    self.participant_name,
+                )
             if not all_segments:
                 _discard_temp_audio(self.mic_wav, self.loopback_wav, mixed_wav)
                 self.error_signal.emit("No speech detected in either stream.")
@@ -319,17 +413,31 @@ class MeetingWorker(QThread):
 
             # ----- transcript -----
             duration = max((s["end"] for s in all_segments), default=0.0)
-            participants = (
-                _unique_labels(all_segments, preferred_first=self.user_name)
-                if self.meeting_mode == MODE_GROUP
-                else [self.user_name, self.meeting_subject]
-            )
+            if self.meeting_mode == MODE_ONLINE_GROUP:
+                participants = _unique_labels(all_segments, preferred_first=self.user_name)
+            elif self.meeting_mode == MODE_ONLINE_ONE_ON_ONE:
+                participants = [self.user_name, self.participant_name]
+            elif self.meeting_mode == MODE_IN_PERSON_ONE_ON_ONE:
+                participants = _unique_labels(
+                    all_segments,
+                    preferred_first=(
+                        self.user_name
+                        if any(
+                            str(segment.get("label") or "").strip() == self.user_name
+                            for segment in all_segments
+                        )
+                        else ""
+                    ),
+                )
+            else:
+                participants = _unique_labels(all_segments, preferred_first="")
             transcript_md = render_transcript(
                 segments=all_segments,
                 meeting_name=self.meeting_subject,
                 participants=participants,
                 started_at=self.started_at,
                 duration_seconds=duration,
+                notes_text=self.notes_text,
             )
 
             # ----- save files -----
@@ -340,33 +448,60 @@ class MeetingWorker(QThread):
                 self.started_at,
             )
             meeting_dir.mkdir(parents=True, exist_ok=True)
-            (meeting_dir / "transcript.md").write_text(transcript_md, encoding="utf-8")
-
-            notes_md = ""
-            if self.notes_text.strip():
-                notes_md = f"# Notes — {self.meeting_subject}\n\n{self.notes_text.strip()}\n"
-                (meeting_dir / "notes.md").write_text(notes_md, encoding="utf-8")
+            (meeting_dir / "notes.md").unlink(missing_ok=True)
+            render_transcript_pdf(
+                segments=all_segments,
+                meeting_name=self.meeting_subject,
+                participants=participants,
+                started_at=self.started_at,
+                duration_seconds=duration,
+                recorder_name=self.user_name,
+                output_path=meeting_dir / "transcript.pdf",
+                notes_text=self.notes_text,
+            )
 
             # ----- summary -----
             self.status_signal.emit("Generating summary...")
-            pdf_summary = os.getenv("KOE_SUMMARY_FORMAT", "").strip().casefold() == "pdf"
-            summary_path = meeting_dir / ("summary.pdf" if pdf_summary else "summary.md")
+            summary_path = meeting_dir / "summary.pdf"
             try:
-                doc = "\n\n".join(p for p in (notes_md, transcript_md) if p)
-                summary_text = SummarizerClient().summarize(doc)
+                summary_text = SummarizerClient().summarize(transcript_md)
             except Exception as e:
                 summary_text = f"# Summary\n\nSummary generation failed: {e}\n"
-            if pdf_summary:
-                from meeting.summary_pdf import render_summary_pdf
+            from meeting.summary_pdf import render_summary_pdf
 
-                render_summary_pdf(summary_text, summary_path)
+            render_summary_pdf(
+                summary_text,
+                summary_path,
+                meeting_name=self.meeting_subject,
+                participants=participants,
+                started_at=self.started_at,
+                duration_seconds=duration,
+                recorder_name=self.user_name,
+                meeting_mode=self.meeting_mode,
+                participant_name=self.participant_name,
+            )
+
+            transcript_markdown_path = meeting_dir / "transcript.md"
+            summary_markdown_path = meeting_dir / "summary.md"
+            if self.save_markdown:
+                transcript_markdown_path.write_text(transcript_md, encoding="utf-8")
+                summary_markdown_path.write_text(summary_text, encoding="utf-8")
             else:
-                summary_path.write_text(summary_text, encoding="utf-8")
+                transcript_markdown_path.unlink(missing_ok=True)
+                summary_markdown_path.unlink(missing_ok=True)
 
             # ----- optional durable audio, then temp cleanup -----
             if self.save_audio:
                 try:
-                    _persist_meeting_audio(self.mic_wav, self.loopback_wav, meeting_dir)
+                    _persist_meeting_audio(
+                        self.mic_wav,
+                        self.loopback_wav,
+                        meeting_dir,
+                        include_loopback=not (
+                            _is_in_person(self.meeting_mode)
+                            and not loopback_meaningful
+                        ),
+                    )
                 except Exception as exc:
                     self.error_signal.emit(
                         f"Meeting files were written, but audio could not be saved: {exc}. "
@@ -409,7 +544,7 @@ def _meeting_directory(
 ) -> Path:
     folder_component = _sanitize(
         meeting_subject,
-        underscores=meeting_mode == MODE_GROUP,
+        underscores=meeting_mode != MODE_ONLINE_ONE_ON_ONE,
     )
     folder_name = f"{started_at.strftime('%y_%m_%d')}_{folder_component}"
     return output_root / folder_name
@@ -418,15 +553,22 @@ def _meeting_directory(
 # ---------- main window ----------
 
 class ScribeWindow(QMainWindow):
-    def __init__(self, meeting_mode: str = MODE_ONE_ON_ONE):
+    def __init__(self, meeting_mode: str = MODE_ONLINE_ONE_ON_ONE):
         super().__init__()
         if ConfigManager._instance is None:
             ConfigManager.initialize()
 
         self.user_name = ConfigManager.get_config_value("profile", "user_name") or "You"
         self.output_root = self._resolve_output_root()
-        self.meeting_mode = meeting_mode if meeting_mode in (MODE_ONE_ON_ONE, MODE_GROUP) else MODE_ONE_ON_ONE
+        self.meeting_mode = (
+            meeting_mode
+            if meeting_mode in MEETING_MODES
+            else MODE_ONLINE_ONE_ON_ONE
+        )
         self.save_audio = bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
+        self.save_markdown = bool(
+            ConfigManager.get_config_value("meeting_options", "save_markdown")
+        )
 
         self.setWindowTitle("Scribe")
         apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
@@ -577,17 +719,22 @@ class ScribeWindow(QMainWindow):
         meeting_layout.setContentsMargins(0, 0, 0, 0)
         meeting_layout.setSpacing(16)
 
-        field_title = "Meeting Name" if self.meeting_mode == MODE_GROUP else "Meeting With"
-        placeholder = (
-            "e.g. Weekly sync or Management meeting"
-            if self.meeting_mode == MODE_GROUP
-            else "Add a name now or after recording"
-        )
-        self.meeting_field_label = QLabel(field_title)
+        self.meeting_field_label = QLabel("Meeting Name")
         self.meeting_field_label.setObjectName("meetingFieldTitle")
+        self.meeting_name_input = QLineEdit()
+        self.meeting_name_input.setPlaceholderText(
+            "e.g. Invoice workflow or Weekly sync"
+        )
+        self.meeting_name_input.setMaximumWidth(360)
+
+        self.participant_field_label = QLabel("Participant Name")
+        self.participant_field_label.setObjectName("meetingFieldTitle")
         self.participant_input = QLineEdit()
-        self.participant_input.setPlaceholderText(placeholder)
+        self.participant_input.setPlaceholderText("Full name works best")
         self.participant_input.setMaximumWidth(360)
+        one_on_one = _is_one_on_one(self.meeting_mode)
+        self.participant_field_label.setVisible(one_on_one)
+        self.participant_input.setVisible(one_on_one)
 
         participant_widget = QWidget()
         participant_widget.setMaximumWidth(360)
@@ -595,6 +742,8 @@ class ScribeWindow(QMainWindow):
         participant_box.setContentsMargins(0, 0, 0, 0)
         participant_box.setSpacing(7)
         participant_box.addWidget(self.meeting_field_label)
+        participant_box.addWidget(self.meeting_name_input)
+        participant_box.addWidget(self.participant_field_label)
         participant_box.addWidget(self.participant_input)
         meeting_layout.addWidget(participant_widget, 1)
 
@@ -841,13 +990,20 @@ class ScribeWindow(QMainWindow):
         self._set_timer_recording(False)
         self._show_processing()
 
-        # Prompt for the mode-specific meeting subject if empty.
-        meeting_subject = self.participant_input.text().strip()
+        meeting_subject = self.meeting_name_input.text().strip()
         if not meeting_subject:
-            meeting_subject, ok = self._prompt_for_meeting_subject()
+            meeting_subject, ok = self._prompt_for_meeting_name()
             meeting_subject = meeting_subject.strip() if ok else ""
         meeting_subject = meeting_subject or "Meeting"
-        self.participant_input.setText(meeting_subject)
+        self.meeting_name_input.setText(meeting_subject)
+
+        participant_name = self.participant_input.text().strip()
+        if _is_one_on_one(self.meeting_mode) and not participant_name:
+            participant_name, ok = self._prompt_for_participant_name()
+            participant_name = participant_name.strip() if ok else ""
+        participant_name = participant_name or "Participant"
+        if _is_one_on_one(self.meeting_mode):
+            self.participant_input.setText(participant_name)
         meeting_dir = self._meeting_directory_for_session(meeting_subject)
 
         self.worker = MeetingWorker(
@@ -860,26 +1016,23 @@ class ScribeWindow(QMainWindow):
             output_root=self.output_root,
             started_at=self.meeting_started_at or self.recording_started_at or datetime.now(),
             save_audio=self.save_audio,
+            save_markdown=self.save_markdown,
             meeting_dir=meeting_dir,
+            participant_name=participant_name,
         )
         self.worker.status_signal.connect(self._on_worker_status)
         self.worker.done_signal.connect(self._on_worker_done)
         self.worker.error_signal.connect(self._on_worker_error)
         self.worker.start()
 
-    def _prompt_for_meeting_subject(self) -> tuple[str, bool]:
-        group = self.meeting_mode == MODE_GROUP
+    def _text_prompt(self, title: str, label: str) -> tuple[str, bool]:
         dialog = QInputDialog(self)
         dialog.setWindowFlags(
             (dialog.windowFlags() | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
             & ~Qt.WindowContextHelpButtonHint
         )
-        dialog.setWindowTitle("Name this meeting" if group else "Who was this meeting with?")
-        dialog.setLabelText(
-            "Meeting name (used for the folder and documents):"
-            if group
-            else "Participant name (used for the folder and transcript labels):"
-        )
+        dialog.setWindowTitle(title)
+        dialog.setLabelText(label)
         dialog.setInputMode(QInputDialog.TextInput)
         dialog.setMinimumWidth(410)
         dialog.setStyleSheet(theme.application_stylesheet())
@@ -887,6 +1040,18 @@ class ScribeWindow(QMainWindow):
         enable_dark_titlebar(dialog)
         accepted = dialog.exec_() == QDialog.Accepted
         return dialog.textValue(), accepted
+
+    def _prompt_for_meeting_name(self) -> tuple[str, bool]:
+        return self._text_prompt(
+            "Name this meeting",
+            "Meeting name (used for the folder and document titles):",
+        )
+
+    def _prompt_for_participant_name(self) -> tuple[str, bool]:
+        return self._text_prompt(
+            "Who was this meeting with?",
+            "Participant name (used for transcript labels):",
+        )
 
     def _tick_timer(self):
         self.tick_seconds += 1
@@ -900,6 +1065,7 @@ class ScribeWindow(QMainWindow):
         self._set_record_button_state(recording=False)
         self._set_timer_recording(False)
         self.processing_timer_label.setText(self.timer_label.text())
+        self.meeting_name_input.setEnabled(False)
         self.participant_input.setEnabled(False)
         self.notes_edit.setEnabled(False)
         self.processing_label.setToolTip("")
@@ -931,6 +1097,7 @@ class ScribeWindow(QMainWindow):
         self._set_record_button_state(recording=False)
         if "no speech detected" in msg.lower():
             self.processing_pulse_timer.stop()
+            self.meeting_name_input.setEnabled(True)
             self.participant_input.setEnabled(True)
             self.notes_edit.setEnabled(True)
             self.timer_label.setText("00:00")

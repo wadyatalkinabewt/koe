@@ -52,12 +52,22 @@ def test_group_request_enables_diarization_and_speaker_library(monkeypatch):
     data = transcription._elevenlabs_request_data(
         diarize=True,
         use_speaker_library=True,
+        num_speakers=2,
     )
 
     assert ("diarize", "true") in data
     assert ("use_speaker_library", "true") in data
+    assert ("num_speakers", "2") in data
     assert ("no_verbatim", "true") in data
     assert ("use_multi_channel", "false") in data
+
+
+def test_invalid_speaker_count_is_rejected(monkeypatch):
+    import transcription
+
+    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
+    with pytest.raises(ValueError, match="between 1 and 32"):
+        transcription._elevenlabs_request_data(diarize=True, num_speakers=33)
 
 
 def test_speaker_labels_split_on_changes_and_preserve_library_ids():
@@ -81,6 +91,31 @@ def test_speaker_labels_split_on_changes_and_preserve_library_ids():
         {"start": 0.0, "end": 0.4, "text": "Hello there", "label": "Speaker 1"},
         {"start": 0.4, "end": 0.8, "text": "Hi team.", "label": "Omar"},
         {"start": 0.8, "end": 1.0, "text": "Morning.", "label": "Speaker 2"},
+    ]
+
+
+def test_non_diarized_words_split_when_local_source_label_changes():
+    import transcription
+
+    result = {
+        "words": [
+            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.2},
+            {"type": "word", "text": "Casey.", "start": 0.2, "end": 0.4},
+            {"type": "word", "text": "Hi", "start": 0.5, "end": 0.7},
+            {"type": "word", "text": "Alex.", "start": 0.7, "end": 0.9},
+        ]
+    }
+
+    def resolve(start, _end):
+        return "Alex" if start < 0.5 else "Casey"
+
+    assert transcription._segments_from_elevenlabs_words(
+        result,
+        label="Alex",
+        label_resolver=resolve,
+    ) == [
+        {"start": 0.0, "end": 0.4, "text": "Hello Casey.", "label": "Alex"},
+        {"start": 0.5, "end": 0.9, "text": "Hi Alex.", "label": "Casey"},
     ]
 
 

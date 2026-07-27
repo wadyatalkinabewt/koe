@@ -224,6 +224,49 @@ def load_wav_as_int16(path: Path) -> tuple[np.ndarray, int, int]:
     return audio, sr, nchannels
 
 
+def wav_has_meaningful_audio(
+    path: Path,
+    *,
+    frame_ms: int = 20,
+    rms_threshold: float = 12.0,
+    min_active_seconds: float = 0.25,
+) -> bool:
+    """Return whether a WAV contains more than an effectively empty PCM stream.
+
+    WASAPI loopback can produce a full-duration file containing only zero or
+    +/-1 samples when no system audio played. Inspect short frames across every
+    channel and require a small amount of sustained energy before treating that
+    track as real meeting audio.
+    """
+    with wave.open(str(path), "rb") as wav_file:
+        if wav_file.getsampwidth() != 2:
+            raise ValueError("Scribe audio must use 16-bit PCM.")
+        sample_rate = wav_file.getframerate()
+        channels = wav_file.getnchannels()
+        if sample_rate <= 0 or channels <= 0:
+            return False
+
+        frames_per_chunk = max(1, int(sample_rate * frame_ms / 1000))
+        required_active_frames = max(1, int(sample_rate * min_active_seconds))
+        active_frames = 0
+
+        while True:
+            raw = wav_file.readframes(frames_per_chunk)
+            if not raw:
+                break
+            samples = np.frombuffer(raw, dtype=np.int16)
+            if samples.size == 0:
+                continue
+            frame_rms = float(
+                np.sqrt(np.mean(samples.astype(np.float32) ** 2))
+            )
+            if frame_rms >= rms_threshold:
+                active_frames += samples.size // channels
+                if active_frames >= required_active_frames:
+                    return True
+    return False
+
+
 def preprocess_audio_source(audio: np.ndarray, sample_rate: int, channels: int,
                             target_rate: int = 16000, target_rms: float = 3000.0) -> np.ndarray:
     """Convert one captured source to normalized 16 kHz mono int16.

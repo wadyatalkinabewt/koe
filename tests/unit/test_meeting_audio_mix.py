@@ -144,6 +144,30 @@ def test_realistic_48khz_stereo_loopback_still_yields_one_timeline(tmp_path):
     assert mic_aligned.size == loop_aligned.size == 16000
 
 
+def test_meaningful_audio_rejects_empty_loopback_and_accepts_real_output(tmp_path):
+    from meeting.capture import wav_has_meaningful_audio
+
+    empty_loopback = tmp_path / "empty-loopback.wav"
+    real_loopback = tmp_path / "real-loopback.wav"
+    _write_multichannel(
+        empty_loopback,
+        np.ones((48000, 2), dtype=np.int16),
+        rate=48000,
+        channels=2,
+    )
+    real_audio = np.zeros((48000, 2), dtype=np.int16)
+    real_audio[12000:36000, :] = 900
+    _write_multichannel(
+        real_loopback,
+        real_audio,
+        rate=48000,
+        channels=2,
+    )
+
+    assert wav_has_meaningful_audio(empty_loopback) is False
+    assert wav_has_meaningful_audio(real_loopback) is True
+
+
 def test_mixed_wav_is_the_aligned_sum_not_concatenated_sources(tmp_path):
     from meeting.capture import load_wav_as_int16, prepare_mono_meeting_mix
 
@@ -187,21 +211,3 @@ def test_microphone_speaker_is_identified_from_original_source_timing():
     ]
 
     assert identify_microphone_speaker(segments, mic, loopback, 16000) == "Speaker 1"
-
-
-def test_one_on_one_relabels_host_and_single_remote_participant():
-    from meeting.app import MODE_ONE_ON_ONE, _relabel_mixed_segments
-
-    segments = [
-        {"start": 0.0, "end": 0.4, "label": "Speaker 1", "text": "Hello"},
-        {"start": 0.5, "end": 1.0, "label": "Speaker 2", "text": "Hi"},
-    ]
-    result = _relabel_mixed_segments(
-        segments,
-        "Speaker 1",
-        "Alex",
-        "Casey",
-        MODE_ONE_ON_ONE,
-    )
-
-    assert [segment["label"] for segment in result] == ["Alex", "Casey"]

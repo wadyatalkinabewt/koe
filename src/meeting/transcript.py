@@ -49,6 +49,7 @@ def render_transcript(
     participants: List[str],
     started_at: datetime,
     duration_seconds: float,
+    notes_text: str = "",
 ) -> str:
     """Build the final transcript markdown.
 
@@ -72,5 +73,9 @@ def render_transcript(
         ts = format_timestamp(utt["start"])
         lines.append(f"**[{ts}] {utt['label']}**: {utt['text']}")
         lines.append("")
+
+    notes = notes_text.strip()
+    if notes:
+        lines.extend(["---", "", "## Notes", "", notes, ""])
 
     return "\n".join(lines).rstrip() + "\n"

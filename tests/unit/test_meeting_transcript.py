@@ -37,3 +37,17 @@ def test_render_transcript_includes_stream_labels():
     assert "# Planning" in rendered
     assert "**Participants**: Alex, Jordan" in rendered
     assert "**[00:00] Alex**: Hello." in rendered
+
+
+def test_render_transcript_appends_notes_as_a_final_section():
+    rendered = render_transcript(
+        segments=[{"start": 0, "end": 1, "text": "Hello.", "label": "Alex"}],
+        meeting_name="Planning",
+        participants=["Alex"],
+        started_at=datetime(2026, 7, 13, 10, 30),
+        duration_seconds=60,
+        notes_text="Follow up with Casey.\nConfirm the deadline.",
+    )
+
+    assert rendered.index("## Transcript") < rendered.index("## Notes")
+    assert rendered.endswith("Follow up with Casey.\nConfirm the deadline.\n")

@@ -14,6 +14,7 @@ def test_first_run_defaults_disable_and_empty_vocabulary(monkeypatch):
     config = yaml.safe_load(config_path().read_text(encoding="utf-8"))
 
     assert config["profile"]["user_name"] == "Alex"
+    assert config["meeting_options"]["save_markdown"] is False
     assert config["model_options"]["elevenlabs"]["keyterms_enabled"] is False
     assert config["model_options"]["common"]["initial_prompt"] is None
 
