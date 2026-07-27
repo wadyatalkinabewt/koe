@@ -11,6 +11,7 @@ meeting_options:
 
 recording_options:
   activation_key: ctrl+shift+space
+  save_audio: false
 
 model_options:
   common:

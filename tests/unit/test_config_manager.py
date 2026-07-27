@@ -201,6 +201,9 @@ class TestConfigSchema:
         save_markdown = schema["meeting_options"]["save_markdown"]
         assert save_markdown["type"] == "bool"
         assert save_markdown["value"] is False
+        snippet_audio = schema["recording_options"]["save_audio"]
+        assert snippet_audio["type"] == "bool"
+        assert snippet_audio["value"] is False
         last_mode = schema["meeting_options"]["last_meeting_mode"]
         assert last_mode["type"] == "str"
         assert last_mode["value"] == "online_one_on_one"

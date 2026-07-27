@@ -18,6 +18,10 @@ Koe is a Windows-only tray application with two workflows:
   transcription path.
 - Settings autosave and must not restart Koe or interrupt an active snippet.
 - The snippet status card keeps fixed geometry across Listening/Transcribing.
+- Snippet audio retention is off by default. When enabled, successful captures
+  longer than 15 seconds are written as timestamped WAV files under the
+  configured `Snippets\Audio Files` folder; shorter, cancelled, or empty
+  snippets are not retained there.
 - Scribe sends one mono meeting file with `use_multi_channel=false`. Never
   reintroduce separate billable mic and loopback transcription requests or
   multichannel billing.

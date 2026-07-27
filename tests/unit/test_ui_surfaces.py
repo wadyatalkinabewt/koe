@@ -66,6 +66,9 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert hasattr(window, "save_markdown_checkbox")
     assert window.save_markdown_checkbox.text() == "Save Markdown copies"
     assert isinstance(window.save_markdown_checkbox, ToggleRow)
+    assert hasattr(window, "save_snippet_audio_checkbox")
+    assert window.save_snippet_audio_checkbox.text() == "Save snippet audio"
+    assert isinstance(window.save_snippet_audio_checkbox, ToggleRow)
     assert window.findChildren(QCheckBox) == []
     assert "microphone.wav and meeting-audio.wav" not in labels
     assert not window.keyterms_checkbox.label.wordWrap()
@@ -104,7 +107,10 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     profile = cards_by_title["Your Name"]
     storage = cards_by_title["Storage"]
     scribe_card = cards_by_title["Scribe"]
+    snippet_card = cards_by_title["Snippet"]
     transcription = cards_by_title["Transcription"]
+    assert "Recording" not in cards_by_title
+    assert window.save_snippet_audio_checkbox.parentWidget() is snippet_card
     assert window.user_name_input.parentWidget() is profile
     assert all(
         card.sizePolicy().verticalPolicy() == QSizePolicy.Maximum

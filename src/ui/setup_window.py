@@ -79,7 +79,10 @@ def write_setup_files(user_name: str, elevenlabs_key: str, openrouter_key: str =
             "common": {"language": None, "initial_prompt": None},
             "elevenlabs": {"keyterms_enabled": False},
         },
-        "recording_options": {"activation_key": "ctrl+shift+space"},
+        "recording_options": {
+            "activation_key": "ctrl+shift+space",
+            "save_audio": False,
+        },
         "misc": {
             "print_to_terminal": False,
             "hide_status_window": False,
