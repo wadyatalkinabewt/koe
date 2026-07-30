@@ -3,9 +3,7 @@
 Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
 
 - **Snippet:** press `Ctrl+Shift+Space`, speak, and press it again to copy the
-  transcript to the clipboard. Enable **Save snippet audio** in Settings to
-  keep successful recordings longer than 15 seconds as timestamped WAV files
-  under `Snippets\Audio Files`.
+  transcript to the clipboard.
 - **Scribe:** record a meeting, keep notes, produce a labelled transcript, and
   optionally generate a structured OpenRouter summary.
 

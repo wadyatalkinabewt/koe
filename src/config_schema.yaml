@@ -52,10 +52,6 @@ recording_options:
     value: ctrl+shift+space
     type: str
     description: "Hotkey to start or stop snippet recording."
-  save_audio:
-    value: false
-    type: bool
-    description: "Save successfully transcribed snippets longer than 15 seconds as timestamped WAV files under Snippets/Audio Files."
 
 # App behavior
 misc:

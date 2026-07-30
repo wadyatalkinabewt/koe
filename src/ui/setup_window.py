@@ -81,7 +81,6 @@ def write_setup_files(user_name: str, elevenlabs_key: str, openrouter_key: str =
         },
         "recording_options": {
             "activation_key": "ctrl+shift+space",
-            "save_audio": False,
         },
         "misc": {
             "print_to_terminal": False,

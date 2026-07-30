@@ -35,7 +35,6 @@ GROUP_TRANSCRIPTION_TIMEOUT = 15 * 60
 MAX_ELEVENLABS_FILE_BYTES = 5_000_000_000
 MAX_ELEVENLABS_DURATION_SECONDS = 10 * 60 * 60
 MIN_ELEVENLABS_DURATION_SECONDS = 0.1
-MIN_SNIPPET_AUDIO_SECONDS = 15.0
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 ELEVENLABS_API_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
 
@@ -79,43 +78,6 @@ def save_rolling_transcription(text: str) -> None:
         (snippets_dir / "snippet_1.md").write_text(content, encoding="utf-8")
     except Exception as exc:
         _debug(f"save_rolling_transcription error: {exc}")
-
-
-def save_snippet_audio(
-    audio_data: np.ndarray,
-    sample_rate: int = 16000,
-) -> Path | None:
-    """Save one successful snippet as a timestamped mono WAV when enabled."""
-    if not ConfigManager.get_config_value("recording_options", "save_audio"):
-        return None
-    if audio_data is None or len(audio_data) == 0:
-        return None
-
-    try:
-        sample_rate = int(sample_rate or 16000)
-        if len(audio_data) / sample_rate <= MIN_SNIPPET_AUDIO_SECONDS:
-            return None
-
-        audio_dir = _get_snippets_dir() / "Audio Files"
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        path = audio_dir / f"snippet_{timestamp}.wav"
-        suffix = 2
-        while path.exists():
-            path = audio_dir / f"snippet_{timestamp}_{suffix}.wav"
-            suffix += 1
-
-        audio_int16 = _ensure_int16(audio_data)
-        with wave.open(str(path), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(audio_int16.tobytes())
-        _debug(f"Saved snippet audio: {path}")
-        return path
-    except Exception as exc:
-        _debug(f"save_snippet_audio error: {exc}")
-        return None
 
 
 def save_transcription_debug(raw: str, final: str, duration_sec: float) -> None:
@@ -533,7 +495,5 @@ def transcribe(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
     raw = transcribe_elevenlabs(audio_data, sample_rate=sample_rate)
     final = post_process_transcription(raw)
     save_rolling_transcription(final)
-    if final.strip():
-        save_snippet_audio(audio_data, sample_rate=sample_rate)
     save_transcription_debug(raw, final, duration_sec)
     return final

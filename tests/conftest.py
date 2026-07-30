@@ -45,7 +45,6 @@ def mock_config():
         },
         "recording_options": {
             "activation_key": "ctrl+shift+space",
-            "save_audio": False,
         },
         "meeting_options": {
             "root_folder": None,

@@ -222,10 +222,8 @@ class SettingsWindow(BaseWindow):
         self.hotkey_input = QLineEdit()
         self.hotkey_input.setPlaceholderText("ctrl+shift+space")
         snippet.layout().addWidget(self.hotkey_input)
-        self.save_snippet_audio_checkbox = ToggleRow("Save snippet audio")
         self.beep_checkbox = ToggleRow("Play a sound when a snippet is ready")
         self.status_checkbox = ToggleRow("Show the snippet status card")
-        snippet.layout().addWidget(self.save_snippet_audio_checkbox)
         snippet.layout().addWidget(self.beep_checkbox)
         snippet.layout().addWidget(self.status_checkbox)
         self.content_layout.addWidget(snippet)
@@ -318,9 +316,6 @@ class SettingsWindow(BaseWindow):
             ConfigManager.get_config_value("recording_options", "activation_key")
             or "ctrl+shift+space"
         )
-        self.save_snippet_audio_checkbox.setChecked(
-            bool(ConfigManager.get_config_value("recording_options", "save_audio"))
-        )
         self.beep_checkbox.setChecked(
             bool(ConfigManager.get_config_value("misc", "noise_on_completion"))
         )
@@ -352,7 +347,6 @@ class SettingsWindow(BaseWindow):
         for toggle in (
             self.save_meeting_audio_checkbox,
             self.save_markdown_checkbox,
-            self.save_snippet_audio_checkbox,
             self.beep_checkbox,
             self.status_checkbox,
             self.keyterms_checkbox,
@@ -419,11 +413,6 @@ class SettingsWindow(BaseWindow):
             self.hotkey_input.text().strip() or "ctrl+shift+space",
             "recording_options",
             "activation_key",
-        )
-        ConfigManager.set_config_value(
-            self.save_snippet_audio_checkbox.isChecked(),
-            "recording_options",
-            "save_audio",
         )
         ConfigManager.set_config_value(
             self.beep_checkbox.isChecked(), "misc", "noise_on_completion"
