@@ -64,7 +64,23 @@ def test_capture_opens_both_devices_before_starting_either(tmp_path, monkeypatch
             self.opens = []
 
         def get_default_input_device_info(self):
-            return {"name": "Mic", "index": 1}
+            return {
+                "name": "Compatibility Mic",
+                "index": 1,
+                "defaultSampleRate": 16000,
+            }
+
+        def get_host_api_info_by_type(self, _host_api_type):
+            return {"index": 2, "defaultInputDevice": 12}
+
+        def get_device_info_by_index(self, index):
+            assert index == 12
+            return {
+                "name": "WASAPI Mic",
+                "index": 12,
+                "maxInputChannels": 1,
+                "defaultSampleRate": 48000,
+            }
 
         def get_default_wasapi_loopback(self):
             return {
@@ -76,7 +92,7 @@ def test_capture_opens_both_devices_before_starting_either(tmp_path, monkeypatch
 
         def open(self, **kwargs):
             self.opens.append(kwargs)
-            return FakeStream("mic" if kwargs["input_device_index"] == 1 else "loopback")
+            return FakeStream("mic" if kwargs["input_device_index"] == 12 else "loopback")
 
         def terminate(self):
             pass
@@ -88,6 +104,8 @@ def test_capture_opens_both_devices_before_starting_either(tmp_path, monkeypatch
     assert capture.start() is True
     assert len(fake.opens) == 2
     assert all(call["start"] is False for call in fake.opens)
+    mic_open = next(call for call in fake.opens if call["input_device_index"] == 12)
+    assert mic_open["rate"] == 48000
     assert started == ["loopback", "mic"]
 
     capture.cleanup()

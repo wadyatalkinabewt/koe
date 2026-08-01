@@ -24,6 +24,8 @@ _HOST_API_PRIORITY = {
     "MME": 2,
     "Windows WDM-KS": 3,
 }
+_VOICE_CLONE_MIC_NAME = "logitech USB Headset wireless gaming headset"
+_WDM_COMPATIBILITY_MIC_NAMES = ("hd pro webcam c920",)
 
 def _rotate_log_if_needed():
     """Rotate debug.log if it exceeds max size."""
@@ -91,7 +93,7 @@ def _normalise_sound_device(device):
 
 
 def _input_device_candidates(preferred_device=None):
-    """Return input devices to try, preferring explicit/default then stable Windows APIs."""
+    """Return input devices to try, preferring current host defaults."""
     seen = set()
     candidates = []
 
@@ -102,16 +104,37 @@ def _input_device_candidates(preferred_device=None):
         seen.add(key)
         candidates.append(device)
 
-    add(_normalise_sound_device(preferred_device))
-    add(None)
+    preferred_device = _normalise_sound_device(preferred_device)
+    if preferred_device is not None:
+        add(preferred_device)
 
     try:
-        hostapis = sd.query_hostapis()
+        hostapis = list(sd.query_hostapis())
         devices = list(enumerate(sd.query_devices()))
+
+        # Try each host API's current default before arbitrary endpoints. This
+        # keeps a disconnected-but-still-enumerated microphone from beating the
+        # webcam (or any other device) Windows has just promoted to default.
+        for _api_index, hostapi in sorted(
+            enumerate(hostapis),
+            key=lambda item: _HOST_API_PRIORITY.get(item[1].get("name", ""), 99),
+        ):
+            default_input = hostapi.get("default_input_device")
+            try:
+                default_input = int(default_input)
+            except (TypeError, ValueError):
+                continue
+            if default_input < 0 or default_input >= len(devices):
+                continue
+            if int(devices[default_input][1].get("max_input_channels") or 0) > 0:
+                add(default_input)
 
         def sort_key(item):
             idx, info = item
-            api_name = hostapis[info.get("hostapi", -1)].get("name", "")
+            try:
+                api_name = hostapis[int(info.get("hostapi", -1))].get("name", "")
+            except (IndexError, TypeError, ValueError):
+                api_name = ""
             return (
                 _HOST_API_PRIORITY.get(api_name, 99),
                 not bool(info.get("name")),
@@ -125,7 +148,73 @@ def _input_device_candidates(preferred_device=None):
     except Exception as e:
         _debug(f"  Could not enumerate fallback input devices: {e}")
 
+    # Retain the PortAudio-wide default as a final compatibility fallback. On
+    # Windows this is commonly the legacy MME endpoint, so it must not precede
+    # an available WASAPI device.
+    add(None)
+
     return candidates
+
+
+def _refresh_input_devices() -> bool:
+    """Refresh PortAudio's device/default snapshot between snippet streams."""
+    terminate = getattr(sd, "_terminate", None)
+    initialize = getattr(sd, "_initialize", None)
+    if not callable(terminate) or not callable(initialize):
+        _debug("  Audio device refresh unavailable; using current PortAudio state")
+        return False
+
+    terminated = False
+    try:
+        # sounddevice initializes PortAudio once at import time. WASAPI default
+        # changes made after Koe starts are not visible until that snapshot is
+        # rebuilt. A ResultThread calls this before opening its only stream.
+        terminate()
+        terminated = True
+        initialize()
+        _debug("  Audio device list refreshed")
+        return True
+    except Exception as exc:
+        _debug(f"  Audio device refresh failed: {exc}")
+        if terminated:
+            try:
+                # Leave sounddevice usable if a transient refresh failed.
+                initialize()
+                _debug("  PortAudio reinitialized after refresh failure")
+            except Exception as recovery_exc:
+                _debug(f"  PortAudio recovery failed: {recovery_exc}")
+        return False
+
+
+def _wasapi_default_input_device():
+    """Return the Windows WASAPI default capture device index when available."""
+    try:
+        for hostapi in sd.query_hostapis():
+            if hostapi.get("name") != "Windows WASAPI":
+                continue
+            device = hostapi.get("default_input_device")
+            if device is not None and int(device) >= 0:
+                return int(device)
+    except Exception as e:
+        _debug(f"  Could not resolve WASAPI default input: {e}")
+    return None
+
+
+def _device_sample_rate(device, fallback: int = 48000) -> int:
+    """Return an endpoint's native/default rate without forcing legacy resampling."""
+    try:
+        info = (
+            sd.query_devices(kind="input")
+            if device is None
+            else sd.query_devices(device)
+        )
+        if isinstance(info, dict):
+            rate = int(round(float(info.get("default_samplerate") or 0)))
+            if rate > 0:
+                return rate
+    except Exception as e:
+        _debug(f"  Could not read sample rate for {_device_label(device)}: {e}")
+    return int(fallback)
 
 
 def _device_label(device):
@@ -138,10 +227,81 @@ def _device_label(device):
         return str(device)
 
 
-def _open_input_stream(sample_rate: int, frame_size: int, sound_device, callback):
-    """Open a compatible input stream, falling back when Windows default is stale."""
+def _device_host_api(device) -> str:
+    try:
+        info = sd.query_devices(device)
+        hostapi = sd.query_hostapis(info.get("hostapi", -1))
+        return str(hostapi.get("name") or "unknown")
+    except Exception:
+        return "unknown"
+
+
+def _is_voice_clone_source_device(device) -> bool:
+    """Return whether this is the native WASAPI Logitech USB Headset endpoint."""
+    try:
+        info = sd.query_devices(device)
+        name = str(info.get("name") or "").lower()
+        return (
+            _VOICE_CLONE_MIC_NAME in name
+            and _device_host_api(device) == "Windows WASAPI"
+        )
+    except Exception:
+        return False
+
+
+def _matching_input_device(reference_device, host_api_name: str):
+    """Find the same named input through another Windows host API."""
+    try:
+        reference = sd.query_devices(reference_device)
+        reference_name = " ".join(str(reference.get("name") or "").lower().split())
+        if not reference_name:
+            return None
+        hostapis = list(sd.query_hostapis())
+        for index, info in enumerate(sd.query_devices()):
+            if int(info.get("max_input_channels") or 0) <= 0:
+                continue
+            try:
+                candidate_host = hostapis[int(info.get("hostapi", -1))].get("name", "")
+            except (IndexError, TypeError, ValueError):
+                continue
+            candidate_name = " ".join(str(info.get("name") or "").lower().split())
+            if candidate_host == host_api_name and candidate_name == reference_name:
+                return index
+    except Exception as exc:
+        _debug(f"  Could not resolve {host_api_name} compatibility input: {exc}")
+    return None
+
+
+def _preferred_capture_device(wasapi_default):
+    """Resolve the capture endpoint without weakening USB Headset retention rules."""
+    if wasapi_default is None or _is_voice_clone_source_device(wasapi_default):
+        return wasapi_default
+    try:
+        info = sd.query_devices(wasapi_default)
+        name = str(info.get("name") or "").lower()
+    except Exception:
+        return wasapi_default
+
+    # The C920's shared-mode PortAudio endpoints can open successfully while
+    # delivering only digital silence on this Windows driver. Its matching
+    # WDM-KS endpoint carries the real microphone signal. This route is only
+    # for transcription; it can never pass the USB Headset WASAPI retention check.
+    if any(marker in name for marker in _WDM_COMPATIBILITY_MIC_NAMES):
+        compatibility_device = _matching_input_device(
+            wasapi_default,
+            "Windows WDM-KS",
+        )
+        if compatibility_device is not None:
+            return compatibility_device
+    return wasapi_default
+
+
+def _open_input_stream(sound_device, callback, fallback_rate: int = 48000):
+    """Open an input stream at the selected endpoint's native sample rate."""
     last_error = None
     for device in _input_device_candidates(sound_device):
+        sample_rate = _device_sample_rate(device, fallback=fallback_rate)
+        frame_size = max(1, int(round(sample_rate * 0.03)))
         try:
             stream = sd.InputStream(
                 samplerate=sample_rate,
@@ -152,7 +312,7 @@ def _open_input_stream(sample_rate: int, frame_size: int, sound_device, callback
                 callback=callback,
             )
             _debug(f"  Audio stream selected: {_device_label(device)}")
-            return stream, device
+            return stream, device, sample_rate, frame_size
         except Exception as e:
             last_error = e
             _debug(f"  Audio stream failed for {_device_label(device)}: {e}")
@@ -188,6 +348,7 @@ class ResultThread(QThread):
         self.is_recording = False
         self.is_running = True
         self.sample_rate = None
+        self.retain_snippet_audio = False
         self.cancel_requested = False
         self.mutex = QMutex()
 
@@ -281,7 +442,11 @@ class ResultThread(QThread):
             # Time the transcription process
             _debug("  Starting transcription...")
             start_time = time.time()
-            result = transcribe(audio_data, sample_rate=self.sample_rate or 16000)
+            result = transcribe(
+                audio_data,
+                sample_rate=self.sample_rate or 16000,
+                retain_snippet_audio=self.retain_snippet_audio,
+            )
             end_time = time.time()
 
             transcription_time = end_time - start_time
@@ -339,10 +504,19 @@ class ResultThread(QThread):
         """
         _debug("  _record_audio() entered")
         try:
-            self.sample_rate = 16000
-            frame_duration_ms = 30
-            frame_size = int(self.sample_rate * (frame_duration_ms / 1000.0))
-            _debug(f"  Config loaded: sample_rate={self.sample_rate}, frame_size={frame_size}")
+            _refresh_input_devices()
+            wasapi_default = _wasapi_default_input_device()
+            preferred_device = _preferred_capture_device(wasapi_default)
+            _debug(
+                "  Windows default input: "
+                f"device={_device_label(wasapi_default)}, "
+                f"host_api={_device_host_api(wasapi_default)}"
+            )
+            _debug(
+                "  Current capture target: "
+                f"device={_device_label(preferred_device)}, "
+                f"host_api={_device_host_api(preferred_device)}"
+            )
 
             recording = []
 
@@ -367,13 +541,22 @@ class ResultThread(QThread):
                 recording.append(frame)
 
             _debug("  Opening audio stream...")
-            stream, selected_device = _open_input_stream(
-                self.sample_rate,
-                frame_size,
-                None,
+            stream, selected_device, self.sample_rate, frame_size = _open_input_stream(
+                preferred_device,
                 audio_callback,
             )
-            if selected_device is not None:
+            self.retain_snippet_audio = _is_voice_clone_source_device(selected_device)
+            _debug(
+                "  Capture configured: "
+                f"device={_device_label(selected_device)}, "
+                f"host_api={_device_host_api(selected_device)}, "
+                f"sample_rate={self.sample_rate}, frame_size={frame_size}"
+            )
+            _debug(
+                "  Voice-clone retention: "
+                f"{'enabled' if self.retain_snippet_audio else 'disabled'}"
+            )
+            if selected_device != preferred_device:
                 _debug(f"  Using fallback input device: {_device_label(selected_device)}")
 
             with stream:

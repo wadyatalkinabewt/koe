@@ -5,8 +5,8 @@ Captures mic + Windows loopback (system audio) simultaneously, writing both
 streams as raw WAV files to a temp dir. No live processing — transcription
 happens after stop() in the app layer.
 
-Mic is captured at 16kHz mono int16 (API-ready). Loopback is captured at
-the device's native rate/channels and downmixed/resampled later.
+Mic and loopback are captured through WASAPI at their native rates. Both are
+downmixed/resampled to the single 16 kHz mono upload only after recording.
 """
 
 import wave
@@ -29,10 +29,10 @@ def _log(message: str) -> None:
 class AudioCapture:
     """Captures mic + system loopback to two WAV files in a temp dir."""
 
-    def __init__(self, temp_dir: Path, mic_sample_rate: int = 16000, chunk_size: int = 1024):
+    def __init__(self, temp_dir: Path, mic_sample_rate: int | None = None, chunk_size: int = 1024):
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
-        self.mic_sample_rate = mic_sample_rate
+        self.mic_sample_rate = int(mic_sample_rate) if mic_sample_rate else 0
         self.chunk_size = chunk_size
 
         self.mic_path = self.temp_dir / "mic.wav"
@@ -50,12 +50,30 @@ class AudioCapture:
 
         self.p = pyaudio.PyAudio()
         self.mic_device = self._find_default_mic()
+        if not self.mic_sample_rate:
+            self.mic_sample_rate = int(
+                (self.mic_device or {}).get('defaultSampleRate') or 16000
+            )
         self.loopback_device = self._find_loopback_device()
 
     def _find_default_mic(self) -> Optional[dict]:
         try:
+            wasapi = self.p.get_host_api_info_by_type(pyaudio.paWASAPI)
+            device_index = int(wasapi.get('defaultInputDevice', -1))
+            if device_index >= 0:
+                info = self.p.get_device_info_by_index(device_index)
+                if int(info.get('maxInputChannels') or 0) > 0:
+                    _log(
+                        f"[Scribe] WASAPI mic: {info['name']} "
+                        f"({int(info['defaultSampleRate'])}Hz)"
+                    )
+                    return info
+        except Exception as e:
+            _log(f"[Scribe] Could not find WASAPI mic: {e}")
+
+        try:
             info = self.p.get_default_input_device_info()
-            _log(f"[Scribe] Default mic: {info['name']}")
+            _log(f"[Scribe] Compatibility mic: {info['name']}")
             return info
         except Exception as e:
             _log(f"[Scribe] Could not find default mic: {e}")

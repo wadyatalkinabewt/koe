@@ -13,6 +13,9 @@ Koe is a Windows-only tray application with two workflows:
 - Every transcription request uses `no_verbatim=true`.
 - Snippet formatting may only normalize whitespace, punctuation, and the
   paste-friendly trailing space.
+- Snippets longer than five seconds retain their native mono PCM master under
+  `Snippets/Audio Files` only when captured from the Logitech USB Headset Wireless
+  WASAPI endpoint at its native sample rate.
 - OpenRouter is confined to `src/meeting/summarizer.py` and Scribe summaries.
 - The snippet hotkey is press-to-toggle. ElevenLabs remains the only
   transcription path.

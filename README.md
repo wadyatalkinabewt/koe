@@ -10,6 +10,14 @@ Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
 Every transcription request uses `no_verbatim=true`. ElevenLabs is the single
 speech-to-text path.
 
+Successful snippet captures longer than five seconds are also retained as
+native-rate mono PCM WAV masters under `Snippets/Audio Files` when the selected
+input is the Logitech USB Headset Wireless WASAPI endpoint. Captures from a webcam,
+another microphone, or the legacy MME endpoint are transcribed but not retained
+in the voice-cloning collection. The collection, browser-calibration,
+post-processing, quality-control, and upload procedure is documented in
+[``]().
+
 Scribe keeps the meeting type in the recording window and remembers the last
 selection:
 
