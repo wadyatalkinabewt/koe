@@ -20,6 +20,5 @@ model_options:
     keyterms_enabled: false
 
 misc:
-  hide_status_window: false
   noise_on_completion: true
   snippets_folder: null

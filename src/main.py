@@ -113,7 +113,7 @@ class KoeApp(QObject):
         self.key_listener.add_callback("on_activate", self.on_activation)
         self.key_listener.add_callback("on_deactivate", self.on_deactivation)
 
-        self._sync_status_window()
+        self._ensure_status_window()
 
         self.create_tray_icon()
         self.key_listener.start()
@@ -234,35 +234,6 @@ class KoeApp(QObject):
         thread.errorSignal.connect(status_window.showError)
         self._status_thread = thread
 
-    def _sync_status_window(self) -> None:
-        enabled = not bool(ConfigManager.get_config_value("misc", "hide_status_window"))
-        thread = getattr(self, "result_thread", None)
-        active = thread is not None and thread.isRunning()
-        if enabled:
-            status_window = self._ensure_status_window()
-            if active:
-                self._connect_status_thread(thread)
-                if thread.is_recording and not status_window.isVisible():
-                    status_window.updateStatus("recording")
-            return
-
-        if active:
-            # A visibility preference applies to the next snippet. Never make
-            # the current capture disappear or detach its completion state.
-            self._connect_status_thread(thread)
-            _debug("Status-card visibility change deferred until active snippet finishes")
-            return
-
-        self._disconnect_status_thread()
-        if self.status_window is not None:
-            self.status_window.close()
-
-    def _on_result_thread_finished(self) -> None:
-        if bool(ConfigManager.get_config_value("misc", "hide_status_window")):
-            self._disconnect_status_thread()
-            if self.status_window is not None:
-                self.status_window.close()
-
     def apply_settings(self) -> None:
         """Apply autosaved settings without restarting or touching active audio."""
         if not self._components_initialized:
@@ -270,7 +241,6 @@ class KoeApp(QObject):
         key_listener = getattr(self, "key_listener", None)
         if key_listener is not None:
             key_listener.load_activation_keys()
-        self._sync_status_window()
         _debug("Settings applied live; process and active recording preserved")
 
     def on_settings_closed(self):
@@ -323,12 +293,10 @@ class KoeApp(QObject):
             self.recording_start_time = time.time()
             self.suppress_current_result = False
             self.result_thread = ResultThread()
-            if not ConfigManager.get_config_value("misc", "hide_status_window"):
-                self._connect_status_thread(self.result_thread)
+            self._connect_status_thread(self.result_thread)
             self.result_thread.errorSignal.connect(self.on_transcription_error)
             self.result_thread.resultSignal.connect(self.on_transcription_complete)
             self.result_thread.cancelledSignal.connect(self.on_snippet_cancelled)
-            self.result_thread.finished.connect(self._on_result_thread_finished)
             self.result_thread.start()
 
     def cancel_active_snippet(self):
@@ -396,9 +364,8 @@ class KoeApp(QObject):
                 except Exception as e:
                     ConfigManager.console_print(f'Beep failed: {e}')
 
-            if not ConfigManager.get_config_value("misc", "hide_status_window"):
-                if self.status_window.isVisible():
-                    self.status_window.updateStatus('complete')
+            if self.status_window.isVisible():
+                self.status_window.updateStatus('complete')
 
             self.key_listener.start()
 

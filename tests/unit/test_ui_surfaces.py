@@ -107,6 +107,10 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     transcription = cards_by_title["Transcription"]
     assert "Recording" not in cards_by_title
     assert window.user_name_input.parentWidget() is profile
+    assert window.save_meeting_audio_checkbox.parentWidget() is scribe_card
+    assert window.save_markdown_checkbox.parentWidget() is scribe_card
+    assert window.save_meeting_audio_checkbox.parentWidget() is not storage
+    assert "show the snippet status card" not in labels
     assert all(
         card.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
         for card in cards_by_title.values()
@@ -556,17 +560,12 @@ def test_applying_settings_never_stops_an_active_snippet(monkeypatch):
         _components_initialized = True
         key_listener = Listener()
         result_thread = ActiveThread()
-        sync_calls = 0
-
-        def _sync_status_window(self):
-            self.sync_calls += 1
 
     fake = FakeApp()
     monkeypatch.setattr(main, "_debug", lambda _message: None)
     main.KoeApp.apply_settings(fake)
 
     assert fake.key_listener.reloads == 1
-    assert fake.sync_calls == 1
     assert fake.result_thread.stop_calls == 0
     assert not hasattr(main.KoeApp, "restart_app")
     assert not hasattr(main.KoeApp, "stop_result_thread")
@@ -583,47 +582,6 @@ def test_only_tray_exit_is_wired_to_process_shutdown():
     assert "exit_action.triggered.connect(self.exit_app)" in tray_source
 
 
-def test_status_card_visibility_change_is_deferred_during_live_snippet(monkeypatch):
-    import main
-    from utils import ConfigManager
-
-    class ActiveThread:
-        is_recording = True
-
-        @staticmethod
-        def isRunning():
-            return True
-
-    class StatusWindow:
-        close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-
-    class FakeApp:
-        result_thread = ActiveThread()
-        status_window = StatusWindow()
-        connect_calls = 0
-        disconnect_calls = 0
-
-        def _connect_status_thread(self, thread):
-            assert thread is self.result_thread
-            self.connect_calls += 1
-
-        def _disconnect_status_thread(self):
-            self.disconnect_calls += 1
-
-    fake = FakeApp()
-    monkeypatch.setattr(ConfigManager, "get_config_value", lambda *_args: True)
-    monkeypatch.setattr(main, "_debug", lambda _message: None)
-
-    main.KoeApp._sync_status_window(fake)
-
-    assert fake.connect_calls == 1
-    assert fake.disconnect_calls == 0
-    assert fake.status_window.close_calls == 0
-
-
 def test_dismissed_transcription_never_reaches_clipboard_or_beep(monkeypatch):
     import main
     from utils import ConfigManager
@@ -634,11 +592,17 @@ def test_dismissed_transcription_never_reaches_clipboard_or_beep(monkeypatch):
         def start(self):
             self.starts += 1
 
+    class StatusWindow:
+        @staticmethod
+        def isVisible():
+            return False
+
     class FakeApp:
         recording_start_time = 1.0
         processing_result = False
         suppress_current_result = True
         key_listener = Listener()
+        status_window = StatusWindow()
         copied = []
 
         def _copy_to_clipboard(self, value):
@@ -648,7 +612,6 @@ def test_dismissed_transcription_never_reaches_clipboard_or_beep(monkeypatch):
     def fake_config(*keys):
         values = {
             ("misc", "noise_on_completion"): False,
-            ("misc", "hide_status_window"): True,
         }
         return values.get(tuple(keys))
 

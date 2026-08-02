@@ -153,14 +153,13 @@ def test_record_audio_prefers_wasapi_default_at_native_rate(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("new_default", "expected_retention"),
-    [(1, False), (0, True)],
+    "new_default",
+    [1, 0],
     ids=["switch-to-webcam", "switch-to-pro-x"],
 )
 def test_record_audio_refreshes_default_device_before_each_snippet(
     monkeypatch,
     new_default,
-    expected_retention,
 ):
     import result_thread
     from result_thread import ResultThread
@@ -235,7 +234,6 @@ def test_record_audio_refreshes_default_device_before_each_snippet(
     assert refresh_calls == ["terminate", "initialize"]
     assert opened == [(new_default, 48000, 1440)]
     assert thread.sample_rate == 48000
-    assert thread.retain_snippet_audio is expected_retention
     assert audio is not None
     assert len(audio) == 4 * 1440
 
@@ -305,12 +303,11 @@ def test_fallback_input_uses_its_own_native_sample_rate(monkeypatch):
 
     assert opened == [(0, 48000, 1440), (1, 44100, 1323)]
     assert thread.sample_rate == 44100
-    assert thread.retain_snippet_audio is False
     assert audio is not None
     assert len(audio) == 4 * 1323
 
 
-def test_c920_uses_its_live_wdm_endpoint_without_voice_clone_retention(monkeypatch):
+def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
     import result_thread
     from result_thread import ResultThread
 
@@ -373,43 +370,8 @@ def test_c920_uses_its_live_wdm_endpoint_without_voice_clone_retention(monkeypat
 
     assert opened == [(1, 32000, 960)]
     assert thread.sample_rate == 32000
-    assert thread.retain_snippet_audio is False
     assert audio is not None
     assert len(audio) == 4 * 960
-
-
-def test_voice_clone_retention_requires_pro_x_wasapi(monkeypatch):
-    import result_thread
-
-    devices = [
-        {
-            "name": "Microphone (5- Logitech USB Headset Wireless Gaming Headset)",
-            "hostapi": 0,
-        },
-        {
-            "name": "Microphone (5- Logitech USB Headset Wireless Gaming Headset)",
-            "hostapi": 1,
-        },
-        {"name": "Microphone (HD Pro Webcam C920)", "hostapi": 1},
-    ]
-    hostapis = [
-        {"name": "MME"},
-        {"name": "Windows WASAPI"},
-    ]
-    monkeypatch.setattr(
-        result_thread.sd,
-        "query_devices",
-        lambda device: devices[device],
-    )
-    monkeypatch.setattr(
-        result_thread.sd,
-        "query_hostapis",
-        lambda index: hostapis[index],
-    )
-
-    assert result_thread._is_voice_clone_source_device(0) is False
-    assert result_thread._is_voice_clone_source_device(1) is True
-    assert result_thread._is_voice_clone_source_device(2) is False
 
 
 def test_cancel_discards_audio_before_transcription(monkeypatch):
@@ -440,16 +402,11 @@ def test_cancel_discards_audio_before_transcription(monkeypatch):
     assert results == []
 
 
-@pytest.mark.parametrize("retain_snippet_audio", [False, True])
-def test_result_thread_passes_selected_source_retention_to_transcription(
-    monkeypatch,
-    retain_snippet_audio,
-):
+def test_result_thread_transcribes_without_audio_retention_argument(monkeypatch):
     import result_thread
     from result_thread import ResultThread
 
     thread = ResultThread()
-    thread.retain_snippet_audio = retain_snippet_audio
     captured = []
     results = []
     thread.resultSignal.connect(results.append)
@@ -458,18 +415,47 @@ def test_result_thread_passes_selected_source_retention_to_transcription(
         thread.sample_rate = 48000
         return np.ones(4800, dtype=np.int16)
 
-    def transcribe(audio, sample_rate, *, retain_snippet_audio):
-        captured.append((len(audio), sample_rate, retain_snippet_audio))
+    def transcribe(audio, sample_rate):
+        captured.append((len(audio), sample_rate))
         return "captured"
 
     monkeypatch.setattr(thread, "_record_audio", record_audio)
-    monkeypatch.setattr(result_thread, "_save_rolling_tail_audio", lambda *_args: None)
     monkeypatch.setattr(result_thread, "transcribe", transcribe)
 
     thread.run()
 
-    assert captured == [(4800, 48000, retain_snippet_audio)]
+    assert captured == [(4800, 48000)]
     assert results == ["captured"]
+
+
+@pytest.mark.parametrize("transcription_outcome", ["empty", "error"])
+def test_result_thread_never_persists_snippet_audio(
+    tmp_path,
+    monkeypatch,
+    transcription_outcome,
+):
+    import result_thread
+    from result_thread import ResultThread
+
+    thread = ResultThread()
+
+    def record_audio():
+        thread.sample_rate = 48000
+        return np.ones(4800, dtype=np.int16)
+
+    def transcribe(_audio, sample_rate):
+        assert sample_rate == 48000
+        if transcription_outcome == "error":
+            raise RuntimeError("expected test failure")
+        return ""
+
+    monkeypatch.setattr(result_thread, "_DEBUG_LOG", tmp_path / "debug.log")
+    monkeypatch.setattr(thread, "_record_audio", record_audio)
+    monkeypatch.setattr(result_thread, "transcribe", transcribe)
+
+    thread.run()
+
+    assert list(tmp_path.rglob("*.wav")) == []
 
 
 def test_stop_recording_logs_the_explicit_caller_reason(monkeypatch):

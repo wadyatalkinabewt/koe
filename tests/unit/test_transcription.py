@@ -243,76 +243,7 @@ def test_snippet_call_path_sends_no_verbatim(monkeypatch):
     assert ("no_verbatim", "true") in captured["data"]
 
 
-def test_snippet_master_over_five_seconds_is_saved_at_native_rate(
-    tmp_path,
-    monkeypatch,
-):
-    import transcription
-
-    snippets_dir = tmp_path / "Snippets"
-    monkeypatch.setattr(
-        transcription.ConfigManager,
-        "get_config_value",
-        lambda *keys: (
-            str(snippets_dir) if tuple(keys) == ("misc", "snippets_folder") else None
-        ),
-    )
-    monkeypatch.setattr(
-        transcription,
-        "transcribe_elevenlabs",
-        lambda _audio, sample_rate: "",
-    )
-    monkeypatch.setattr(transcription, "save_rolling_transcription", lambda _text: None)
-    monkeypatch.setattr(transcription, "save_transcription_debug", lambda *_args: None)
-
-    audio = np.resize(np.arange(1000, dtype=np.int16), 6 * 48000)
-    assert transcription.transcribe(
-        audio,
-        sample_rate=48000,
-        retain_snippet_audio=True,
-    ) == ""
-
-    saved = list((snippets_dir / "Audio Files").glob("snippet_*.wav"))
-    assert len(saved) == 1
-    with wave.open(str(saved[0]), "rb") as wav_file:
-        assert wav_file.getnchannels() == 1
-        assert wav_file.getsampwidth() == 2
-        assert wav_file.getframerate() == 48000
-        assert wav_file.getnframes() == len(audio)
-
-
-def test_snippet_master_at_five_seconds_is_not_saved(tmp_path, monkeypatch):
-    import transcription
-
-    snippets_dir = tmp_path / "Snippets"
-    monkeypatch.setattr(
-        transcription.ConfigManager,
-        "get_config_value",
-        lambda *keys: (
-            str(snippets_dir) if tuple(keys) == ("misc", "snippets_folder") else None
-        ),
-    )
-    monkeypatch.setattr(
-        transcription,
-        "transcribe_elevenlabs",
-        lambda _audio, sample_rate: "Short",
-    )
-    monkeypatch.setattr(transcription, "save_rolling_transcription", lambda _text: None)
-    monkeypatch.setattr(transcription, "save_transcription_debug", lambda *_args: None)
-
-    transcription.transcribe(
-        np.ones(5 * 48000, dtype=np.int16),
-        sample_rate=48000,
-        retain_snippet_audio=True,
-    )
-
-    assert not (snippets_dir / "Audio Files").exists()
-
-
-def test_non_pro_x_snippet_is_transcribed_without_saving_master(
-    tmp_path,
-    monkeypatch,
-):
+def test_snippet_is_transcribed_without_creating_audio_storage(tmp_path, monkeypatch):
     import transcription
 
     snippets_dir = tmp_path / "Snippets"
@@ -328,19 +259,15 @@ def test_non_pro_x_snippet_is_transcribed_without_saving_master(
         transcription,
         "transcribe_elevenlabs",
         lambda audio, sample_rate: transcribed.append((len(audio), sample_rate))
-        or "Webcam input works.",
+        or "Snippet input works.",
     )
     monkeypatch.setattr(transcription, "save_rolling_transcription", lambda _text: None)
     monkeypatch.setattr(transcription, "save_transcription_debug", lambda *_args: None)
 
     audio = np.ones(6 * 48000, dtype=np.int16)
-    result = transcription.transcribe(
-        audio,
-        sample_rate=48000,
-        retain_snippet_audio=False,
-    )
+    result = transcription.transcribe(audio, sample_rate=48000)
 
-    assert result.strip() == "Webcam input works."
+    assert result.strip() == "Snippet input works."
     assert transcribed == [(len(audio), 48000)]
     assert not (snippets_dir / "Audio Files").exists()
 

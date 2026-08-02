@@ -84,7 +84,6 @@ def write_setup_files(user_name: str, elevenlabs_key: str, openrouter_key: str =
         },
         "misc": {
             "print_to_terminal": False,
-            "hide_status_window": False,
             "noise_on_completion": True,
             "snippets_folder": None,
         },

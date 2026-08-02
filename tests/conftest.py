@@ -53,7 +53,6 @@ def mock_config():
             "last_meeting_mode": "online_one_on_one",
         },
         "misc": {
-            "hide_status_window": False,
             "noise_on_completion": True,
             "snippets_folder": None,
             "print_to_terminal": False,

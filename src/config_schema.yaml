@@ -59,10 +59,6 @@ misc:
     value: false
     type: bool
     description: "Print status and transcript text when a console is attached."
-  hide_status_window:
-    value: false
-    type: bool
-    description: "Hide the snippet status card."
   noise_on_completion:
     value: true
     type: bool

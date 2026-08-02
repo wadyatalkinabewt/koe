@@ -13,9 +13,9 @@ Koe is a Windows-only tray application with two workflows:
 - Every transcription request uses `no_verbatim=true`.
 - Snippet formatting may only normalize whitespace, punctuation, and the
   paste-friendly trailing space.
-- Snippets longer than five seconds retain their native mono PCM master under
-  `Snippets/Audio Files` only when captured from the Logitech USB Headset Wireless
-  WASAPI endpoint at its native sample rate.
+- Snippet audio is transient and must never be written to disk. Only rotating
+  snippet Markdown and text diagnostics may persist. Scribe meeting audio
+  remains independently optional.
 - OpenRouter is confined to `src/meeting/summarizer.py` and Scribe summaries.
 - The snippet hotkey is press-to-toggle. ElevenLabs remains the only
   transcription path.
@@ -75,7 +75,7 @@ preserve packaged runtime state.
 - `src/commands.py`: localhost single-instance shortcut command channel.
 - `src/paths.py`: source-local and packaged per-user runtime locations.
 - `src/result_thread.py`: snippet microphone capture and lifecycle.
-- `src/transcription.py`: ElevenLabs requests and rotating snippet storage.
+- `src/transcription.py`: ElevenLabs requests and rotating snippet text storage.
 - `src/meeting/capture.py`: mic/loopback capture, mono mixing, and host mapping.
 - `src/meeting/app.py`: Scribe UI and single-upload worker.
 - `src/meeting/transcript.py`: Markdown transcript rendering.

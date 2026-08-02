@@ -1,11 +1,9 @@
 import time
 import traceback
-import wave
 import numpy as np
 import sounddevice as sd
 from PyQt5.QtCore import QThread, QMutex, pyqtSignal
 from queue import Empty, Queue
-from pathlib import Path
 from datetime import datetime
 
 from transcription import transcribe
@@ -16,15 +14,12 @@ from utils import ConfigManager
 _DEBUG_LOG = logs_dir() / "debug.log"
 _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
 _MAX_LOG_SIZE = 1 * 1024 * 1024  # 1MB
-_MAX_TAIL_AUDIO_DEBUG_FILES = 5
-_TAIL_AUDIO_DEBUG_SECONDS = 20
 _HOST_API_PRIORITY = {
     "Windows WASAPI": 0,
     "Windows DirectSound": 1,
     "MME": 2,
     "Windows WDM-KS": 3,
 }
-_VOICE_CLONE_MIC_NAME = "logitech USB Headset wireless gaming headset"
 _WDM_COMPATIBILITY_MIC_NAMES = ("hd pro webcam c920",)
 
 def _rotate_log_if_needed():
@@ -47,37 +42,6 @@ def _debug(msg: str):
             f.write(f"[{timestamp}] {msg}\n")
     except:
         pass
-
-
-def _save_rolling_tail_audio(audio_data: np.ndarray, sample_rate: int):
-    """Keep the final seconds of recent snippets for local cutoff debugging."""
-    if audio_data is None or len(audio_data) == 0:
-        return
-    try:
-        debug_dir = _DEBUG_LOG.parent / "snippet_tail_audio"
-        debug_dir.mkdir(exist_ok=True)
-
-        oldest = debug_dir / f"tail_{_MAX_TAIL_AUDIO_DEBUG_FILES}.wav"
-        if oldest.exists():
-            oldest.unlink()
-        for i in range(_MAX_TAIL_AUDIO_DEBUG_FILES - 1, 0, -1):
-            old = debug_dir / f"tail_{i}.wav"
-            new = debug_dir / f"tail_{i+1}.wav"
-            if old.exists():
-                old.rename(new)
-
-        sample_rate = int(sample_rate or 16000)
-        tail_samples = sample_rate * _TAIL_AUDIO_DEBUG_SECONDS
-        tail = np.asarray(audio_data[-tail_samples:], dtype=np.int16)
-        path = debug_dir / "tail_1.wav"
-        with wave.open(str(path), 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(tail.tobytes())
-        _debug(f"  Saved tail audio debug: {path}")
-    except Exception as e:
-        _debug(f"  Failed to save tail audio debug: {e}")
 
 
 def _normalise_sound_device(device):
@@ -236,19 +200,6 @@ def _device_host_api(device) -> str:
         return "unknown"
 
 
-def _is_voice_clone_source_device(device) -> bool:
-    """Return whether this is the native WASAPI Logitech USB Headset endpoint."""
-    try:
-        info = sd.query_devices(device)
-        name = str(info.get("name") or "").lower()
-        return (
-            _VOICE_CLONE_MIC_NAME in name
-            and _device_host_api(device) == "Windows WASAPI"
-        )
-    except Exception:
-        return False
-
-
 def _matching_input_device(reference_device, host_api_name: str):
     """Find the same named input through another Windows host API."""
     try:
@@ -273,8 +224,8 @@ def _matching_input_device(reference_device, host_api_name: str):
 
 
 def _preferred_capture_device(wasapi_default):
-    """Resolve the capture endpoint without weakening USB Headset retention rules."""
-    if wasapi_default is None or _is_voice_clone_source_device(wasapi_default):
+    """Resolve the live capture endpoint for the current Windows default."""
+    if wasapi_default is None:
         return wasapi_default
     try:
         info = sd.query_devices(wasapi_default)
@@ -284,8 +235,7 @@ def _preferred_capture_device(wasapi_default):
 
     # The C920's shared-mode PortAudio endpoints can open successfully while
     # delivering only digital silence on this Windows driver. Its matching
-    # WDM-KS endpoint carries the real microphone signal. This route is only
-    # for transcription; it can never pass the USB Headset WASAPI retention check.
+    # WDM-KS endpoint carries the real microphone signal.
     if any(marker in name for marker in _WDM_COMPATIBILITY_MIC_NAMES):
         compatibility_device = _matching_input_device(
             wasapi_default,
@@ -348,7 +298,6 @@ class ResultThread(QThread):
         self.is_recording = False
         self.is_running = True
         self.sample_rate = None
-        self.retain_snippet_audio = False
         self.cancel_requested = False
         self.mutex = QMutex()
 
@@ -413,17 +362,6 @@ class ResultThread(QThread):
 
             if not self.is_running:
                 _debug("  Early exit after recording: is_running=False")
-                # Save audio if recording was substantial (>2s) so it's not lost
-                if audio_data is not None and audio_data.size > 0:
-                    duration_sec = audio_data.size / (self.sample_rate or 16000)
-                    if duration_sec > 2.0:
-                        try:
-                            import scipy.io.wavfile as wav
-                            cancelled_path = _DEBUG_LOG.parent / f"failed_audio_cancelled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-                            wav.write(str(cancelled_path), self.sample_rate or 16000, audio_data)
-                            _debug(f"  Saved cancelled recording ({duration_sec:.1f}s) to {cancelled_path}")
-                        except Exception as save_err:
-                            _debug(f"  Failed to save cancelled audio: {save_err}")
                 # Emit empty result so status window gets closed properly
                 self.resultSignal.emit('')
                 return
@@ -437,7 +375,6 @@ class ResultThread(QThread):
             _debug("  Emitting 'transcribing' status")
             self.statusSignal.emit('transcribing')
             ConfigManager.console_print('Transcribing...')
-            _save_rolling_tail_audio(audio_data, self.sample_rate or 16000)
 
             # Time the transcription process
             _debug("  Starting transcription...")
@@ -445,7 +382,6 @@ class ResultThread(QThread):
             result = transcribe(
                 audio_data,
                 sample_rate=self.sample_rate or 16000,
-                retain_snippet_audio=self.retain_snippet_audio,
             )
             end_time = time.time()
 
@@ -453,21 +389,8 @@ class ResultThread(QThread):
             _debug(f"  Transcription done in {transcription_time:.2f}s, result length={len(result)}")
             ConfigManager.console_print(f'Transcription completed in {transcription_time:.2f} seconds. Post-processed line: {result}')
 
-            # If transcription returned empty/whitespace but we had substantial audio,
-            # save the audio as a backup (possible silent engine failure)
-            audio_duration = len(audio_data) / (self.sample_rate or 16000)
-            if (not result or not result.strip()) and audio_duration > 2.0:
-                _debug(f"  WARNING: Empty transcription for {audio_duration:.1f}s audio - saving backup")
-                try:
-                    failed_audio_path = _DEBUG_LOG.parent / f"failed_audio_empty_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-                    import scipy.io.wavfile as wav
-                    wav.write(str(failed_audio_path), self.sample_rate or 16000, audio_data)
-                    _debug(f"  Saved empty-result audio to {failed_audio_path}")
-                except Exception as save_err:
-                    _debug(f"  Failed to save audio: {save_err}")
-
             # Always emit result after transcription completes, even if cancelled
-            # (Snippet was already saved, user deserves the clipboard copy and beep)
+            # (the user still deserves the clipboard copy and completion feedback)
             _debug("  Emitting result signal")
             self.resultSignal.emit(result)
             _debug("  Result signal emitted successfully")
@@ -476,16 +399,6 @@ class ResultThread(QThread):
             _debug(f"  EXCEPTION: {e}")
             _debug(f"  Traceback: {traceback.format_exc()}")
             traceback.print_exc()
-
-            # Save audio to disk if we have it (don't lose the recording)
-            if audio_data is not None and len(audio_data) > 0:
-                try:
-                    failed_audio_path = _DEBUG_LOG.parent / f"failed_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-                    import scipy.io.wavfile as wav
-                    wav.write(str(failed_audio_path), self.sample_rate or 16000, audio_data)
-                    _debug(f"  Saved failed audio to {failed_audio_path}")
-                except Exception as save_err:
-                    _debug(f"  Failed to save audio: {save_err}")
 
             error_msg = str(e) if str(e) else "Transcription failed"
             self.errorSignal.emit(error_msg)
@@ -498,7 +411,7 @@ class ResultThread(QThread):
 
     def _record_audio(self):
         """
-        Record audio from the microphone and save it to a temporary file.
+        Record audio from the microphone in memory.
 
         :return: numpy array of audio data, or None if the recording is too short
         """
@@ -545,16 +458,11 @@ class ResultThread(QThread):
                 preferred_device,
                 audio_callback,
             )
-            self.retain_snippet_audio = _is_voice_clone_source_device(selected_device)
             _debug(
                 "  Capture configured: "
                 f"device={_device_label(selected_device)}, "
                 f"host_api={_device_host_api(selected_device)}, "
                 f"sample_rate={self.sample_rate}, frame_size={frame_size}"
-            )
-            _debug(
-                "  Voice-clone retention: "
-                f"{'enabled' if self.retain_snippet_audio else 'disabled'}"
             )
             if selected_device != preferred_device:
                 _debug(f"  Using fallback input device: {_device_label(selected_device)}")

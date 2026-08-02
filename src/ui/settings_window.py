@@ -205,8 +205,6 @@ class SettingsWindow(BaseWindow):
             storage.layout(),
             f"Leave empty for {default_meetings_dir()}",
         )
-        self.save_meeting_audio_checkbox = ToggleRow("Save Scribe meeting audio")
-        storage.layout().addWidget(self.save_meeting_audio_checkbox)
         self.content_layout.addWidget(storage)
 
         scribe = self._card(
@@ -215,6 +213,8 @@ class SettingsWindow(BaseWindow):
         )
         self.save_markdown_checkbox = ToggleRow("Save Markdown copies")
         scribe.layout().addWidget(self.save_markdown_checkbox)
+        self.save_meeting_audio_checkbox = ToggleRow("Save Scribe meeting audio")
+        scribe.layout().addWidget(self.save_meeting_audio_checkbox)
         self.content_layout.addWidget(scribe)
 
         snippet = self._card("Snippet")
@@ -223,9 +223,7 @@ class SettingsWindow(BaseWindow):
         self.hotkey_input.setPlaceholderText("ctrl+shift+space")
         snippet.layout().addWidget(self.hotkey_input)
         self.beep_checkbox = ToggleRow("Play a sound when a snippet is ready")
-        self.status_checkbox = ToggleRow("Show the snippet status card")
         snippet.layout().addWidget(self.beep_checkbox)
-        snippet.layout().addWidget(self.status_checkbox)
         self.content_layout.addWidget(snippet)
 
         transcription = self._card("Transcription")
@@ -319,9 +317,6 @@ class SettingsWindow(BaseWindow):
         self.beep_checkbox.setChecked(
             bool(ConfigManager.get_config_value("misc", "noise_on_completion"))
         )
-        self.status_checkbox.setChecked(
-            not bool(ConfigManager.get_config_value("misc", "hide_status_window"))
-        )
         self.keyterms_checkbox.setChecked(
             bool(
                 ConfigManager.get_config_value(
@@ -348,7 +343,6 @@ class SettingsWindow(BaseWindow):
             self.save_meeting_audio_checkbox,
             self.save_markdown_checkbox,
             self.beep_checkbox,
-            self.status_checkbox,
             self.keyterms_checkbox,
         ):
             toggle.toggled.connect(self._schedule_save)
@@ -416,9 +410,6 @@ class SettingsWindow(BaseWindow):
         )
         ConfigManager.set_config_value(
             self.beep_checkbox.isChecked(), "misc", "noise_on_completion"
-        )
-        ConfigManager.set_config_value(
-            not self.status_checkbox.isChecked(), "misc", "hide_status_window"
         )
         ConfigManager.set_config_value(
             self.keyterms_checkbox.isChecked(),
