@@ -38,6 +38,13 @@ MIN_ELEVENLABS_DURATION_SECONDS = 0.1
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 ELEVENLABS_API_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
 
+# Exact-token corrections for stable Scribe substitutions that vocabulary
+# keyterms do not prevent. Keep this list deliberately small and evidence-led.
+TRANSCRIPT_CORRECTIONS = {
+    "groq": "Grok",
+    "Taylor": "Taylor",
+}
+
 
 def _debug(message: str) -> None:
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -313,6 +320,28 @@ def _elevenlabs_result_text(result: dict) -> str:
     return str(result.get("text") or "").strip() if isinstance(result, dict) else ""
 
 
+def apply_transcript_corrections(text: str) -> str:
+    """Correct known whole-token Scribe substitutions while preserving case."""
+    if not text:
+        return text
+
+    pattern = re.compile(
+        r"(?<!\w)(" + "|".join(map(re.escape, TRANSCRIPT_CORRECTIONS)) + r")(?!\w)",
+        flags=re.IGNORECASE,
+    )
+
+    def replace(match: re.Match) -> str:
+        original = match.group(0)
+        corrected = TRANSCRIPT_CORRECTIONS[original.lower()]
+        if original.isupper():
+            return corrected.upper()
+        if original.islower():
+            return corrected.lower()
+        return corrected
+
+    return pattern.sub(replace, text)
+
+
 def _segments_from_elevenlabs_words(
     result: dict,
     label: str,
@@ -322,7 +351,7 @@ def _segments_from_elevenlabs_words(
 ) -> list[dict]:
     words = result.get("words") if isinstance(result, dict) else None
     if not isinstance(words, list):
-        text = _elevenlabs_result_text(result)
+        text = apply_transcript_corrections(_elevenlabs_result_text(result))
         return [{"start": offset_sec, "end": offset_sec, "text": text, "label": label}] if text else []
 
     segments: list[dict] = []
@@ -334,7 +363,7 @@ def _segments_from_elevenlabs_words(
 
     def flush() -> None:
         nonlocal current_words, current_start, current_end, current_label
-        text = " ".join(current_words).strip()
+        text = apply_transcript_corrections(" ".join(current_words).strip())
         if text and current_start is not None:
             segments.append({
                 "start": current_start + offset_sec,
@@ -480,10 +509,11 @@ def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> s
 
 
 def post_process_transcription(transcription: str) -> str:
-    """Apply word-preserving formatting for clipboard-friendly snippet text."""
+    """Apply approved corrections and clipboard-friendly snippet formatting."""
     from utils import TextProcessor
 
-    return TextProcessor.process(transcription, add_trailing_space=True)
+    corrected = apply_transcript_corrections(transcription)
+    return TextProcessor.process(corrected, add_trailing_space=True)
 
 
 def transcribe(

@@ -11,8 +11,9 @@ Koe is a Windows-only tray application with two workflows:
 
 - ElevenLabs Scribe v2 is the only speech-to-text backend.
 - Every transcription request uses `no_verbatim=true`.
-- Snippet formatting may only normalize whitespace, punctuation, and the
-  paste-friendly trailing space.
+- Snippet formatting may normalize whitespace, punctuation, the paste-friendly
+  trailing space, and the small exact-token correction map in
+  `src/transcription.py`. Add corrections only for stable observed substitutions.
 - Snippet audio is transient and must never be written to disk. Only rotating
   snippet Markdown and text diagnostics may persist. Scribe meeting audio
   remains independently optional.

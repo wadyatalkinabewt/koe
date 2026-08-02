@@ -10,6 +10,10 @@ Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
 Every transcription request uses `no_verbatim=true`. ElevenLabs is the single
 speech-to-text path.
 
+After transcription, Koe applies a deliberately small exact-token correction
+map for stable Scribe substitutions that vocabulary hints do not prevent. The
+same corrections apply to snippets and Scribe meeting transcripts.
+
 Snippet recordings stay in memory only and are never saved as audio. The
 **Save Scribe meeting audio** preference applies only to Scribe meetings.
 

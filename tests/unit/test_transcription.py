@@ -139,6 +139,34 @@ def test_non_diarized_words_split_when_local_source_label_changes():
     ]
 
 
+def test_known_transcript_substitutions_are_corrected_as_whole_tokens():
+    import transcription
+
+    assert transcription.apply_transcript_corrections(
+        "Groq, groq, and GROQ heard Taylor, Taylor, and Taylor."
+    ) == "Grok, grok, and GROK heard Taylor, Taylor, and Taylor."
+    assert transcription.apply_transcript_corrections(
+        "GroqCloud and Taylor are different tokens."
+    ) == "GroqCloud and Taylor are different tokens."
+
+
+def test_known_transcript_substitutions_apply_to_scribe_segments():
+    import transcription
+
+    result = {
+        "words": [
+            {"type": "word", "text": "Ask", "start": 0.0, "end": 0.2},
+            {"type": "word", "text": "Taylor", "start": 0.2, "end": 0.4},
+            {"type": "word", "text": "about", "start": 0.4, "end": 0.6},
+            {"type": "word", "text": "Groq.", "start": 0.6, "end": 0.8},
+        ]
+    }
+
+    assert transcription._segments_from_elevenlabs_words(result, label="Speaker") == [
+        {"start": 0.0, "end": 0.8, "text": "Ask Taylor about Grok.", "label": "Speaker"}
+    ]
+
+
 def test_group_file_path_streams_one_request_with_speaker_options(tmp_path, monkeypatch):
     import transcription
 
@@ -279,6 +307,14 @@ def test_local_formatting_preserves_spoken_words():
     assert TextProcessor.process(spoken, add_trailing_space=True) == (
         "Um I I think, you know, this is fine. "
     )
+
+
+def test_snippet_post_processing_applies_known_substitutions():
+    import transcription
+
+    assert transcription.post_process_transcription(
+        "Ask Taylor whether Groq can help"
+    ) == "Ask Taylor whether Grok can help. "
 
 
 def test_quiet_audio_normalization_is_bounded():
