@@ -45,6 +45,7 @@ TRANSCRIPT_CORRECTIONS = {
     "Taylor": "Taylor",
     "Ack Me": "Acme",
     "Ack Me": "Acme",
+    "Ack Me": "Acme",
 }
 
 
