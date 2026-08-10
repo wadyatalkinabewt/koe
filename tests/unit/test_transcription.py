@@ -143,19 +143,21 @@ def test_known_transcript_substitutions_are_corrected_as_whole_tokens():
     import transcription
 
     assert transcription.apply_transcript_corrections(
-        "Groq, groq, and GROQ heard Taylor, Taylor, and Taylor at "
+        "Groq, groq, and GROQ heard Taylor, Taylor, Taylor, "
+        "Taylor, Taylor, Taylor, Robin, Robin, and Robin at "
         "Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, "
         "Ack Me, Ack Me, Ack Me, "
         "Ack Me, Ack Me, and Ack Me."
     ) == (
-        "Grok, grok, and GROK heard Taylor, Taylor, and Taylor "
+        "Grok, grok, and GROK heard Taylor, Taylor, Taylor, "
+        "Taylor, Taylor, Taylor, Robin, Robin, and Robin "
         "at Acme, Acme, Acme, Acme, Acme, Acme, "
         "Acme, Acme, Acme, "
         "Acme, Acme, and Acme."
     )
     assert transcription.apply_transcript_corrections(
-        "GroqCloud, Taylor, AckMeson, AckMeson, AckMeson, and AckMes are different tokens."
-    ) == "GroqCloud, Taylor, AckMeson, AckMeson, AckMeson, and AckMes are different tokens."
+        "GroqCloud, Taylors, Robins, AckMeson, AckMeson, AckMeson, and AckMes are different tokens."
+    ) == "GroqCloud, Taylors, Robins, AckMeson, AckMeson, AckMeson, and AckMes are different tokens."
 
 
 def test_known_transcript_substitutions_apply_to_scribe_segments():

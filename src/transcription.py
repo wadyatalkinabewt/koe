@@ -43,6 +43,8 @@ ELEVENLABS_API_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY"
 TRANSCRIPT_CORRECTIONS = {
     "groq": "Grok",
     "Taylor": "Taylor",
+    "Taylor": "Taylor",
+    "Robin": "Robin",
     "Ack Me": "Acme",
     "Ack Me": "Acme",
     "Ack Me": "Acme",
