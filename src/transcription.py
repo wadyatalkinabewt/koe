@@ -45,6 +45,7 @@ TRANSCRIPT_CORRECTIONS = {
     "Taylor": "Taylor",
     "Taylor": "Taylor",
     "Robin": "Robin",
+    "mirror": "Morgan",
     "Ack Me": "Acme",
     "Ack Me": "Acme",
     "Ack Me": "Acme",
