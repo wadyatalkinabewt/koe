@@ -1,14 +1,16 @@
-"""
-AI summarization client using OpenRouter.
+"""Contextual speaker resolution and meeting summarization via OpenRouter.
 
-Default model is google/gemini-3.6-flash via OpenRouter. Provider selection is
+Default model is google/gemini-3.7-flash via OpenRouter. Provider selection is
 left to OpenRouter so account privacy policies and available endpoints are
 respected. To switch models, change SummarizerClient.MODEL.
 """
 
-import time
+from dataclasses import dataclass
+import json
 import os
-from typing import Optional, Callable
+import re
+import time
+from typing import Any, Callable, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -16,10 +18,109 @@ from dotenv import load_dotenv
 from paths import env_path
 
 
+_GENERIC_SPEAKER = re.compile(r"^Speaker\s+\d+$", flags=re.IGNORECASE)
+_TRANSCRIPT_UTTERANCE = re.compile(
+    r"^\*\*\[[^\]]+\]\s+(.+?)\*\*:\s*(.+)$"
+)
+_SELF_IDENTIFICATION = re.compile(
+    r"\b(?:i\s+am|i\s*m|my\s+name\s+is)\s+(.+)$",
+    flags=re.IGNORECASE,
+)
+_ROLE_LABELS = {
+    "ot",
+    "client",
+    "customer",
+    "facilitator",
+    "interpreter",
+    "lawyer",
+    "manager",
+    "representative",
+    "staff",
+    "support",
+    "team",
+}
+
+
+@dataclass(frozen=True)
+class MeetingAnalysis:
+    """Validated model output used by both meeting documents."""
+
+    summary: str
+    speaker_mapping: dict[str, str]
+
+
+def _normalise_evidence(text: str) -> str:
+    """Normalise transcript excerpts for conservative exact-quote checks."""
+    return re.sub(r"[\W_]+", " ", str(text).casefold()).strip()
+
+
+def _speaker_labels_from_transcript(transcript_content: str) -> list[str]:
+    """Return labels in first-utterance order from rendered transcript Markdown."""
+    labels: list[str] = []
+    for line in transcript_content.splitlines():
+        match = _TRANSCRIPT_UTTERANCE.match(line.strip())
+        if not match:
+            continue
+        label = match.group(1).strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _transcript_utterances(transcript_content: str) -> list[dict[str, Any]]:
+    """Extract auditable label/text pairs from rendered transcript Markdown."""
+    utterances: list[dict[str, Any]] = []
+    for line in transcript_content.splitlines():
+        match = _TRANSCRIPT_UTTERANCE.match(line.strip())
+        if not match:
+            continue
+        utterances.append(
+            {
+                "label": match.group(1).strip(),
+                "text": match.group(2).strip(),
+                "normalised": _normalise_evidence(match.group(2)),
+            }
+        )
+    return utterances
+
+
+def _label_core_tokens(label: str) -> list[str]:
+    """Return the identity-bearing portion of a proposed display label."""
+    without_qualifier = re.sub(r"\([^)]*\)", " ", label)
+    return [
+        token
+        for token in _normalise_evidence(without_qualifier).split()
+        if len(token) >= 2
+    ]
+
+
+def _is_role_label(label: str) -> bool:
+    tokens = _label_core_tokens(label)
+    return bool(tokens) and (
+        label.strip().isupper()
+        or all(token in _ROLE_LABELS for token in tokens)
+    )
+
+
+def replace_speaker_labels(text: str, mapping: dict[str, str]) -> str:
+    """Replace exact generic labels without touching substrings or ordinary words."""
+    rewritten = text
+    for source, target in sorted(
+        mapping.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        rewritten = re.sub(
+            rf"(?<![\w]){re.escape(source)}(?![\w])",
+            lambda _match, replacement=target: replacement,
+            rewritten,
+            flags=re.IGNORECASE,
+        )
+    return rewritten
+
+
 class SummarizerClient:
     """Client for AI-powered meeting summarization via OpenRouter."""
 
-    MODEL = "google/gemini-3.6-flash"
+    MODEL = "google/gemini-3.7-flash"
     MAX_RETRIES = 3
     INITIAL_RETRY_DELAY = 2.0  # seconds
     REQUEST_TIMEOUT = 300  # 5 minutes per attempt
@@ -49,26 +150,33 @@ class SummarizerClient:
         transcript_content: str,
         status_callback: Optional[Callable[[str], None]] = None
     ) -> str:
+        """Generate only the summary for callers that do not need identity data."""
+        return self.analyze(
+            transcript_content,
+            status_callback=status_callback,
+        ).summary
+
+    def analyze(
+        self,
+        transcript_content: str,
+        speaker_labels: Optional[list[str]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
+    ) -> MeetingAnalysis:
+        """Generate a summary and a conservatively validated speaker map.
+
+        Only generic labels are eligible for contextual inference. The model's
+        evidence quotes are checked against the labelled transcript before a
+        proposed name can affect either meeting document.
         """
-        Generate a comprehensive summary of a meeting transcript.
-
-        Args:
-            transcript_content: Full transcript markdown content
-            status_callback: Optional callback for status updates
-
-        Returns:
-            Generated summary in markdown format
-
-        Raises:
-            Exception: If summarization fails after all retries
-        """
-        prompt = self._build_prompt(transcript_content)
+        labels = list(speaker_labels or _speaker_labels_from_transcript(transcript_content))
+        prompt = self._build_prompt(transcript_content, speaker_labels=labels)
 
         body = {
             "model": self.MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 4096,
             "temperature": 0.0,
+            "response_format": {"type": "json_object"},
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -103,7 +211,14 @@ class SummarizerClient:
                     last_error = f"API error: {data['error']}"
                     continue
 
-                summary = data["choices"][0]["message"]["content"]
+                raw_content = data["choices"][0]["message"]["content"]
+                try:
+                    payload = self._decode_model_payload(raw_content)
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    last_error = f"Invalid structured summary response: {exc}"
+                    continue
+
+                summary = payload["summary_markdown"]
                 missing_sections = [
                     section
                     for section in self.REQUIRED_SECTIONS
@@ -116,10 +231,27 @@ class SummarizerClient:
                     )
                     continue
 
-                if status_callback:
-                    status_callback("Summary generated successfully")
+                speaker_mapping = self._validate_speaker_inferences(
+                    payload["speaker_inferences"],
+                    transcript_content,
+                    labels,
+                )
+                summary = replace_speaker_labels(summary, speaker_mapping)
 
-                return summary
+                if status_callback:
+                    if speaker_mapping:
+                        status_callback(
+                            "Summary generated; "
+                            f"identified {len(speaker_mapping)} speaker"
+                            f"{'s' if len(speaker_mapping) != 1 else ''}"
+                        )
+                    else:
+                        status_callback("Summary generated successfully")
+
+                return MeetingAnalysis(
+                    summary=summary,
+                    speaker_mapping=speaker_mapping,
+                )
 
             except requests.exceptions.Timeout as e:
                 last_error = f"Request timeout: {e}"
@@ -129,6 +261,171 @@ class SummarizerClient:
                 last_error = f"Unexpected error: {e}"
 
         raise Exception(f"Summarization failed after {self.MAX_RETRIES} attempts: {last_error}")
+
+    @staticmethod
+    def _decode_model_payload(raw_content: Any) -> dict[str, Any]:
+        """Decode the required JSON envelope and reject ambiguous output shapes."""
+        if not isinstance(raw_content, str):
+            raise TypeError("message content is not text")
+        content = raw_content.strip()
+        if content.startswith("```") and content.endswith("```"):
+            content = re.sub(r"^```(?:json)?\s*", "", content, count=1)
+            content = re.sub(r"\s*```$", "", content, count=1)
+        payload = json.loads(content)
+        if not isinstance(payload, dict):
+            raise TypeError("top-level response must be an object")
+        summary = payload.get("summary_markdown")
+        inferences = payload.get("speaker_inferences")
+        if not isinstance(summary, str) or not summary.strip():
+            raise TypeError("summary_markdown must be non-empty text")
+        if not isinstance(inferences, list):
+            raise TypeError("speaker_inferences must be a list")
+        return {
+            "summary_markdown": summary.strip(),
+            "speaker_inferences": inferences,
+        }
+
+    @staticmethod
+    def _validate_speaker_inferences(
+        proposed: list[Any],
+        transcript_content: str,
+        speaker_labels: list[str],
+    ) -> dict[str, str]:
+        """Accept only high-confidence mappings backed by transcript excerpts."""
+        generic_by_key = {
+            label.casefold(): label
+            for label in speaker_labels
+            if _GENERIC_SPEAKER.fullmatch(label.strip())
+        }
+        trusted_targets = {
+            label.casefold()
+            for label in speaker_labels
+            if not _GENERIC_SPEAKER.fullmatch(label.strip())
+        }
+        if not generic_by_key:
+            return {}
+
+        utterances = _transcript_utterances(transcript_content)
+        transcript_normalised = _normalise_evidence(transcript_content)
+        accepted: list[tuple[str, str]] = []
+        used_sources: set[str] = set()
+        used_named_targets: set[str] = set()
+
+        for item in proposed:
+            if not isinstance(item, dict):
+                continue
+            source_raw = str(item.get("source_label") or "").strip()
+            target = str(item.get("proposed_label") or "").strip()
+            confidence = str(item.get("confidence") or "").strip().casefold()
+            source = generic_by_key.get(source_raw.casefold())
+            if (
+                not source
+                or source.casefold() in used_sources
+                or confidence != "high"
+                or not target
+                or len(target) > 80
+                or re.search(r"[\r\n<>*_`\[\]{}#|]", target)
+                or _GENERIC_SPEAKER.fullmatch(target)
+                or target.casefold() in trusted_targets
+            ):
+                continue
+
+            core_tokens = _label_core_tokens(target)
+            if not core_tokens or not any(
+                re.search(rf"\b{re.escape(token)}\b", transcript_normalised)
+                for token in core_tokens
+            ):
+                continue
+
+            evidence = item.get("evidence")
+            if not isinstance(evidence, list):
+                continue
+            verified: list[dict[str, Any]] = []
+            seen_quotes: set[tuple[str, str]] = set()
+            for evidence_item in evidence:
+                if not isinstance(evidence_item, dict):
+                    continue
+                evidence_label = str(evidence_item.get("speaker_label") or "").strip()
+                quote = str(evidence_item.get("exact_quote") or "").strip()
+                kind = str(evidence_item.get("kind") or "").strip().casefold()
+                quote_normalised = _normalise_evidence(quote)
+                quote_key = (evidence_label.casefold(), quote_normalised)
+                if len(quote_normalised) < 8 or quote_key in seen_quotes:
+                    continue
+                for index, utterance in enumerate(utterances):
+                    if (
+                        utterance["label"].casefold() == evidence_label.casefold()
+                        and quote_normalised in utterance["normalised"]
+                    ):
+                        verified.append(
+                            {
+                                "label": utterance["label"],
+                                "quote": quote_normalised,
+                                "kind": kind,
+                                "index": index,
+                            }
+                        )
+                        seen_quotes.add(quote_key)
+                        break
+
+            source_evidence = [
+                item
+                for item in verified
+                if item["label"].casefold() == source.casefold()
+            ]
+            name_evidence = [
+                item
+                for item in verified
+                if any(
+                    re.search(rf"\b{re.escape(token)}\b", item["quote"])
+                    for token in core_tokens
+                )
+            ]
+            self_identified = any(
+                item["kind"] == "self_identification"
+                and _SELF_IDENTIFICATION.search(item["quote"])
+                and any(
+                    re.search(rf"\b{re.escape(token)}\b", item["quote"])
+                    for token in core_tokens
+                )
+                for item in source_evidence
+            )
+            nearby_address_response = any(
+                abs(name_item["index"] - source_item["index"]) <= 3
+                for name_item in name_evidence
+                for source_item in source_evidence
+                if name_item["label"].casefold() != source.casefold()
+            )
+            if not self_identified and not (
+                len(verified) >= 2
+                and source_evidence
+                and name_evidence
+                and nearby_address_response
+            ):
+                continue
+
+            role_target = _is_role_label(target)
+            target_key = target.casefold()
+            if not role_target and target_key in used_named_targets:
+                continue
+            accepted.append((source, target))
+            used_sources.add(source.casefold())
+            if not role_target:
+                used_named_targets.add(target_key)
+
+        role_counts: dict[str, int] = {}
+        for _source, target in accepted:
+            if _is_role_label(target):
+                role_counts[target.casefold()] = role_counts.get(target.casefold(), 0) + 1
+        role_indexes: dict[str, int] = {}
+        mapping: dict[str, str] = {}
+        for source, target in accepted:
+            target_key = target.casefold()
+            if _is_role_label(target) and role_counts[target_key] > 1:
+                role_indexes[target_key] = role_indexes.get(target_key, 0) + 1
+                target = f"{target} {role_indexes[target_key]}"
+            mapping[source] = target
+        return mapping
 
     def _extract_metadata(self, transcript_content: str) -> dict:
         """
@@ -181,18 +478,32 @@ class SummarizerClient:
 
         return metadata
 
-    def _build_prompt(self, transcript_content: str) -> str:
+    def _build_prompt(
+        self,
+        transcript_content: str,
+        speaker_labels: Optional[list[str]] = None,
+    ) -> str:
         """
         Build the summarization prompt with anti-hallucination guidelines.
 
         Args:
             transcript_content: Full transcript markdown
+            speaker_labels: Final deterministic labels present in the transcript
 
         Returns:
             Complete prompt string
         """
         # Extract metadata from transcript
         metadata = self._extract_metadata(transcript_content)
+        labels = list(speaker_labels or _speaker_labels_from_transcript(transcript_content))
+        generic_labels = [
+            label for label in labels if _GENERIC_SPEAKER.fullmatch(label.strip())
+        ]
+        trusted_labels = [
+            label for label in labels if not _GENERIC_SPEAKER.fullmatch(label.strip())
+        ]
+        eligible_line = ", ".join(generic_labels) if generic_labels else "None"
+        trusted_line = ", ".join(trusted_labels) if trusted_labels else "None"
 
         # Build metadata header for output format (proper markdown hierarchy)
         # Format: # Title - DD Mon YYYY
@@ -224,18 +535,52 @@ class SummarizerClient:
         else:
             metadata_header = ""
 
-        return f"""You are a meeting summarization assistant. Your task is to create a comprehensive, accurate summary of the following meeting transcript.
+        return f"""You are a meeting analysis assistant. Your tasks are to identify generic speaker labels only when the transcript contains strong evidence, and to create a comprehensive, accurate meeting summary.
 
 **CRITICAL RULES (Anti-Hallucination):**
 1. Only use information from the transcript - never add external knowledge or assumptions
 2. Preserve exact technical terms, names, and numbers - don't paraphrase domain-specific terminology
-3. Keep speaker labels as-is - if transcript shows "Speaker 1", use "Speaker 1" (don't guess real names)
-4. Trust the meeting notes - the notes section (Agenda/Notes/Action Items) is ground truth written by the meeting host
-5. Don't infer unspoken intent - if something wasn't explicitly said, don't add it
-6. Preserve uncertainty - if speakers were uncertain or debating, reflect that
-7. Don't add generic business advice - no "best practices" or recommendations beyond what was discussed
+3. Only these generic labels are eligible for inference: {eligible_line}
+4. These labels are already trusted and must never be renamed: {trusted_line}
+5. Infer an exact person only from explicit self-identification, or direct address plus a nearby response; require repeated contextual confirmation when one exchange is ambiguous
+6. Preserve spelling from the transcript metadata, meeting notes, or exact dialogue; never infer identity from voice, accent, gender, job stereotypes, or external knowledge
+7. If an exact name is not supported but a role or organisation is explicit, a role label such as "OT" is allowed; otherwise omit the inference and keep Speaker N
+8. Every proposed inference must be high confidence and include exact transcript quotes with their original speaker labels; omit weak or ambiguous proposals
+9. In summary_markdown, continue using the original labels such as "Speaker 1" for inferred speakers. Koe will replace only mappings that pass deterministic validation
+10. Trust the meeting notes - the notes section (Agenda/Notes/Action Items) is ground truth written by the meeting host
+11. Don't infer unspoken intent - if something wasn't explicitly said, don't add it
+12. Preserve uncertainty - if speakers were uncertain or debating, reflect that
+13. Don't add generic business advice - no "best practices" or recommendations beyond what was discussed
 
-**OUTPUT FORMAT (markdown hierarchy: H1 title, H2 sections, H5 subtopics/owners):**
+**RESPONSE ENVELOPE:**
+Return one valid JSON object and nothing else. Do not use Markdown fences around the JSON.
+
+{{
+  "speaker_inferences": [
+    {{
+      "source_label": "Speaker 1",
+      "proposed_label": "Exact Name (Organisation)",
+      "confidence": "high",
+      "evidence": [
+        {{
+          "kind": "direct_address",
+          "speaker_label": "Trusted Name",
+          "exact_quote": "An exact excerpt from that speaker's transcript line"
+        }},
+        {{
+          "kind": "response",
+          "speaker_label": "Speaker 1",
+          "exact_quote": "An exact nearby response from Speaker 1"
+        }}
+      ]
+    }}
+  ],
+  "summary_markdown": "The complete Markdown document described below"
+}}
+
+Use an empty speaker_inferences list when no mapping meets the evidence rules. A single source-labelled self-identification quote is sufficient only when it explicitly says "I am NAME", "I'm NAME", or "my name is NAME". Otherwise provide at least two exact, nearby evidence quotes, including one utterance by the generic source label and one quote containing the proposed name or role. If multiple generic speakers share one explicit role, the same role label may be proposed for each; Koe will preserve distinct numbering.
+
+**SUMMARY_MARKDOWN FORMAT (markdown hierarchy: H1 title, H2 sections, H5 subtopics/owners):**
 
 {metadata_header}
 ---
@@ -265,14 +610,14 @@ Description here.
 
 ## Action Items
 
-##### Alex
+##### Person A
 - Task one
 - Task two
 
-##### Sash
+##### Person B
 - Task three
 
-##### Alex & Sash
+##### Person A & Person B
 - Shared task
 
 If there are action items in the meeting notes, prioritize those as authoritative.
@@ -295,4 +640,4 @@ If no action items exist, write "No action items assigned."
 
 {transcript_content}
 
-**Generate the summary now, following the format above exactly. Start with the H1 title line:**"""
+Generate the JSON response now. The summary_markdown value must follow the format above exactly and start with its H1 title line."""

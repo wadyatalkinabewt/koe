@@ -17,7 +17,10 @@ Koe is a Windows-only tray application with two workflows:
 - Snippet audio is transient and must never be written to disk. Only rotating
   snippet Markdown and text diagnostics may persist. Scribe meeting audio
   remains independently optional.
-- OpenRouter is confined to `src/meeting/summarizer.py` and Scribe summaries.
+- OpenRouter is confined to `src/meeting/summarizer.py` and Scribe
+  post-processing. It may propose contextual names only for generic labels;
+  exact transcript evidence must pass local validation before both documents
+  are relabelled.
 - The snippet hotkey is press-to-toggle. ElevenLabs remains the only
   transcription path.
 - Settings autosave and must not restart Koe or interrupt an active snippet.

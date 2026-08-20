@@ -52,6 +52,15 @@ microphone, Koe relies on the speaker library instead of forcing the whole
 recording to the owner. Other speakers keep recognised library names or
 readable `Speaker 1`, `Speaker 2`, and so on when unknown.
 
+The existing OpenRouter analysis then asks `google/gemini-3.7-flash` for both
+the structured summary and conservative contextual identity proposals for any
+remaining generic labels. Koe accepts only high-confidence proposals backed by
+exact transcript excerpts, applies the validated mapping to both documents,
+and preserves distinct numbering when several unknown people share one role or
+organisation. Ambiguous speakers remain `Speaker N`. This contextual pass does
+not inspect voices or replace the separate proposed local speaker-embedding
+library in ``.
+
 Every successful Scribe meeting writes polished transcript and summary PDFs.
 The transcript PDF lists recognised names first, renumbers remaining anonymous
 voices from `Speaker 1`, and consistently assigns Koe green to the participant

@@ -95,7 +95,14 @@ def test_group_worker_sends_one_mixed_request_and_saves_original_sources(tmp_pat
 
     monkeypatch.setattr(transcription, "transcribe_file_segments", fake_file_transcription)
     monkeypatch.setattr("meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1")
-    monkeypatch.setattr(summarizer.SummarizerClient, "summarize", lambda _self, _doc: "# Summary\n\nDone.\n")
+    monkeypatch.setattr(
+        summarizer.SummarizerClient,
+        "analyze",
+        lambda _self, _doc, **_kwargs: summarizer.MeetingAnalysis(
+            summary="# Summary\n\nDone.\n",
+            speaker_mapping={},
+        ),
+    )
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     worker = MeetingWorker(
         mic_wav=mic,
@@ -131,6 +138,76 @@ def test_group_worker_sends_one_mixed_request_and_saves_original_sources(tmp_pat
     assert "## Notes" in transcript and "Decision made." in transcript
     assert not (meeting_dir / "notes.md").exists()
     assert not mic.exists() and not loopback.exists()
+
+
+def test_group_worker_applies_contextual_names_to_transcript_and_summary(
+    tmp_path,
+    monkeypatch,
+):
+    import transcription
+    from meeting import summarizer
+    from meeting.app import MODE_ONLINE_GROUP, MeetingWorker
+
+    source_dir = tmp_path / "temp"
+    mic = source_dir / "mic.wav"
+    loopback = source_dir / "loopback.wav"
+    _write_wav(mic, value=1800)
+    _write_wav(loopback, value=900)
+
+    monkeypatch.setattr(
+        transcription,
+        "transcribe_file_segments",
+        lambda *_args, **_kwargs: [
+            {"start": 0.0, "end": 0.5, "text": "Welcome.", "label": "Speaker 1"},
+            {
+                "start": 0.6,
+                "end": 1.0,
+                "text": "Thanks, Shaun.",
+                "label": "Speaker 2",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "meeting.app.identify_microphone_speaker",
+        lambda *_args: "Speaker 1",
+    )
+    monkeypatch.setattr("meeting.app.wav_has_meaningful_audio", lambda *_args: True)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    def fake_analyze(_self, document, *, speaker_labels, **_kwargs):
+        assert "**[00:00] Shaun**: Welcome." in document
+        assert "**[00:00] Speaker 1**: Thanks, Shaun." in document
+        assert speaker_labels == ["Shaun", "Speaker 1"]
+        return summarizer.MeetingAnalysis(
+            summary="# Summary\n\nJessica (OT) confirmed the next step.\n",
+            speaker_mapping={"Speaker 1": "Jessica (OT)"},
+        )
+
+    monkeypatch.setattr(summarizer.SummarizerClient, "analyze", fake_analyze)
+
+    worker = MeetingWorker(
+        mic_wav=mic,
+        loopback_wav=loopback,
+        user_name="Shaun",
+        meeting_subject="Context Meeting",
+        meeting_mode=MODE_ONLINE_GROUP,
+        notes_text="",
+        output_root=tmp_path / "Meetings",
+        started_at=datetime(2026, 8, 20, 9, 0),
+        save_markdown=True,
+    )
+    worker.run()
+
+    meeting_dir = tmp_path / "Meetings" / "26_08_20_Context_Meeting"
+    transcript = (meeting_dir / "transcript.md").read_text(encoding="utf-8")
+    summary = (meeting_dir / "summary.md").read_text(encoding="utf-8")
+    assert "Shaun" in transcript
+    assert "Jessica (OT)" in transcript
+    assert "Speaker 1" not in transcript
+    assert "Jessica (OT)" in summary
+    _assert_pdf(meeting_dir / "transcript.pdf")
+    _assert_pdf(meeting_dir / "summary.pdf")
+    assert not (meeting_dir / ".transcript-contextual.pdf").exists()
 
 
 def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(tmp_path, monkeypatch):
@@ -188,8 +265,11 @@ def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(tmp_path
     monkeypatch.setattr(transcription.requests, "post", fake_post)
     monkeypatch.setattr(
         summarizer.SummarizerClient,
-        "summarize",
-        lambda _self, _doc: "# Summary\n\nDone.\n",
+        "analyze",
+        lambda _self, _doc, **_kwargs: summarizer.MeetingAnalysis(
+            summary="# Summary\n\nDone.\n",
+            speaker_mapping={},
+        ),
     )
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     worker = MeetingWorker(
@@ -249,8 +329,11 @@ def test_group_worker_defaults_to_pdf_only_when_loopback_stream_is_empty(
     monkeypatch.setattr("meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1")
     monkeypatch.setattr(
         summarizer.SummarizerClient,
-        "summarize",
-        lambda _self, _doc: "# Summary\n\nDone.\n",
+        "analyze",
+        lambda _self, _doc, **_kwargs: summarizer.MeetingAnalysis(
+            summary="# Summary\n\nDone.\n",
+            speaker_mapping={},
+        ),
     )
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
@@ -320,8 +403,11 @@ def test_in_person_worker_uses_shared_mic_and_omits_silent_loopback(
     )
     monkeypatch.setattr(
         summarizer.SummarizerClient,
-        "summarize",
-        lambda _self, _doc: "# Summary\n\nDone.\n",
+        "analyze",
+        lambda _self, _doc, **_kwargs: summarizer.MeetingAnalysis(
+            summary="# Summary\n\nDone.\n",
+            speaker_mapping={},
+        ),
     )
 
     worker = MeetingWorker(
@@ -377,8 +463,11 @@ def test_in_person_worker_retains_meaningful_loopback(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         summarizer.SummarizerClient,
-        "summarize",
-        lambda _self, _doc: "# Summary\n\nDone.\n",
+        "analyze",
+        lambda _self, _doc, **_kwargs: summarizer.MeetingAnalysis(
+            summary="# Summary\n\nDone.\n",
+            speaker_mapping={},
+        ),
     )
 
     worker = MeetingWorker(
@@ -427,8 +516,11 @@ def test_in_person_one_on_one_uses_library_owner_to_name_other_speaker(
     )
     monkeypatch.setattr(
         summarizer.SummarizerClient,
-        "summarize",
-        lambda _self, _doc: "# Summary\n\nDone.\n",
+        "analyze",
+        lambda _self, _doc, **_kwargs: summarizer.MeetingAnalysis(
+            summary="# Summary\n\nDone.\n",
+            speaker_mapping={},
+        ),
     )
 
     worker = MeetingWorker(
@@ -487,7 +579,14 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
         ]
 
     monkeypatch.setattr(transcription, "transcribe_file_segments", fake_file_segments)
-    monkeypatch.setattr(summarizer.SummarizerClient, "summarize", lambda _self, _doc: "# Summary\n")
+    monkeypatch.setattr(
+        summarizer.SummarizerClient,
+        "analyze",
+        lambda _self, _doc, **_kwargs: summarizer.MeetingAnalysis(
+            summary="# Summary\n",
+            speaker_mapping={},
+        ),
+    )
 
     worker = MeetingWorker(
         mic_wav=mic,

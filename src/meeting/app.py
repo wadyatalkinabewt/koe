@@ -216,6 +216,48 @@ def _label_one_on_one(
     return relabelled
 
 
+def _apply_contextual_speaker_mapping(
+    segments: list[dict],
+    mapping: dict[str, str],
+) -> list[dict]:
+    """Apply one validated name to every turn in a diarized speaker cluster."""
+    if not mapping:
+        return [dict(segment) for segment in segments]
+    canonical = {source.casefold(): target for source, target in mapping.items()}
+    relabelled: list[dict] = []
+    for segment in segments:
+        updated = dict(segment)
+        label = str(updated.get("label") or "").strip()
+        if label.casefold() in canonical:
+            updated["label"] = canonical[label.casefold()]
+        relabelled.append(updated)
+    return relabelled
+
+
+def _participants_for_meeting(
+    segments: list[dict],
+    meeting_mode: str,
+    user_name: str,
+    participant_name: str,
+) -> list[str]:
+    """Build the document participant order from the final speaker labels."""
+    if meeting_mode == MODE_ONLINE_GROUP:
+        return _unique_labels(segments, preferred_first=user_name)
+    if meeting_mode == MODE_ONLINE_ONE_ON_ONE:
+        return [user_name, participant_name]
+    if meeting_mode == MODE_IN_PERSON_ONE_ON_ONE:
+        owner_present = any(
+            str(segment.get("label") or "").strip().casefold()
+            == user_name.casefold()
+            for segment in segments
+        )
+        return _unique_labels(
+            segments,
+            preferred_first=user_name if owner_present else "",
+        )
+    return _unique_labels(segments, preferred_first="")
+
+
 # ---------- worker ----------
 
 class MeetingWorker(QThread):
@@ -297,24 +339,12 @@ class MeetingWorker(QThread):
 
             # ----- transcript -----
             duration = max((s["end"] for s in all_segments), default=0.0)
-            if self.meeting_mode == MODE_ONLINE_GROUP:
-                participants = _unique_labels(all_segments, preferred_first=self.user_name)
-            elif self.meeting_mode == MODE_ONLINE_ONE_ON_ONE:
-                participants = [self.user_name, self.participant_name]
-            elif self.meeting_mode == MODE_IN_PERSON_ONE_ON_ONE:
-                participants = _unique_labels(
-                    all_segments,
-                    preferred_first=(
-                        self.user_name
-                        if any(
-                            str(segment.get("label") or "").strip() == self.user_name
-                            for segment in all_segments
-                        )
-                        else ""
-                    ),
-                )
-            else:
-                participants = _unique_labels(all_segments, preferred_first="")
+            participants = _participants_for_meeting(
+                all_segments,
+                self.meeting_mode,
+                self.user_name,
+                self.participant_name,
+            )
             transcript_md = render_transcript(
                 segments=all_segments,
                 meeting_name=self.meeting_subject,
@@ -324,7 +354,7 @@ class MeetingWorker(QThread):
                 notes_text=self.notes_text,
             )
 
-            # ----- save files -----
+            # ----- reserve the output folder -----
             meeting_dir = self.meeting_dir or _meeting_directory(
                 self.output_root,
                 self.meeting_subject,
@@ -333,6 +363,9 @@ class MeetingWorker(QThread):
             )
             meeting_dir.mkdir(parents=True, exist_ok=True)
             (meeting_dir / "notes.md").unlink(missing_ok=True)
+            transcript_path = meeting_dir / "transcript.pdf"
+            # Preserve the deterministic transcript even if the optional
+            # OpenRouter post-processing step fails or is interrupted.
             render_transcript_pdf(
                 segments=all_segments,
                 meeting_name=self.meeting_subject,
@@ -340,17 +373,60 @@ class MeetingWorker(QThread):
                 started_at=self.started_at,
                 duration_seconds=duration,
                 recorder_name=self.user_name,
-                output_path=meeting_dir / "transcript.pdf",
+                output_path=transcript_path,
                 notes_text=self.notes_text,
             )
 
-            # ----- summary -----
+            # ----- contextual speaker resolution + summary -----
             self.status_signal.emit("Generating summary...")
             summary_path = meeting_dir / "summary.pdf"
             try:
-                summary_text = SummarizerClient().summarize(transcript_md)
+                analysis = SummarizerClient().analyze(
+                    transcript_md,
+                    speaker_labels=_unique_labels(all_segments, preferred_first=""),
+                )
+                summary_text = analysis.summary
+                if analysis.speaker_mapping:
+                    contextual_segments = _apply_contextual_speaker_mapping(
+                        all_segments,
+                        analysis.speaker_mapping,
+                    )
+                    contextual_participants = _participants_for_meeting(
+                        contextual_segments,
+                        self.meeting_mode,
+                        self.user_name,
+                        self.participant_name,
+                    )
+                    contextual_transcript_md = render_transcript(
+                        segments=contextual_segments,
+                        meeting_name=self.meeting_subject,
+                        participants=contextual_participants,
+                        started_at=self.started_at,
+                        duration_seconds=duration,
+                        notes_text=self.notes_text,
+                    )
+                    contextual_path = meeting_dir / ".transcript-contextual.pdf"
+                    try:
+                        render_transcript_pdf(
+                            segments=contextual_segments,
+                            meeting_name=self.meeting_subject,
+                            participants=contextual_participants,
+                            started_at=self.started_at,
+                            duration_seconds=duration,
+                            recorder_name=self.user_name,
+                            output_path=contextual_path,
+                            notes_text=self.notes_text,
+                        )
+                        os.replace(contextual_path, transcript_path)
+                    finally:
+                        contextual_path.unlink(missing_ok=True)
+                    all_segments = contextual_segments
+                    participants = contextual_participants
+                    transcript_md = contextual_transcript_md
             except Exception as e:
                 summary_text = f"# Summary\n\nSummary generation failed: {e}\n"
+
+            # ----- final summary document -----
             from meeting.summary_pdf import render_summary_pdf
 
             render_summary_pdf(
