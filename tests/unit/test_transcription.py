@@ -214,6 +214,132 @@ def test_group_file_path_streams_one_request_with_speaker_options(tmp_path, monk
     assert segments == [{"start": 0.0, "end": 0.5, "text": "Hello.", "label": "Speaker 1"}]
 
 
+def test_group_upload_retries_wrapped_write_timeout_from_byte_zero(tmp_path, monkeypatch):
+    import requests
+    import transcription
+
+    wav_path = tmp_path / "meeting-mix.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(np.full(1600, 900, dtype=np.int16).tobytes())
+
+    positions = []
+    delays = []
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"words": []}
+
+    def fake_post(_url, *, headers, files, data, timeout):
+        _name, audio_file, _mime = files["file"]
+        positions.append(audio_file.tell())
+        audio_file.read(16)
+        if len(positions) < 3:
+            raise requests.ConnectionError(
+                "('Connection aborted.', TimeoutError('The write operation timed out'))"
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(transcription.requests, "post", fake_post)
+    monkeypatch.setattr(transcription.time, "sleep", delays.append)
+
+    result, error = transcription._elevenlabs_post_file(
+        wav_path,
+        [("model_id", "scribe_v2")],
+        "test-key",
+        timeout=900,
+    )
+
+    assert error is None
+    assert result == {"words": []}
+    assert positions == [0, 0, 0]
+    assert delays == [2.0, 5.0]
+
+
+def test_group_upload_timeout_scales_for_very_slow_connections(tmp_path, monkeypatch):
+    import transcription
+
+    wav_path = tmp_path / "meeting-mix.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(np.zeros(1600, dtype=np.int16).tobytes())
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"words": []}
+
+    def fake_post(_url, *, headers, files, data, timeout):
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(transcription.requests, "post", fake_post)
+    monkeypatch.setattr(transcription, "MIN_MEETING_UPLOAD_BYTES_PER_SECOND", 1)
+
+    result, error = transcription._elevenlabs_post_file(
+        wav_path,
+        [("model_id", "scribe_v2")],
+        "test-key",
+        timeout=900,
+    )
+
+    expected_upload_timeout = (
+        wav_path.stat().st_size + transcription.MEETING_UPLOAD_TIMEOUT_MARGIN
+    )
+    assert error is None
+    assert result == {"words": []}
+    assert captured["timeout"] == (expected_upload_timeout, 900.0)
+
+
+def test_group_upload_does_not_retry_ambiguous_read_timeout(tmp_path, monkeypatch):
+    import requests
+    import transcription
+
+    wav_path = tmp_path / "meeting-mix.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(np.zeros(1600, dtype=np.int16).tobytes())
+
+    calls = []
+
+    def fake_post(*_args, **_kwargs):
+        calls.append(True)
+        raise requests.ReadTimeout("response timed out")
+
+    monkeypatch.setattr(transcription.requests, "post", fake_post)
+    monkeypatch.setattr(
+        transcription.time,
+        "sleep",
+        lambda _delay: pytest.fail("read timeouts must not be retried"),
+    )
+
+    result, error = transcription._elevenlabs_post_file(
+        wav_path,
+        [("model_id", "scribe_v2")],
+        "test-key",
+        timeout=900,
+    )
+
+    assert result is None
+    assert error == "ElevenLabs request error: response timed out"
+    assert calls == [True]
+
+
 def test_group_empty_stream_is_skipped_before_upload(tmp_path, monkeypatch):
     import transcription
 

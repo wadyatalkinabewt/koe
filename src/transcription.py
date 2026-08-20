@@ -12,6 +12,7 @@ meeting file once so diarized speaker IDs stay coherent.
 import io
 import os
 import re
+import time
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,10 @@ MAX_SNIPPETS = 5
 MAX_DEBUG_SNIPPETS = 5
 CHUNK_SECONDS = 10 * 60
 GROUP_TRANSCRIPTION_TIMEOUT = 15 * 60
+ELEVENLABS_UPLOAD_MAX_ATTEMPTS = 3
+ELEVENLABS_UPLOAD_RETRY_DELAYS = (2.0, 5.0)
+MIN_MEETING_UPLOAD_BYTES_PER_SECOND = 12_000
+MEETING_UPLOAD_TIMEOUT_MARGIN = 5 * 60
 MAX_ELEVENLABS_FILE_BYTES = 5_000_000_000
 MAX_ELEVENLABS_DURATION_SECONDS = 10 * 60 * 60
 MIN_ELEVENLABS_DURATION_SECONDS = 0.1
@@ -284,20 +289,69 @@ def _elevenlabs_post_file(
     api_key: str,
     timeout: float,
 ) -> tuple[dict | None, str | None]:
-    """Stream an existing audio file to ElevenLabs without duplicating it in memory."""
+    """Stream a meeting file, retrying only failures safe to resubmit.
+
+    A fresh file handle is opened for every attempt so a retry always starts at
+    byte zero. Connection failures (including urllib3's wrapped socket write
+    timeout) are retryable. A read timeout is deliberately not retried because
+    ElevenLabs may already have received and processed the complete recording.
+    """
     try:
-        with file_path.open("rb") as audio_file:
-            response = requests.post(
-                ELEVENLABS_URL,
-                headers={"xi-api-key": api_key},
-                files={"file": (file_path.name, audio_file, "audio/wav")},
-                data=data,
-                timeout=timeout,
-            )
-    except requests.Timeout:
-        return None, "ElevenLabs timeout"
-    except (OSError, requests.RequestException) as exc:
+        file_size = file_path.stat().st_size
+    except OSError as exc:
         return None, f"ElevenLabs request error: {exc}"
+
+    upload_timeout = max(
+        float(timeout),
+        file_size / MIN_MEETING_UPLOAD_BYTES_PER_SECOND
+        + MEETING_UPLOAD_TIMEOUT_MARGIN,
+    )
+    request_timeout = (upload_timeout, float(timeout))
+    if upload_timeout > float(timeout):
+        _debug(
+            "Extended ElevenLabs upload timeout to "
+            f"{upload_timeout / 60:.1f} minutes for {file_size} bytes"
+        )
+
+    response = None
+    for attempt in range(1, ELEVENLABS_UPLOAD_MAX_ATTEMPTS + 1):
+        try:
+            with file_path.open("rb") as audio_file:
+                response = requests.post(
+                    ELEVENLABS_URL,
+                    headers={"xi-api-key": api_key},
+                    files={"file": (file_path.name, audio_file, "audio/wav")},
+                    data=data,
+                    # urllib3 uses the connect timeout while writing the request
+                    # body, then switches to the read timeout for the response.
+                    timeout=request_timeout,
+                )
+            break
+        except requests.RequestException as exc:
+            retryable = isinstance(
+                exc,
+                (requests.ConnectionError, requests.ConnectTimeout),
+            ) and not isinstance(exc, requests.ReadTimeout)
+            if not retryable or attempt >= ELEVENLABS_UPLOAD_MAX_ATTEMPTS:
+                suffix = (
+                    f" after {attempt} attempts"
+                    if retryable and attempt > 1
+                    else ""
+                )
+                return None, f"ElevenLabs request error{suffix}: {exc}"
+
+            delay = ELEVENLABS_UPLOAD_RETRY_DELAYS[attempt - 1]
+            _debug(
+                "Transient ElevenLabs upload failure "
+                f"({attempt}/{ELEVENLABS_UPLOAD_MAX_ATTEMPTS}): {exc}; "
+                f"retrying in {delay:.0f}s"
+            )
+            time.sleep(delay)
+        except OSError as exc:
+            return None, f"ElevenLabs request error: {exc}"
+
+    if response is None:
+        return None, "ElevenLabs request error: no response"
 
     if response.status_code != 200:
         return None, f"ElevenLabs HTTP {response.status_code}: {response.text[:300]}"
