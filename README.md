@@ -4,6 +4,9 @@
 
 **Catch a thought. Capture the room. Keep the useful part.**
 
+`Windows 11` &nbsp;·&nbsp; `Python 3.13` &nbsp;·&nbsp;
+`ElevenLabs Scribe v2` &nbsp;·&nbsp; `MIT`
+
 Koe is a Windows tray app built for the gap between *I should write that down*
 and *what did we actually decide?* Tap a global hotkey for a quick voice
 snippet, or open Scribe to turn microphone and system audio into a diarized
@@ -39,6 +42,15 @@ flowchart LR
     C --> P["Transcript PDF"]
     C --> R["OpenRouter summary<br/>optional, ZDR required"]
     R --> Q["Summary PDF"]
+
+    classDef capture fill:#252E52,stroke:#7C8DFF,color:#F4F7FB
+    classDef core fill:#171F2E,stroke:#93A1FF,color:#F4F7FB
+    classDef output fill:#142A25,stroke:#55D6A5,color:#F4F7FB
+    classDef optional fill:#321A22,stroke:#FF6F79,color:#F4F7FB
+    class H,S,A,M,X capture
+    class T,C core
+    class B,P,Q output
+    class R optional
 ```
 
 ### Modularity, honestly
