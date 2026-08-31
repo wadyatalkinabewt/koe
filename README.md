@@ -1,3 +1,5 @@
+<img src="assets/koe-icon.png" alt="Koe app icon" width="80" align="right">
+
 # Koe
 
 **Catch a thought. Capture the room. Keep the useful part.**

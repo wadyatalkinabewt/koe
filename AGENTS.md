@@ -88,5 +88,17 @@ See `docs/DEVELOPMENT.md` for the source map and verification commands.
 - Keep the dark-slate/indigo/coral visual system consistent across all surfaces.
 - Use `apply_patch` for source edits. Verify resolved paths before bulk deletion.
 
-Before restarting Koe, confirm no live snippet or Scribe recording would be
-interrupted.
+## Running-process safety
+
+- Treat a running Koe instance as user-owned live recording equipment. Never
+  stop, restart, kill, signal, replace, or otherwise interfere with its process
+  while a snippet or Scribe recording may be active.
+- A request to stop or restart Koe is always conditional on Koe being idle. It
+  never authorizes interrupting an active recording.
+- Before any process-affecting action, inspect the live recording state. If an
+  active recording cannot be ruled out, leave the process untouched and ask the
+  user to confirm that Koe is idle.
+- Git, documentation, and repository work must proceed without touching the
+  running process. Do not restart Koe merely to validate unrelated changes.
+- Snippet audio exists only in memory until recording stops. Terminating Koe
+  mid-snippet causes irreversible data loss and is never acceptable.
