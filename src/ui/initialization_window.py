@@ -39,13 +39,13 @@ class InitializationWindow(QMainWindow):
             | Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(240, 68)
+        self.setFixedSize(184, 64)
 
         central = QWidget(self)
         layout = QHBoxLayout(central)
-        layout.setContentsMargins(16, 10, 16, 10)
-        layout.setSpacing(12)
-        layout.addStretch()
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignCenter)
 
         self.icon_label = QLabel()
         self.icon_label.setFixedSize(34, 34)
@@ -77,7 +77,6 @@ class InitializationWindow(QMainWindow):
         text_layout.addWidget(title)
         text_layout.addWidget(self.status_label)
         layout.addLayout(text_layout)
-        layout.addStretch()
         self.setCentralWidget(central)
 
     def paintEvent(self, event) -> None:

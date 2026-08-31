@@ -502,8 +502,7 @@ def test_initialization_card_is_compact_and_uses_the_koe_icon(qapp):
         label.text() for label in window.findChildren(QLabel) if label.text()
     )
 
-    assert window.width() <= 240
-    assert window.height() <= 68
+    assert window.size() == QSize(184, 64)
     assert labels == "Koe Initializing…"
     assert "Getting things ready" not in labels
     assert window.icon_label.pixmap() is not None

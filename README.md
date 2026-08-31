@@ -24,6 +24,10 @@ private names and terminology in local configuration rather than in the code.
 | **Result** | Formatted text on the clipboard | Diarized transcript and summary PDFs |
 | **Audio retention** | Never written to disk | Kept only when requested; recovery audio survives failures |
 
+<p align="center">
+  <img src="assets/readme/workflows.png" alt="Koe Snippet and Scribe workflows" width="100%">
+</p>
+
 Scribe aligns microphone and loopback audio into **one mono timeline** before
 uploading it. That avoids two separately transcribed recordings drifting out of
 sync, duplicating speakers, or doubling the transcription work.
@@ -52,6 +56,10 @@ flowchart LR
     class B,P,Q output
     class R optional
 ```
+
+<p align="center">
+  <img src="assets/readme/documents.png" alt="Synthetic Koe transcript and summary PDF examples" width="100%">
+</p>
 
 ### Modularity, honestly
 
