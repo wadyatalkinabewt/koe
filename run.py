@@ -7,8 +7,8 @@ Entry point that checks for first-time setup and runs the appropriate mode.
 import os
 import sys
 from pathlib import Path
-from dotenv import dotenv_values, load_dotenv
 
+from dotenv import dotenv_values, load_dotenv
 
 # Koe is a small source-run desktop app; keep its working tree free of generated
 # bytecode directories during normal launches (including child Scribe windows).
@@ -21,13 +21,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from paths import (  # noqa: E402
-    app_data_dir,
     config_path,
     ensure_runtime_dirs,
     env_path,
     setup_marker_path,
 )
-
 
 ELEVENLABS_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
 
@@ -54,6 +52,7 @@ def run_setup():
     """Run first-time GUI onboarding."""
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication
+
     from ui.setup_window import run_setup_dialog
 
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -80,23 +79,23 @@ def run_scribe_window():
     return main()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ensure_runtime_dirs()
-    if '--scribe-window' in sys.argv:
+    if "--scribe-window" in sys.argv:
         run_scribe_window()
         raise SystemExit(0)
 
-    if '--setup' in sys.argv:
+    if "--setup" in sys.argv:
         if not run_setup():
             raise SystemExit(1)
     elif needs_setup() and not run_setup():
         raise SystemExit(1)
 
     requested_command = None
-    if '--snippet' in sys.argv:
-        requested_command = 'snippet'
-    elif '--scribe' in sys.argv:
-        requested_command = 'scribe'
+    if "--snippet" in sys.argv:
+        requested_command = "snippet"
+    elif "--scribe" in sys.argv:
+        requested_command = "scribe"
 
     if requested_command:
         from commands import send_command

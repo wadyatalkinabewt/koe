@@ -1,13 +1,14 @@
 import time
 import traceback
+from datetime import datetime
+from queue import Empty, Queue
+
 import numpy as np
 import sounddevice as sd
-from PyQt5.QtCore import QThread, QMutex, pyqtSignal
-from queue import Empty, Queue
-from datetime import datetime
+from PyQt5.QtCore import QMutex, QThread, pyqtSignal
 
-from transcription import transcribe
 from paths import logs_dir
+from transcription import transcribe
 from utils import ConfigManager
 
 # Debug logging to file with rotation
@@ -22,16 +23,18 @@ _HOST_API_PRIORITY = {
 }
 _WDM_COMPATIBILITY_MIC_NAMES = ("hd pro webcam c920",)
 
+
 def _rotate_log_if_needed():
     """Rotate debug.log if it exceeds max size."""
     try:
         if _DEBUG_LOG.exists() and _DEBUG_LOG.stat().st_size > _MAX_LOG_SIZE:
-            backup = _DEBUG_LOG.with_suffix('.log.1')
+            backup = _DEBUG_LOG.with_suffix(".log.1")
             if backup.exists():
                 backup.unlink()
             _DEBUG_LOG.rename(backup)
-    except:
+    except OSError:
         pass
+
 
 def _debug(msg: str):
     """Write debug message to file with timestamp."""
@@ -40,7 +43,7 @@ def _debug(msg: str):
     try:
         with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] {msg}\n")
-    except:
+    except OSError:
         pass
 
 
@@ -256,7 +259,7 @@ def _open_input_stream(sound_device, callback, fallback_rate: int = 48000):
             stream = sd.InputStream(
                 samplerate=sample_rate,
                 channels=1,
-                dtype='int16',
+                dtype="int16",
                 blocksize=frame_size,
                 device=device,
                 callback=callback,
@@ -336,7 +339,9 @@ class ResultThread(QThread):
     def run(self):
         """Main execution method for the thread."""
         _debug("ResultThread.run() STARTED")
-        audio_data = None  # Initialize before try so except handler can always reference it
+        audio_data = (
+            None  # Initialize before try so except handler can always reference it
+        )
         try:
             if not self.is_running:
                 _debug("  Early exit: is_running=False")
@@ -349,11 +354,13 @@ class ResultThread(QThread):
             self.mutex.unlock()
 
             _debug("  Emitting 'recording' status")
-            self.statusSignal.emit('recording')
-            ConfigManager.console_print('Recording...')
+            self.statusSignal.emit("recording")
+            ConfigManager.console_print("Recording...")
             _debug("  Starting _record_audio()")
             audio_data = self._record_audio()
-            _debug(f"  _record_audio() returned: {type(audio_data)}, size={audio_data.size if audio_data is not None else 'None'}")
+            _debug(
+                f"  _record_audio() returned: {type(audio_data)}, size={audio_data.size if audio_data is not None else 'None'}"
+            )
 
             if self.cancel_requested:
                 _debug("  Snippet cancelled: discarding capture before transcription")
@@ -363,18 +370,18 @@ class ResultThread(QThread):
             if not self.is_running:
                 _debug("  Early exit after recording: is_running=False")
                 # Emit empty result so status window gets closed properly
-                self.resultSignal.emit('')
+                self.resultSignal.emit("")
                 return
 
             if audio_data is None:
                 _debug("  Recording too short, emitting empty result")
                 # Recording too short - emit empty result and close
-                self.resultSignal.emit('')
+                self.resultSignal.emit("")
                 return
 
             _debug("  Emitting 'transcribing' status")
-            self.statusSignal.emit('transcribing')
-            ConfigManager.console_print('Transcribing...')
+            self.statusSignal.emit("transcribing")
+            ConfigManager.console_print("Transcribing...")
 
             # Time the transcription process
             _debug("  Starting transcription...")
@@ -386,8 +393,12 @@ class ResultThread(QThread):
             end_time = time.time()
 
             transcription_time = end_time - start_time
-            _debug(f"  Transcription done in {transcription_time:.2f}s, result length={len(result)}")
-            ConfigManager.console_print(f'Transcription completed in {transcription_time:.2f} seconds. Post-processed line: {result}')
+            _debug(
+                f"  Transcription done in {transcription_time:.2f}s, result length={len(result)}"
+            )
+            ConfigManager.console_print(
+                f"Transcription completed in {transcription_time:.2f} seconds. Post-processed line: {result}"
+            )
 
             # Always emit result after transcription completes, even if cancelled
             # (the user still deserves the clipboard copy and completion feedback)
@@ -402,8 +413,8 @@ class ResultThread(QThread):
 
             error_msg = str(e) if str(e) else "Transcription failed"
             self.errorSignal.emit(error_msg)
-            self.statusSignal.emit('error')
-            self.resultSignal.emit('')
+            self.statusSignal.emit("error")
+            self.resultSignal.emit("")
         finally:
             _debug("  Calling stop_recording()")
             self.stop_recording(reason="thread cleanup")
@@ -465,7 +476,9 @@ class ResultThread(QThread):
                 f"sample_rate={self.sample_rate}, frame_size={frame_size}"
             )
             if selected_device != preferred_device:
-                _debug(f"  Using fallback input device: {_device_label(selected_device)}")
+                _debug(
+                    f"  Using fallback input device: {_device_label(selected_device)}"
+                )
 
             with stream:
                 _debug("  Audio stream opened, entering recording loop")
@@ -522,14 +535,20 @@ class ResultThread(QThread):
                     _debug(f"  Flushed {flushed_frames} queued audio frames after stop")
 
             _debug("  Audio stream closed")
-            audio_data = np.concatenate(recording).astype(np.int16, copy=False) if recording else np.array([], dtype=np.int16)
+            audio_data = (
+                np.concatenate(recording).astype(np.int16, copy=False)
+                if recording
+                else np.array([], dtype=np.int16)
+            )
             duration = len(audio_data) / self.sample_rate
 
-            ConfigManager.console_print(f'Recording finished. Size: {audio_data.size} samples, Duration: {duration:.2f} seconds')
+            ConfigManager.console_print(
+                f"Recording finished. Size: {audio_data.size} samples, Duration: {duration:.2f} seconds"
+            )
             _debug(f"  Recording finished: {audio_data.size} samples, {duration:.2f}s")
 
             if (duration * 1000) < 100:
-                ConfigManager.console_print(f'Discarded due to being too short.')
+                ConfigManager.console_print("Discarded due to being too short.")
                 _debug("  Recording too short, returning None")
                 return None
 

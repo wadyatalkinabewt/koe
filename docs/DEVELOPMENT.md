@@ -1,5 +1,12 @@
 # Development
 
+## Setup
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
 ## Runtime boundary
 
 Koe is a Windows-only tray application. Source runs resolve runtime data from

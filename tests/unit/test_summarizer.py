@@ -2,7 +2,6 @@ import json
 
 from meeting import summarizer
 
-
 SUMMARY_MARKDOWN = (
     "# Meeting\n\n"
     "## Summary\nDone.\n\n"
@@ -62,7 +61,9 @@ def test_summary_metadata_prefers_meeting_title_after_host_notes():
 **Participants**: Alex, Jordan
 """
 
-    metadata = summarizer.SummarizerClient(api_key="test-key")._extract_metadata(content)
+    metadata = summarizer.SummarizerClient(api_key="test-key")._extract_metadata(
+        content
+    )
 
     assert metadata == {
         "title": "Jordan - Invoice Workflow",
@@ -146,7 +147,9 @@ def test_verified_direct_address_mapping_is_applied_to_summary(monkeypatch):
                 ]
             }
 
-    monkeypatch.setattr(summarizer.requests, "post", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(
+        summarizer.requests, "post", lambda *_args, **_kwargs: Response()
+    )
 
     result = summarizer.SummarizerClient(api_key="test-key").analyze(
         transcript,
@@ -199,7 +202,9 @@ def test_unverified_or_low_confidence_inference_keeps_generic_label(monkeypatch)
                 ]
             }
 
-    monkeypatch.setattr(summarizer.requests, "post", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(
+        summarizer.requests, "post", lambda *_args, **_kwargs: Response()
+    )
 
     result = summarizer.SummarizerClient(api_key="test-key").analyze(
         transcript,

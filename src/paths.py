@@ -7,7 +7,6 @@ import os
 import sys
 from pathlib import Path
 
-
 APP_NAME = "Koe"
 
 

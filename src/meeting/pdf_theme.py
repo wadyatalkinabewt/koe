@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Iterable
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
@@ -24,7 +24,6 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-
 
 PAGE_BG = colors.HexColor("#FAF8F4")
 INK = colors.HexColor("#272535")

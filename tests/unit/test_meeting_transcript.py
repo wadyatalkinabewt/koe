@@ -4,7 +4,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from meeting.transcript import format_timestamp, merge_consecutive_same_speaker, render_transcript
+from meeting.transcript import (
+    format_timestamp,
+    merge_consecutive_same_speaker,
+    render_transcript,
+)
 
 
 def test_timestamp_formats_minutes_and_hours():

@@ -19,7 +19,9 @@ def _config_section(*keys):
 def test_request_is_fixed_to_scribe_v2_no_verbatim(monkeypatch):
     import transcription
 
-    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
+    monkeypatch.setattr(
+        transcription.ConfigManager, "get_config_section", _config_section
+    )
     data = transcription._elevenlabs_request_data()
 
     assert ("model_id", "scribe_v2") in data
@@ -45,7 +47,9 @@ def test_configured_language_is_sent(monkeypatch):
 def test_group_request_enables_diarization_and_speaker_library(monkeypatch):
     import transcription
 
-    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
+    monkeypatch.setattr(
+        transcription.ConfigManager, "get_config_section", _config_section
+    )
     data = transcription._elevenlabs_request_data(
         diarize=True,
         use_speaker_library=True,
@@ -62,7 +66,9 @@ def test_group_request_enables_diarization_and_speaker_library(monkeypatch):
 def test_invalid_speaker_count_is_rejected(monkeypatch):
     import transcription
 
-    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
+    monkeypatch.setattr(
+        transcription.ConfigManager, "get_config_section", _config_section
+    )
     with pytest.raises(ValueError, match="between 1 and 32"):
         transcription._elevenlabs_request_data(diarize=True, num_speakers=33)
 
@@ -72,11 +78,41 @@ def test_speaker_labels_split_on_changes_and_preserve_library_ids():
 
     result = {
         "words": [
-            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.2, "speaker_id": "speaker_0"},
-            {"type": "word", "text": "there", "start": 0.2, "end": 0.4, "speaker_id": "speaker_0"},
-            {"type": "word", "text": "Hi", "start": 0.4, "end": 0.6, "speaker_id": "Omar"},
-            {"type": "word", "text": "team.", "start": 0.6, "end": 0.8, "speaker_id": "Omar"},
-            {"type": "word", "text": "Morning.", "start": 0.8, "end": 1.0, "speaker_id": "speaker_1"},
+            {
+                "type": "word",
+                "text": "Hello",
+                "start": 0.0,
+                "end": 0.2,
+                "speaker_id": "speaker_0",
+            },
+            {
+                "type": "word",
+                "text": "there",
+                "start": 0.2,
+                "end": 0.4,
+                "speaker_id": "speaker_0",
+            },
+            {
+                "type": "word",
+                "text": "Hi",
+                "start": 0.4,
+                "end": 0.6,
+                "speaker_id": "Omar",
+            },
+            {
+                "type": "word",
+                "text": "team.",
+                "start": 0.6,
+                "end": 0.8,
+                "speaker_id": "Omar",
+            },
+            {
+                "type": "word",
+                "text": "Morning.",
+                "start": 0.8,
+                "end": 1.0,
+                "speaker_id": "speaker_1",
+            },
         ]
     }
 
@@ -126,13 +162,14 @@ def test_configured_transcript_substitutions_are_corrected_as_whole_tokens():
     assert transcription.apply_transcript_corrections(
         "Ack me, ack me, and ACK ME met North Wnd, north wnd, and NORTH WND.",
         corrections,
-    ) == (
-        "Acme, acme, and ACME met Northwind, northwind, and NORTHWIND."
+    ) == ("Acme, acme, and ACME met Northwind, northwind, and NORTHWIND.")
+    assert (
+        transcription.apply_transcript_corrections(
+            "Ack myself and North Wnds are different tokens.",
+            corrections,
+        )
+        == "Ack myself and North Wnds are different tokens."
     )
-    assert transcription.apply_transcript_corrections(
-        "Ack myself and North Wnds are different tokens.",
-        corrections,
-    ) == "Ack myself and North Wnds are different tokens."
 
 
 def test_custom_corrections_apply_to_scribe_segments(monkeypatch):
@@ -159,7 +196,12 @@ def test_custom_corrections_apply_to_scribe_segments(monkeypatch):
     }
 
     assert transcription._segments_from_elevenlabs_words(result, label="Speaker") == [
-        {"start": 0.0, "end": 0.8, "text": "Ask Acme about Northwind.", "label": "Speaker"}
+        {
+            "start": 0.0,
+            "end": 0.8,
+            "text": "Ask Acme about Northwind.",
+            "label": "Speaker",
+        }
     ]
 
 
@@ -175,7 +217,9 @@ def test_invalid_custom_corrections_config_is_ignored(monkeypatch):
     assert transcription.load_transcript_corrections() == {}
 
 
-def test_group_file_path_streams_one_request_with_speaker_options(tmp_path, monkeypatch):
+def test_group_file_path_streams_one_request_with_speaker_options(
+    tmp_path, monkeypatch
+):
     import transcription
 
     wav_path = tmp_path / "loopback.wav"
@@ -186,14 +230,22 @@ def test_group_file_path_streams_one_request_with_speaker_options(tmp_path, monk
         wav_file.writeframes(np.zeros(1600, dtype=np.int16).tobytes())
 
     captured = []
-    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
+    monkeypatch.setattr(
+        transcription.ConfigManager, "get_config_section", _config_section
+    )
     monkeypatch.setattr(transcription, "_api_key_from_env", lambda *_names: "test-key")
 
     def fake_post(file_path, data, api_key, timeout):
         captured.append((file_path, data, api_key, timeout))
         return {
             "words": [
-                {"type": "word", "text": "Hello.", "start": 0.0, "end": 0.5, "speaker_id": "speaker_0"}
+                {
+                    "type": "word",
+                    "text": "Hello.",
+                    "start": 0.0,
+                    "end": 0.5,
+                    "speaker_id": "speaker_0",
+                }
             ]
         }, None
 
@@ -207,11 +259,14 @@ def test_group_file_path_streams_one_request_with_speaker_options(tmp_path, monk
     assert len(captured) == 1
     assert ("diarize", "true") in captured[0][1]
     assert ("use_speaker_library", "true") in captured[0][1]
-    assert segments == [{"start": 0.0, "end": 0.5, "text": "Hello.", "label": "Speaker 1"}]
+    assert segments == [
+        {"start": 0.0, "end": 0.5, "text": "Hello.", "label": "Speaker 1"}
+    ]
 
 
-def test_group_upload_retries_wrapped_write_timeout_from_byte_zero(tmp_path, monkeypatch):
-    import requests
+def test_group_upload_retries_wrapped_write_timeout_from_byte_zero(
+    tmp_path, monkeypatch
+):
     import transcription
 
     wav_path = tmp_path / "meeting-mix.wav"
@@ -406,10 +461,13 @@ def test_transcript_deletion_retries_a_transient_server_failure(monkeypatch):
     )
     monkeypatch.setattr(transcription.time, "sleep", delays.append)
 
-    assert transcription._delete_elevenlabs_transcript(
-        {"transcription_id": "retry-id"},
-        "test-key",
-    ) is True
+    assert (
+        transcription._delete_elevenlabs_transcript(
+            {"transcription_id": "retry-id"},
+            "test-key",
+        )
+        is True
+    )
     assert delays == [1.0]
 
 
@@ -456,7 +514,6 @@ def test_group_upload_timeout_scales_for_very_slow_connections(tmp_path, monkeyp
 
 
 def test_group_upload_does_not_retry_ambiguous_read_timeout(tmp_path, monkeypatch):
-    import requests
     import transcription
 
     wav_path = tmp_path / "meeting-mix.wav"
@@ -507,11 +564,14 @@ def test_group_empty_stream_is_skipped_before_upload(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: called.append(True),
     )
 
-    assert transcription.transcribe_file_segments(
-        wav_path,
-        diarize=True,
-        use_speaker_library=True,
-    ) == []
+    assert (
+        transcription.transcribe_file_segments(
+            wav_path,
+            diarize=True,
+            use_speaker_library=True,
+        )
+        == []
+    )
     assert called == []
 
 
@@ -531,7 +591,11 @@ def test_group_file_limit_failure_happens_before_upload(tmp_path, monkeypatch):
         lambda _path: transcription.MAX_ELEVENLABS_DURATION_SECONDS + 1,
     )
     called = []
-    monkeypatch.setattr(transcription, "_elevenlabs_post_file", lambda *_args, **_kwargs: called.append(True))
+    monkeypatch.setattr(
+        transcription,
+        "_elevenlabs_post_file",
+        lambda *_args, **_kwargs: called.append(True),
+    )
 
     with pytest.raises(ValueError, match="10-hour"):
         transcription.transcribe_file_segments(wav_path, diarize=True)
@@ -542,7 +606,9 @@ def test_snippet_call_path_sends_no_verbatim(monkeypatch):
     import transcription
 
     captured = {}
-    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
+    monkeypatch.setattr(
+        transcription.ConfigManager, "get_config_section", _config_section
+    )
     monkeypatch.setattr(transcription, "_api_key_from_env", lambda *_names: "test-key")
     monkeypatch.setattr(transcription, "_normalize_quiet_audio", lambda audio: audio)
     monkeypatch.setattr(transcription, "save_rolling_transcription", lambda _text: None)
@@ -575,8 +641,9 @@ def test_snippet_is_transcribed_without_creating_audio_storage(tmp_path, monkeyp
     monkeypatch.setattr(
         transcription,
         "transcribe_elevenlabs",
-        lambda audio, sample_rate: transcribed.append((len(audio), sample_rate))
-        or "Snippet input works.",
+        lambda audio, sample_rate: (
+            transcribed.append((len(audio), sample_rate)) or "Snippet input works."
+        ),
     )
     monkeypatch.setattr(transcription, "save_rolling_transcription", lambda _text: None)
     monkeypatch.setattr(transcription, "save_transcription_debug", lambda *_args: None)
@@ -610,9 +677,12 @@ def test_snippet_post_processing_applies_custom_corrections(monkeypatch):
             else {}
         ),
     )
-    assert transcription.post_process_transcription(
-        "Ask Ack me whether North Wnd can help"
-    ) == "Ask Acme whether Northwind can help. "
+    assert (
+        transcription.post_process_transcription(
+            "Ask Ack me whether North Wnd can help"
+        )
+        == "Ask Acme whether Northwind can help. "
+    )
 
 
 def test_quiet_audio_normalization_is_bounded():

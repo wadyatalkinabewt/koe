@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import requests
 import yaml
@@ -26,7 +25,6 @@ from compat import apply_window_icon, enable_dark_titlebar
 from paths import app_data_dir, config_path, env_path, resource_path, setup_marker_path
 from ui import theme
 
-
 ELEVENLABS_USER_URL = "https://api.elevenlabs.io/v1/user"
 
 
@@ -39,7 +37,10 @@ def validate_elevenlabs_key(api_key: str, timeout: float = 15.0) -> tuple[bool, 
             timeout=timeout,
         )
     except requests.Timeout:
-        return False, "ElevenLabs did not respond in time. Check the connection and try again."
+        return (
+            False,
+            "ElevenLabs did not respond in time. Check the connection and try again.",
+        )
     except requests.RequestException as exc:
         return False, f"Could not reach ElevenLabs: {exc}"
     if response.status_code == 200:
@@ -54,7 +55,9 @@ def _existing_openrouter_key() -> str:
     return str(values.get("OPENROUTER_API_KEY") or "").strip()
 
 
-def write_setup_files(user_name: str, elevenlabs_key: str, openrouter_key: str = "") -> None:
+def write_setup_files(
+    user_name: str, elevenlabs_key: str, openrouter_key: str = ""
+) -> None:
     """Write the first-run secrets and cost-conscious default preferences."""
     app_data_dir().mkdir(parents=True, exist_ok=True)
     existing_openrouter = _existing_openrouter_key()
@@ -151,7 +154,9 @@ class SetupWindow(QDialog):
         if not _existing_openrouter_key():
             self.openrouter_input = QLineEdit()
             self.openrouter_input.setEchoMode(QLineEdit.Password)
-            self.openrouter_input.setPlaceholderText("Optional — Scribe meeting summaries")
+            self.openrouter_input.setPlaceholderText(
+                "Optional — Scribe meeting summaries"
+            )
             self.openrouter_input.setMinimumHeight(40)
             form.addRow("OpenRouter Key", self.openrouter_input)
 
@@ -187,7 +192,9 @@ class SetupWindow(QDialog):
             self.name_input.setFocus()
             return
         if not elevenlabs_key:
-            self.status_label.setText("An ElevenLabs API key is required for transcription.")
+            self.status_label.setText(
+                "An ElevenLabs API key is required for transcription."
+            )
             self.elevenlabs_input.setFocus()
             return
 
@@ -201,7 +208,9 @@ class SetupWindow(QDialog):
             return
 
         try:
-            openrouter_key = self.openrouter_input.text() if self.openrouter_input else ""
+            openrouter_key = (
+                self.openrouter_input.text() if self.openrouter_input else ""
+            )
             write_setup_files(name, elevenlabs_key, openrouter_key)
         except OSError as exc:
             QMessageBox.critical(self, "Could not save setup", str(exc))

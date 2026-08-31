@@ -56,7 +56,8 @@ Action Items, and Open Questions.
 
 ## Storage and privacy
 
-Source runs store settings and output in the checkout. Packaged builds use:
+Source runs store settings and output in the checkout. If Koe is built as a
+frozen Windows app, it uses:
 
 - `%LOCALAPPDATA%\Koe` for secrets, settings, logs, custom corrections, and
   temporary Scribe audio;

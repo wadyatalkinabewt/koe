@@ -92,7 +92,9 @@ def test_capture_opens_both_devices_before_starting_either(tmp_path, monkeypatch
 
         def open(self, **kwargs):
             self.opens.append(kwargs)
-            return FakeStream("mic" if kwargs["input_device_index"] == 12 else "loopback")
+            return FakeStream(
+                "mic" if kwargs["input_device_index"] == 12 else "loopback"
+            )
 
         def terminate(self):
             pass

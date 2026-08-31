@@ -18,7 +18,9 @@ def test_hotkey_parser_normalizes_windows_modifiers():
 def test_callbacks_only_accept_supported_events():
     listener = KeyListener.__new__(KeyListener)
     listener.callbacks = {"on_activate": [], "on_deactivate": []}
-    callback = lambda: None
+
+    def callback():
+        return None
 
     listener.add_callback("on_activate", callback)
     listener.add_callback("unknown", callback)

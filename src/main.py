@@ -7,31 +7,31 @@ in the system tray. Audio capture happens in ResultThread; transcription
 """
 
 import sys
-import time
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
 import pyperclip
 from PyQt5.QtCore import QObject, QPoint, QProcess, QRect, QSize, Qt, QTimer
 from PyQt5.QtGui import QCursor, QIcon
-from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox
+from PyQt5.QtWidgets import QAction, QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
+from commands import CommandServer
 from compat import (
     acquire_single_instance_lock,
-    release_single_instance_lock,
-    set_app_user_model_id,
     clipboard_copy_fallback,
     play_sound_file,
+    release_single_instance_lock,
+    set_app_user_model_id,
 )
-from commands import CommandServer
 from key_listener import KeyListener
 from paths import config_path, install_root, logs_dir, resource_path, source_root
 from result_thread import ResultThread
+from ui import theme
+from ui.initialization_window import InitializationWindow
 from ui.settings_window import SettingsWindow
 from ui.status_window import StatusWindow
-from ui.initialization_window import InitializationWindow
-from ui import theme
 from utils import ConfigManager
 
 _DEBUG_LOG = logs_dir() / "debug.log"
@@ -250,7 +250,7 @@ class KoeApp(QObject):
             QMessageBox.information(
                 self.settings_window,
                 "Using Default Values",
-                "Settings closed without saving. Default values are being used."
+                "Settings closed without saving. Default values are being used.",
             )
         self.initialize_components()
 
@@ -264,7 +264,9 @@ class KoeApp(QObject):
             if self.recording_start_time is not None:
                 elapsed = time.time() - self.recording_start_time
                 if elapsed < self.MIN_RECORDING_SECONDS:
-                    ConfigManager.console_print(f'Ignoring stop - only {elapsed:.1f}s recorded (min: {self.MIN_RECORDING_SECONDS}s)')
+                    ConfigManager.console_print(
+                        f"Ignoring stop - only {elapsed:.1f}s recorded (min: {self.MIN_RECORDING_SECONDS}s)"
+                    )
                     return
 
             self.result_thread.stop_recording(reason="hotkey toggle")
@@ -280,14 +282,18 @@ class KoeApp(QObject):
             # Guard against rapid double-press
             if self.recording_start_time is not None:
                 if time.time() - self.recording_start_time < 0.5:
-                    ConfigManager.console_print('Thread starting, ignoring duplicate press')
+                    ConfigManager.console_print(
+                        "Thread starting, ignoring duplicate press"
+                    )
                     return
 
             if self.result_thread and self.result_thread.isRunning():
                 return
 
             if self.processing_result:
-                ConfigManager.console_print('Still processing previous transcription...')
+                ConfigManager.console_print(
+                    "Still processing previous transcription..."
+                )
                 return
 
             self.recording_start_time = time.time()
@@ -334,14 +340,11 @@ class KoeApp(QObject):
         return clipboard_copy_fallback(text)
 
     def on_transcription_error(self, error_msg):
-        if hasattr(self, 'tray_icon') and self.tray_icon:
+        if hasattr(self, "tray_icon") and self.tray_icon:
             self.tray_icon.showMessage(
-                "Koe - Transcription Failed",
-                error_msg,
-                QSystemTrayIcon.Warning,
-                5000
+                "Koe - Transcription Failed", error_msg, QSystemTrayIcon.Warning, 5000
             )
-        ConfigManager.console_print(f'Transcription error: {error_msg}')
+        ConfigManager.console_print(f"Transcription error: {error_msg}")
 
     def on_transcription_complete(self, result):
         self.recording_start_time = None
@@ -350,28 +353,35 @@ class KoeApp(QObject):
 
         try:
             if suppressed:
-                _debug("Transcription completed after dismissal; result kept out of clipboard")
+                _debug(
+                    "Transcription completed after dismissal; result kept out of clipboard"
+                )
             elif result and result.strip():
                 success = self._copy_to_clipboard(result)
                 if success:
-                    ConfigManager.console_print(f'Copied to clipboard: {result[:50]}...')
+                    ConfigManager.console_print(
+                        f"Copied to clipboard: {result[:50]}..."
+                    )
                 else:
-                    ConfigManager.console_print('WARNING: clipboard copy failed')
+                    ConfigManager.console_print("WARNING: clipboard copy failed")
 
-            if not suppressed and ConfigManager.get_config_value("misc", "noise_on_completion"):
+            if not suppressed and ConfigManager.get_config_value(
+                "misc", "noise_on_completion"
+            ):
                 try:
                     play_sound_file(resource_path("assets", "beep.wav"))
                 except Exception as e:
-                    ConfigManager.console_print(f'Beep failed: {e}')
+                    ConfigManager.console_print(f"Beep failed: {e}")
 
             if self.status_window.isVisible():
-                self.status_window.updateStatus('complete')
+                self.status_window.updateStatus("complete")
 
             self.key_listener.start()
 
         except Exception as e:
             _debug(f"on_transcription_complete EXCEPTION: {e}")
             import traceback
+
             _debug(f"Traceback: {traceback.format_exc()}")
             traceback.print_exc()
         finally:

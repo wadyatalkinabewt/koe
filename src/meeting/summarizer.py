@@ -5,23 +5,21 @@ left to OpenRouter so account privacy policies and available endpoints are
 respected. To switch models, change SummarizerClient.MODEL.
 """
 
-from dataclasses import dataclass
 import json
 import os
 import re
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 import requests
 from dotenv import load_dotenv
 
 from paths import env_path
 
-
 _GENERIC_SPEAKER = re.compile(r"^Speaker\s+\d+$", flags=re.IGNORECASE)
-_TRANSCRIPT_UTTERANCE = re.compile(
-    r"^\*\*\[[^\]]+\]\s+(.+?)\*\*:\s*(.+)$"
-)
+_TRANSCRIPT_UTTERANCE = re.compile(r"^\*\*\[[^\]]+\]\s+(.+?)\*\*:\s*(.+)$")
 _SELF_IDENTIFICATION = re.compile(
     r"\b(?:i\s+am|i\s*m|my\s+name\s+is)\s+(.+)$",
     flags=re.IGNORECASE,
@@ -97,8 +95,7 @@ def _label_core_tokens(label: str) -> list[str]:
 def _is_role_label(label: str) -> bool:
     tokens = _label_core_tokens(label)
     return bool(tokens) and (
-        label.strip().isupper()
-        or all(token in _ROLE_LABELS for token in tokens)
+        label.strip().isupper() or all(token in _ROLE_LABELS for token in tokens)
     )
 
 
@@ -133,7 +130,7 @@ class SummarizerClient:
         "## Open Questions",
     )
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         """
         Initialize summarizer client.
 
@@ -148,7 +145,7 @@ class SummarizerClient:
     def summarize(
         self,
         transcript_content: str,
-        status_callback: Optional[Callable[[str], None]] = None
+        status_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Generate only the summary for callers that do not need identity data."""
         return self.analyze(
@@ -159,8 +156,8 @@ class SummarizerClient:
     def analyze(
         self,
         transcript_content: str,
-        speaker_labels: Optional[list[str]] = None,
-        status_callback: Optional[Callable[[str], None]] = None,
+        speaker_labels: list[str] | None = None,
+        status_callback: Callable[[str], None] | None = None,
     ) -> MeetingAnalysis:
         """Generate a summary and a conservatively validated speaker map.
 
@@ -168,7 +165,9 @@ class SummarizerClient:
         evidence quotes are checked against the labelled transcript before a
         proposed name can affect either meeting document.
         """
-        labels = list(speaker_labels or _speaker_labels_from_transcript(transcript_content))
+        labels = list(
+            speaker_labels or _speaker_labels_from_transcript(transcript_content)
+        )
         prompt = self._build_prompt(transcript_content, speaker_labels=labels)
 
         body = {
@@ -205,7 +204,10 @@ class SummarizerClient:
                 if response.status_code != 200:
                     last_error = f"HTTP {response.status_code}: {response.text[:300]}"
                     # Don't retry on client errors (4xx other than 429)
-                    if 400 <= response.status_code < 500 and response.status_code != 429:
+                    if (
+                        400 <= response.status_code < 500
+                        and response.status_code != 429
+                    ):
                         break
                     continue
 
@@ -228,9 +230,8 @@ class SummarizerClient:
                     if section not in summary
                 ]
                 if missing_sections:
-                    last_error = (
-                        "Incomplete summary response; missing "
-                        + ", ".join(missing_sections)
+                    last_error = "Incomplete summary response; missing " + ", ".join(
+                        missing_sections
                     )
                     continue
 
@@ -263,7 +264,9 @@ class SummarizerClient:
             except Exception as e:
                 last_error = f"Unexpected error: {e}"
 
-        raise Exception(f"Summarization failed after {self.MAX_RETRIES} attempts: {last_error}")
+        raise Exception(
+            f"Summarization failed after {self.MAX_RETRIES} attempts: {last_error}"
+        )
 
     @staticmethod
     def _decode_model_payload(raw_content: Any) -> dict[str, Any]:
@@ -419,7 +422,9 @@ class SummarizerClient:
         role_counts: dict[str, int] = {}
         for _source, target in accepted:
             if _is_role_label(target):
-                role_counts[target.casefold()] = role_counts.get(target.casefold(), 0) + 1
+                role_counts[target.casefold()] = (
+                    role_counts.get(target.casefold(), 0) + 1
+                )
         role_indexes: dict[str, int] = {}
         mapping: dict[str, str] = {}
         for source, target in accepted:
@@ -440,14 +445,9 @@ class SummarizerClient:
         Returns:
             Dict with title, date, duration, participants (all optional)
         """
-        metadata = {
-            "title": None,
-            "date": None,
-            "duration": None,
-            "participants": None
-        }
+        metadata = {"title": None, "date": None, "duration": None, "participants": None}
 
-        lines = transcript_content.split('\n')
+        lines = transcript_content.split("\n")
         fallback_title = None
 
         for line in lines:
@@ -456,23 +456,23 @@ class SummarizerClient:
             # Host notes may precede the transcript. Prefer the meeting's H1
             # over the generated "Notes — ..." heading, while retaining a
             # fallback for documents that contain notes only.
-            if line.startswith('# '):
+            if line.startswith("# "):
                 candidate = line[2:].strip()
                 fallback_title = fallback_title or candidate
                 if not candidate.casefold().startswith("notes —"):
                     metadata["title"] = candidate
 
             # Date: **Date**: value
-            if line.startswith('**Date**:'):
-                metadata["date"] = line.replace('**Date**:', '').strip()
+            if line.startswith("**Date**:"):
+                metadata["date"] = line.replace("**Date**:", "").strip()
 
             # Duration: **Duration**: value
-            if line.startswith('**Duration**:'):
-                metadata["duration"] = line.replace('**Duration**:', '').strip()
+            if line.startswith("**Duration**:"):
+                metadata["duration"] = line.replace("**Duration**:", "").strip()
 
             # Participants: **Participants**: value
-            if line.startswith('**Participants**:'):
-                metadata["participants"] = line.replace('**Participants**:', '').strip()
+            if line.startswith("**Participants**:"):
+                metadata["participants"] = line.replace("**Participants**:", "").strip()
 
             if all(metadata.values()):
                 break
@@ -484,7 +484,7 @@ class SummarizerClient:
     def _build_prompt(
         self,
         transcript_content: str,
-        speaker_labels: Optional[list[str]] = None,
+        speaker_labels: list[str] | None = None,
     ) -> str:
         """
         Build the summarization prompt with anti-hallucination guidelines.
@@ -498,7 +498,9 @@ class SummarizerClient:
         """
         # Extract metadata from transcript
         metadata = self._extract_metadata(transcript_content)
-        labels = list(speaker_labels or _speaker_labels_from_transcript(transcript_content))
+        labels = list(
+            speaker_labels or _speaker_labels_from_transcript(transcript_content)
+        )
         generic_labels = [
             label for label in labels if _GENERIC_SPEAKER.fullmatch(label.strip())
         ]
@@ -519,10 +521,11 @@ class SummarizerClient:
                 # Try to parse and reformat date (e.g., "2026-01-22 12:34" -> "22 Jan 2026")
                 try:
                     from datetime import datetime
+
                     date_part = metadata["date"].split()[0]  # Get just the date part
                     dt = datetime.strptime(date_part, "%Y-%m-%d")
                     date_str = f" - {dt.strftime('%d %b %Y')}"
-                except:
+                except (AttributeError, IndexError, TypeError, ValueError):
                     date_str = f" - {metadata['date']}"
             title_line = f"# {metadata['title']}{date_str}"
 
@@ -534,7 +537,9 @@ class SummarizerClient:
         info_line = " | ".join(info_parts) if info_parts else ""
 
         if title_line:
-            metadata_header = title_line + "\n" + info_line + "\n" if info_line else title_line + "\n"
+            metadata_header = (
+                title_line + "\n" + info_line + "\n" if info_line else title_line + "\n"
+            )
         else:
             metadata_header = ""
 

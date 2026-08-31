@@ -14,9 +14,9 @@ import os
 import re
 import time
 import wave
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 from urllib.parse import quote
 
 import numpy as np
@@ -25,7 +25,6 @@ from dotenv import load_dotenv
 
 from paths import default_snippets_dir, env_path, logs_dir
 from utils import ConfigManager
-
 
 _DEBUG_LOG = logs_dir() / "debug.log"
 _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +157,7 @@ def _normalize_quiet_audio(
         return audio_int16.astype(np.int16, copy=False)
 
     audio_float = audio_int16.astype(np.float32)
-    rms = float(np.sqrt(np.mean(audio_float ** 2)))
+    rms = float(np.sqrt(np.mean(audio_float**2)))
     if rms <= 1e-3 or rms >= target_rms:
         return audio_int16.astype(np.int16, copy=False)
 
@@ -172,7 +171,9 @@ def _normalize_quiet_audio(
     return np.clip(audio_float * gain, -32768, 32767).astype(np.int16)
 
 
-def _audio_to_wav_bytes(audio_int16: np.ndarray, sample_rate: int = 16000) -> io.BytesIO:
+def _audio_to_wav_bytes(
+    audio_int16: np.ndarray, sample_rate: int = 16000
+) -> io.BytesIO:
     """Pack mono int16 PCM samples into an in-memory WAV container."""
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
@@ -325,8 +326,7 @@ def _elevenlabs_post_file(
 
     upload_timeout = max(
         float(timeout),
-        file_size / MIN_MEETING_UPLOAD_BYTES_PER_SECOND
-        + MEETING_UPLOAD_TIMEOUT_MARGIN,
+        file_size / MIN_MEETING_UPLOAD_BYTES_PER_SECOND + MEETING_UPLOAD_TIMEOUT_MARGIN,
     )
     request_timeout = (upload_timeout, float(timeout))
     if upload_timeout > float(timeout):
@@ -356,9 +356,7 @@ def _elevenlabs_post_file(
             ) and not isinstance(exc, requests.ReadTimeout)
             if not retryable or attempt >= ELEVENLABS_UPLOAD_MAX_ATTEMPTS:
                 suffix = (
-                    f" after {attempt} attempts"
-                    if retryable and attempt > 1
-                    else ""
+                    f" after {attempt} attempts" if retryable and attempt > 1 else ""
                 )
                 return None, f"ElevenLabs request error{suffix}: {exc}"
 
@@ -445,9 +443,7 @@ def apply_transcript_corrections(
 
     pattern = re.compile(
         r"(?<!\w)("
-        + "|".join(
-            map(re.escape, sorted(active_corrections, key=len, reverse=True))
-        )
+        + "|".join(map(re.escape, sorted(active_corrections, key=len, reverse=True)))
         + r")(?!\w)",
         flags=re.IGNORECASE,
     )
@@ -474,7 +470,11 @@ def _segments_from_elevenlabs_words(
     words = result.get("words") if isinstance(result, dict) else None
     if not isinstance(words, list):
         text = apply_transcript_corrections(_elevenlabs_result_text(result))
-        return [{"start": offset_sec, "end": offset_sec, "text": text, "label": label}] if text else []
+        return (
+            [{"start": offset_sec, "end": offset_sec, "text": text, "label": label}]
+            if text
+            else []
+        )
 
     segments: list[dict] = []
     current_words: list[str] = []
@@ -487,12 +487,14 @@ def _segments_from_elevenlabs_words(
         nonlocal current_words, current_start, current_end, current_label
         text = apply_transcript_corrections(" ".join(current_words).strip())
         if text and current_start is not None:
-            segments.append({
-                "start": current_start + offset_sec,
-                "end": current_end + offset_sec,
-                "text": text,
-                "label": current_label or label,
-            })
+            segments.append(
+                {
+                    "start": current_start + offset_sec,
+                    "end": current_end + offset_sec,
+                    "text": text,
+                    "label": current_label or label,
+                }
+            )
         current_words = []
         current_start = None
         current_end = 0.0
@@ -616,7 +618,7 @@ def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> s
     parts: list[str] = []
     for start in range(0, len(audio_int16), max_samples):
         result = _transcribe_elevenlabs_audio(
-            audio_int16[start:start + max_samples],
+            audio_int16[start : start + max_samples],
             request_data,
             api_key,
             sample_rate,

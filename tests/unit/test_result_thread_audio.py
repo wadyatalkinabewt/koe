@@ -16,10 +16,7 @@ def test_record_audio_flushes_callback_frames_after_stop(monkeypatch):
     thread.is_running = True
 
     frame_size = 1440
-    frames = [
-        np.full((frame_size, 1), value, dtype=np.int16)
-        for value in range(1, 6)
-    ]
+    frames = [np.full((frame_size, 1), value, dtype=np.int16) for value in range(1, 6)]
 
     class FakeInputStream:
         def __init__(self, *args, callback, **kwargs):
@@ -189,7 +186,15 @@ def test_record_audio_refreshes_default_device_before_each_snippet(
     ]
 
     class FakeInputStream:
-        def __init__(self, *args, callback, device=None, samplerate=None, blocksize=None, **kwargs):
+        def __init__(
+            self,
+            *args,
+            callback,
+            device=None,
+            samplerate=None,
+            blocksize=None,
+            **kwargs,
+        ):
             opened.append((device, samplerate, blocksize))
             self.callback = callback
             self.blocksize = blocksize
@@ -264,7 +269,15 @@ def test_fallback_input_uses_its_own_native_sample_rate(monkeypatch):
     ]
 
     class FakeInputStream:
-        def __init__(self, *args, callback, device=None, samplerate=None, blocksize=None, **kwargs):
+        def __init__(
+            self,
+            *args,
+            callback,
+            device=None,
+            samplerate=None,
+            blocksize=None,
+            **kwargs,
+        ):
             opened.append((device, samplerate, blocksize))
             if device == 0:
                 raise RuntimeError("default endpoint unavailable")
@@ -337,7 +350,15 @@ def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
     ]
 
     class FakeInputStream:
-        def __init__(self, *args, callback, device=None, samplerate=None, blocksize=None, **kwargs):
+        def __init__(
+            self,
+            *args,
+            callback,
+            device=None,
+            samplerate=None,
+            blocksize=None,
+            **kwargs,
+        ):
             opened.append((device, samplerate, blocksize))
             self.callback = callback
             self.blocksize = blocksize
@@ -393,7 +414,9 @@ def test_cancel_discards_audio_before_transcription(monkeypatch):
     monkeypatch.setattr(
         result_thread,
         "transcribe",
-        lambda *_args, **_kwargs: pytest.fail("cancelled audio must not be transcribed"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "cancelled audio must not be transcribed"
+        ),
     )
 
     thread.run()
@@ -470,4 +493,7 @@ def test_stop_recording_logs_the_explicit_caller_reason(monkeypatch):
     thread.stop_recording(reason="hotkey toggle")
 
     assert thread.is_recording is False
-    assert any("hotkey toggle" in message and "was_recording=True" in message for message in messages)
+    assert any(
+        "hotkey toggle" in message and "was_recording=True" in message
+        for message in messages
+    )

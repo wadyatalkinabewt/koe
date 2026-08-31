@@ -22,9 +22,9 @@ from PyQt5.QtWidgets import (
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from paths import default_meetings_dir, default_snippets_dir, resource_path
 from ui import theme
 from ui.base_window import BaseWindow
-from paths import default_meetings_dir, default_snippets_dir, resource_path
 from utils import ConfigManager
 
 
@@ -308,8 +308,13 @@ class SettingsWindow(BaseWindow):
 
     def _fit_window_to_content(self) -> None:
         self.content.adjustSize()
-        desired_height = self.header.sizeHint().height() + self.content.sizeHint().height() + 8
-        screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        desired_height = (
+            self.header.sizeHint().height() + self.content.sizeHint().height() + 8
+        )
+        screen = (
+            QApplication.screenAt(self.frameGeometry().center())
+            or QApplication.primaryScreen()
+        )
         maximum_height = screen.availableGeometry().height() - 48 if screen else 860
         self.setFixedSize(
             self._settings_width,

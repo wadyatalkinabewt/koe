@@ -7,35 +7,37 @@ recordings preserve generic speaker labels rather than falsely treating the
 entire shared microphone as the host.
 """
 
-import sys
 import os
 import re
-import socket
 import shutil
+import socket
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from PyQt5.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal, QUrl
+from PyQt5.QtCore import QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QTextEdit, QPushButton, QInputDialog, QMessageBox,
-    QStackedWidget, QFrame, QComboBox, QGridLayout,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from compat import apply_window_icon, enable_dark_titlebar, set_app_user_model_id
-from paths import default_meetings_dir, resource_path, scribe_temp_dir
-from utils import ConfigManager
-from ui import theme
-from ui.theme import (
-    BG_COLOR, TEXT_COLOR, SECONDARY_TEXT, DIM_TEXT,
-    RECORDING_COLOR, INPUT_BG, INPUT_BORDER, INPUT_FOCUS_BORDER,
-    BUTTON_BG, BUTTON_HOVER_BG, BUTTON_BORDER, LINK_COLOR,
-    SELECTION_BG, SELECTION_TEXT, SCROLLBAR_BG, SCROLLBAR_HANDLE,
-    SCROLLBAR_HANDLE_HOVER,
-)
 from meeting.capture import (
     AudioCapture,
     identify_microphone_speaker,
@@ -43,7 +45,9 @@ from meeting.capture import (
     wav_has_meaningful_audio,
     write_mono_wav,
 )
-
+from paths import default_meetings_dir, resource_path, scribe_temp_dir
+from ui import theme
+from utils import ConfigManager
 
 MODE_ONLINE_ONE_ON_ONE = "online_one_on_one"
 MODE_ONLINE_GROUP = "online_group"
@@ -84,7 +88,7 @@ def _is_in_person(meeting_mode: str) -> bool:
 _INSTANCE_PORT = 9878
 
 
-def acquire_scribe_lock() -> Optional[socket.socket]:
+def acquire_scribe_lock() -> socket.socket | None:
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(("127.0.0.1", _INSTANCE_PORT))
@@ -168,9 +172,13 @@ def _relabel_mixed_segments(
             other_labels.append(label)
 
     generic_labels = [
-        label for label in other_labels if re.fullmatch(r"Speaker \d+", label, flags=re.IGNORECASE)
+        label
+        for label in other_labels
+        if re.fullmatch(r"Speaker \d+", label, flags=re.IGNORECASE)
     ]
-    generic_map = {label: f"Speaker {index}" for index, label in enumerate(generic_labels, 1)}
+    generic_map = {
+        label: f"Speaker {index}" for index, label in enumerate(generic_labels, 1)
+    }
     for segment in relabelled:
         label = segment.get("label")
         if label in generic_map:
@@ -238,8 +246,7 @@ def _participants_for_meeting(
         return [user_name, participant_name]
     if meeting_mode == MODE_IN_PERSON_ONE_ON_ONE:
         owner_present = any(
-            str(segment.get("label") or "").strip().casefold()
-            == user_name.casefold()
+            str(segment.get("label") or "").strip().casefold() == user_name.casefold()
             for segment in segments
         )
         return _unique_labels(
@@ -251,6 +258,7 @@ def _participants_for_meeting(
 
 # ---------- worker ----------
 
+
 class MeetingWorker(QThread):
     """Transcribe + summarize in the background. UI updates via signals."""
 
@@ -258,13 +266,21 @@ class MeetingWorker(QThread):
     done_signal = pyqtSignal(str, str)  # (folder_path, summary_path)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, mic_wav: Path, loopback_wav: Path,
-                 user_name: str, meeting_subject: str, meeting_mode: str,
-                 notes_text: str, output_root: Path,
-                 started_at: datetime, save_audio: bool = False,
-                 save_markdown: bool = False,
-                 meeting_dir: Optional[Path] = None,
-                 participant_name: str = ""):
+    def __init__(
+        self,
+        mic_wav: Path,
+        loopback_wav: Path,
+        user_name: str,
+        meeting_subject: str,
+        meeting_mode: str,
+        notes_text: str,
+        output_root: Path,
+        started_at: datetime,
+        save_audio: bool = False,
+        save_markdown: bool = False,
+        meeting_dir: Path | None = None,
+        participant_name: str = "",
+    ):
         super().__init__()
         self.mic_wav = mic_wav
         self.loopback_wav = loopback_wav
@@ -281,10 +297,10 @@ class MeetingWorker(QThread):
 
     def run(self):
         try:
-            from transcription import transcribe_file_segments
             from meeting.summarizer import SummarizerClient
             from meeting.transcript import render_transcript
             from meeting.transcript_pdf import render_transcript_pdf
+            from transcription import transcribe_file_segments
 
             # ----- one mono upload for one-duration billing -----
             self.status_signal.emit("Transcribing your meeting audio...")
@@ -451,8 +467,7 @@ class MeetingWorker(QThread):
                         self.loopback_wav,
                         meeting_dir,
                         include_loopback=not (
-                            _is_in_person(self.meeting_mode)
-                            and not loopback_meaningful
+                            _is_in_person(self.meeting_mode) and not loopback_meaningful
                         ),
                     )
                 except Exception as exc:
@@ -473,6 +488,7 @@ class MeetingWorker(QThread):
 
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             self.error_signal.emit(f"Failed: {e}")
 
@@ -505,8 +521,9 @@ def _meeting_directory(
 
 # ---------- main window ----------
 
+
 class ScribeWindow(QMainWindow):
-    def __init__(self, meeting_mode: Optional[str] = None):
+    def __init__(self, meeting_mode: str | None = None):
         super().__init__()
         if ConfigManager._instance is None:
             ConfigManager.initialize()
@@ -519,13 +536,11 @@ class ScribeWindow(QMainWindow):
         self.meeting_mode = (
             meeting_mode
             if meeting_mode in MEETING_MODES
-            else (
-                saved_mode
-                if saved_mode in MEETING_MODES
-                else MODE_ONLINE_ONE_ON_ONE
-            )
+            else (saved_mode if saved_mode in MEETING_MODES else MODE_ONLINE_ONE_ON_ONE)
         )
-        self.save_audio = bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
+        self.save_audio = bool(
+            ConfigManager.get_config_value("meeting_options", "save_audio")
+        )
         self.save_markdown = bool(
             ConfigManager.get_config_value("meeting_options", "save_markdown")
         )
@@ -544,12 +559,12 @@ class ScribeWindow(QMainWindow):
         self.setFixedSize(760, 590)
         self.setStyleSheet(self._stylesheet())
 
-        self.capture: Optional[AudioCapture] = None
-        self.temp_dir: Optional[Path] = None
-        self.recording_started_at: Optional[datetime] = None
-        self.meeting_started_at: Optional[datetime] = None
-        self.meeting_dir: Optional[Path] = None
-        self.worker: Optional[MeetingWorker] = None
+        self.capture: AudioCapture | None = None
+        self.temp_dir: Path | None = None
+        self.recording_started_at: datetime | None = None
+        self.meeting_started_at: datetime | None = None
+        self.meeting_dir: Path | None = None
+        self.worker: MeetingWorker | None = None
         self.elapsed_timer = QTimer(self)
         self.elapsed_timer.timeout.connect(self._tick_timer)
         self.recording_pulse_timer = QTimer(self)
@@ -582,7 +597,9 @@ class ScribeWindow(QMainWindow):
         return self.meeting_dir
 
     def _stylesheet(self) -> str:
-        return theme.application_stylesheet() + f"""
+        return (
+            theme.application_stylesheet()
+            + f"""
             QLabel#meetingFieldTitle {{
                 color: {theme.ACCENT_COLOR};
                 font-size: 11pt;
@@ -703,6 +720,7 @@ class ScribeWindow(QMainWindow):
                 color: {theme.TEXT_COLOR};
             }}
         """
+        )
 
     def _build_ui(self):
         central = QWidget()
@@ -870,7 +888,9 @@ class ScribeWindow(QMainWindow):
         layout.addWidget(notes_lbl)
 
         self.notes_edit = QTextEdit()
-        self.notes_edit.setPlaceholderText("Add context, decisions, or follow-ups while you talk…")
+        self.notes_edit.setPlaceholderText(
+            "Add context, decisions, or follow-ups while you talk…"
+        )
         layout.addWidget(self.notes_edit, stretch=1)
 
         self._done_folder_path = ""
@@ -906,7 +926,9 @@ class ScribeWindow(QMainWindow):
 
     def _set_record_button_state(self, *, recording: bool) -> None:
         self.record_button.setText("Stop" if recording else "Start")
-        self.record_button.setIcon(self._recording_dot_icon(active=True) if recording else QIcon())
+        self.record_button.setIcon(
+            self._recording_dot_icon(active=True) if recording else QIcon()
+        )
         self.record_button.setObjectName("stopButton" if recording else "startButton")
         self.record_button.style().unpolish(self.record_button)
         self.record_button.style().polish(self.record_button)
@@ -988,13 +1010,16 @@ class ScribeWindow(QMainWindow):
         try:
             self.capture = AudioCapture(self.temp_dir)
         except Exception as e:
-            QMessageBox.critical(self, "Audio device error", f"Could not access audio: {e}")
+            QMessageBox.critical(
+                self, "Audio device error", f"Could not access audio: {e}"
+            )
             return
 
         if not self.capture.start():
             QMessageBox.critical(
-                self, "Recording failed",
-                "Could not start audio capture. Check that mic and system audio are available."
+                self,
+                "Recording failed",
+                "Could not start audio capture. Check that mic and system audio are available.",
             )
             self.capture.cleanup()
             self.capture = None
@@ -1048,7 +1073,9 @@ class ScribeWindow(QMainWindow):
             meeting_mode=self.meeting_mode,
             notes_text=self.notes_edit.toPlainText(),
             output_root=self.output_root,
-            started_at=self.meeting_started_at or self.recording_started_at or datetime.now(),
+            started_at=self.meeting_started_at
+            or self.recording_started_at
+            or datetime.now(),
             save_audio=self.save_audio,
             save_markdown=self.save_markdown,
             meeting_dir=meeting_dir,
@@ -1091,7 +1118,9 @@ class ScribeWindow(QMainWindow):
         self.tick_seconds += 1
         m, s = divmod(self.tick_seconds, 60)
         h, m = divmod(m, 60)
-        self.timer_label.setText(f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}")
+        self.timer_label.setText(
+            f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+        )
 
     # ---------- view transitions ----------
 
@@ -1103,7 +1132,9 @@ class ScribeWindow(QMainWindow):
         self.participant_input.setEnabled(False)
         self.notes_edit.setEnabled(False)
         self.processing_label.setToolTip("")
-        self._set_processing_state("Preparing Transcript…", theme.ACCENT_COLOR, pulse=True)
+        self._set_processing_state(
+            "Preparing Transcript…", theme.ACCENT_COLOR, pulse=True
+        )
         self.action_stack.setCurrentWidget(self.processing_controls_widget)
 
     def _on_worker_status(self, msg: str):
@@ -1122,7 +1153,9 @@ class ScribeWindow(QMainWindow):
             return "No Speech Detected"
         if "elevenlabs http 400" in lowered:
             return "Couldn’t Process Audio"
-        first_line = next((line.strip() for line in message.splitlines() if line.strip()), "")
+        first_line = next(
+            (line.strip() for line in message.splitlines() if line.strip()), ""
+        )
         if not first_line:
             return "Couldn’t Finish"
         return first_line if len(first_line) <= 34 else f"{first_line[:33].rstrip()}…"
@@ -1173,7 +1206,8 @@ class ScribeWindow(QMainWindow):
     def closeEvent(self, event):
         if self.capture and self.capture.is_recording():
             reply = QMessageBox.question(
-                self, "Recording in progress",
+                self,
+                "Recording in progress",
                 "Discard recording and exit?",
                 QMessageBox.Discard | QMessageBox.Cancel,
                 QMessageBox.Cancel,
@@ -1192,7 +1226,8 @@ class ScribeWindow(QMainWindow):
 
         if self.worker and self.worker.isRunning():
             reply = QMessageBox.question(
-                self, "Still processing",
+                self,
+                "Still processing",
                 "Transcription / summary is still running. Close anyway?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
@@ -1205,6 +1240,7 @@ class ScribeWindow(QMainWindow):
 
 
 # ---------- entry point ----------
+
 
 def main():
     lock = acquire_scribe_lock()

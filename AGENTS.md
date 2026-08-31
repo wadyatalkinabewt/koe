@@ -1,11 +1,11 @@
-# Koe repository contract
+# Koe contributor contract
 
 Koe is a Windows-only tray application with two workflows:
 
-1. Snippets: global toggle hotkey -> ElevenLabs Scribe v2 -> clipboard and
+1. Snippets: global toggle hotkey → ElevenLabs Scribe v2 → clipboard and
    five rotating Markdown files.
-2. Scribe: microphone plus Windows loopback -> one aligned mono upload ->
-   diarized meeting transcript -> optional OpenRouter summary.
+2. Scribe: microphone plus Windows loopback → one aligned mono upload →
+   diarized meeting transcript → optional OpenRouter summary.
 
 ## Invariants
 
@@ -23,7 +23,7 @@ Koe is a Windows-only tray application with two workflows:
   are relabelled.
 - The snippet hotkey is press-to-toggle. ElevenLabs remains the only
   transcription path.
-- Settings autosave and must not restart Koe or interrupt an active snippet.
+- Settings changes autosave and must not restart Koe or interrupt active audio.
 - The snippet status card keeps fixed geometry across Listening/Transcribing.
 - Scribe sends one mono meeting file with `use_multi_channel=false`. Never
   reintroduce separate billable mic and loopback transcription requests or
@@ -73,29 +73,10 @@ Packaged installs retain normal per-user Windows storage:
 - `%USERPROFILE%\Documents\Koe`: durable snippets and meetings.
 
 Never delete or rewrite either runtime layout without explicit user approval.
-Never commit `.env`, `config.yaml`, private build secrets, recordings,
-transcripts, vocabulary, or local paths. Installer upgrades
-and uninstall must preserve packaged runtime state.
+Never commit `.env`, `config.yaml`, secrets, recordings, transcripts, or local
+paths. Frozen-app upgrades and uninstall must preserve packaged runtime state.
 
-## Source map
-
-- `run.py`: GUI setup gate and command-aware app bootstrap.
-- `src/main.py`: tray, hotkey lifecycle, clipboard, and Scribe launch.
-- `src/commands.py`: localhost single-instance shortcut command channel.
-- `src/paths.py`: source-local and packaged per-user runtime locations.
-- `src/result_thread.py`: snippet microphone capture and lifecycle.
-- `src/transcription.py`: ElevenLabs requests, private corrections, and rotating
-  snippet text storage.
-- `src/meeting/capture.py`: mic/loopback capture, mono mixing, and host mapping.
-- `src/meeting/app.py`: Scribe UI and single-upload worker.
-- `src/meeting/transcript.py`: Markdown transcript rendering.
-- `src/meeting/pdf_theme.py`: shared meeting PDF typography, colour, and header.
-- `src/meeting/transcript_pdf.py`: coloured-card PDF transcript rendering.
-- `src/meeting/summarizer.py`: optional OpenRouter summary client.
-- `src/meeting/summary_pdf.py`: clean PDF rendering for Scribe summaries.
-- `src/ui/setup_window.py`: first-run GUI onboarding.
-- `src/ui/theme.py`: shared desktop visual system.
-- `src/config_schema.yaml`: authoritative preference schema.
+See `docs/DEVELOPMENT.md` for the source map and verification commands.
 
 ## Working rules
 
@@ -106,19 +87,6 @@ and uninstall must preserve packaged runtime state.
   second configuration source.
 - Keep the dark-slate/indigo/coral visual system consistent across all surfaces.
 - Use `apply_patch` for source edits. Verify resolved paths before bulk deletion.
-- Private packaging, handoff artifacts, and generated executables are ignored
-  and must never be committed.
-
-## Verification
-
-Run focused tests first, then:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-$files = @('run.py') + (Get-ChildItem src -Recurse -Filter *.py | ForEach-Object FullName)
-.\.venv\Scripts\python.exe -m py_compile $files
-git diff --check
-```
 
 Before restarting Koe, confirm no live snippet or Scribe recording would be
 interrupted.

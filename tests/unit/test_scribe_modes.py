@@ -73,7 +73,9 @@ def test_audio_archive_is_all_or_nothing(tmp_path, monkeypatch):
     assert not (meeting_dir / "meeting-audio.wav").exists()
 
 
-def test_group_worker_sends_one_mixed_request_and_saves_original_sources(tmp_path, monkeypatch):
+def test_group_worker_sends_one_mixed_request_and_saves_original_sources(
+    tmp_path, monkeypatch
+):
     import transcription
     from meeting import summarizer
     from meeting.app import MODE_ONLINE_GROUP, MeetingWorker
@@ -93,8 +95,12 @@ def test_group_worker_sends_one_mixed_request_and_saves_original_sources(tmp_pat
             {"start": 1.1, "end": 1.5, "text": "Morning.", "label": "Omar"},
         ]
 
-    monkeypatch.setattr(transcription, "transcribe_file_segments", fake_file_transcription)
-    monkeypatch.setattr("meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1")
+    monkeypatch.setattr(
+        transcription, "transcribe_file_segments", fake_file_transcription
+    )
+    monkeypatch.setattr(
+        "meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1"
+    )
     monkeypatch.setattr(
         summarizer.SummarizerClient,
         "analyze",
@@ -210,7 +216,9 @@ def test_group_worker_applies_contextual_names_to_transcript_and_summary(
     assert not (meeting_dir / ".transcript-contextual.pdf").exists()
 
 
-def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(tmp_path, monkeypatch):
+def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(
+    tmp_path, monkeypatch
+):
     import transcription
     from meeting import summarizer
     from meeting.app import MODE_ONLINE_GROUP, MeetingWorker
@@ -326,7 +334,9 @@ def test_group_worker_defaults_to_pdf_only_when_loopback_stream_is_empty(
             {"start": 0.0, "end": 0.5, "text": "Solo update.", "label": "Speaker 1"}
         ],
     )
-    monkeypatch.setattr("meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1")
+    monkeypatch.setattr(
+        "meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1"
+    )
     monkeypatch.setattr(
         summarizer.SummarizerClient,
         "analyze",
@@ -348,7 +358,9 @@ def test_group_worker_defaults_to_pdf_only_when_loopback_stream_is_empty(
         started_at=datetime(2026, 7, 14, 9, 0),
     )
     worker.error_signal.connect(errors.append)
-    worker.done_signal.connect(lambda folder, summary: completed.append((folder, summary)))
+    worker.done_signal.connect(
+        lambda folder, summary: completed.append((folder, summary))
+    )
 
     worker.run()
 
@@ -620,7 +632,9 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
     assert not (meeting_dir / "meeting-audio.wav").exists()
 
 
-def test_no_speech_retry_preserves_reserved_meeting_folder_and_local_audio(tmp_path, monkeypatch):
+def test_no_speech_retry_preserves_reserved_meeting_folder_and_local_audio(
+    tmp_path, monkeypatch
+):
     import transcription
     from meeting.app import MODE_ONLINE_ONE_ON_ONE, MeetingWorker
 
@@ -635,7 +649,9 @@ def test_no_speech_retry_preserves_reserved_meeting_folder_and_local_audio(tmp_p
     marker.write_text("keep", encoding="utf-8")
     errors = []
 
-    monkeypatch.setattr(transcription, "transcribe_file_segments", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        transcription, "transcribe_file_segments", lambda *_args, **_kwargs: []
+    )
     worker = MeetingWorker(
         mic_wav=mic,
         loopback_wav=loopback,

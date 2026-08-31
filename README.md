@@ -1,5 +1,7 @@
 # Koe
 
+![Koe icon](assets/koe-icon.png)
+
 Koe is a Windows tray app for fast voice snippets and meeting transcripts. It
 uses ElevenLabs Scribe v2 for speech-to-text and can use OpenRouter to produce
 structured meeting summaries.
@@ -11,7 +13,7 @@ structured meeting summaries.
 - **Scribe:** capture microphone and Windows loopback audio, submit one aligned
   mono recording for diarized transcription, and generate transcript and
   summary PDFs.
-- **Private corrections:** supply local exact-token corrections without putting
+- **Custom corrections:** supply local exact-token corrections without putting
   names, organisations, or domain terminology in the repository.
 
 Snippet audio is kept in memory and is never written to disk. Successfully
@@ -32,7 +34,7 @@ storage behaviour, and privacy boundaries.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe run.py
 ```
 
@@ -62,7 +64,13 @@ and must not be committed.
 
 ## Development
 
-Architecture, runtime paths, and verification commands are documented in
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Contributor setup, architecture, runtime paths, and verification commands are
+documented in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-Koe currently runs directly from source.
+## License
+
+Koe's original source code is released under the [MIT License](LICENSE).
+Third-party dependencies retain their own licences. In particular, PyQt5 is
+dual-licensed under GPLv3 or a commercial Riverbank licence; review
+[Riverbank's licensing terms](https://www.riverbankcomputing.com/software/pyqt)
+before redistributing a bundled application.

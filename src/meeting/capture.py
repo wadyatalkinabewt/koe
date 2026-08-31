@@ -9,10 +9,9 @@ Mic and loopback are captured through WASAPI at their native rates. Both are
 downmixed/resampled to the single 16 kHz mono upload only after recording.
 """
 
-import wave
 import threading
+import wave
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pyaudiowpatch as pyaudio
@@ -29,7 +28,9 @@ def _log(message: str) -> None:
 class AudioCapture:
     """Captures mic + system loopback to two WAV files in a temp dir."""
 
-    def __init__(self, temp_dir: Path, mic_sample_rate: int | None = None, chunk_size: int = 1024):
+    def __init__(
+        self, temp_dir: Path, mic_sample_rate: int | None = None, chunk_size: int = 1024
+    ):
         self.temp_dir = Path(temp_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.mic_sample_rate = int(mic_sample_rate) if mic_sample_rate else 0
@@ -41,8 +42,8 @@ class AudioCapture:
         self._recording = False
         self._mic_stream = None
         self._loopback_stream = None
-        self._mic_wav: Optional[wave.Wave_write] = None
-        self._loopback_wav: Optional[wave.Wave_write] = None
+        self._mic_wav: wave.Wave_write | None = None
+        self._loopback_wav: wave.Wave_write | None = None
         self._wav_lock = threading.Lock()
 
         self.loopback_sample_rate: int = 48000
@@ -52,17 +53,17 @@ class AudioCapture:
         self.mic_device = self._find_default_mic()
         if not self.mic_sample_rate:
             self.mic_sample_rate = int(
-                (self.mic_device or {}).get('defaultSampleRate') or 16000
+                (self.mic_device or {}).get("defaultSampleRate") or 16000
             )
         self.loopback_device = self._find_loopback_device()
 
-    def _find_default_mic(self) -> Optional[dict]:
+    def _find_default_mic(self) -> dict | None:
         try:
             wasapi = self.p.get_host_api_info_by_type(pyaudio.paWASAPI)
-            device_index = int(wasapi.get('defaultInputDevice', -1))
+            device_index = int(wasapi.get("defaultInputDevice", -1))
             if device_index >= 0:
                 info = self.p.get_device_info_by_index(device_index)
-                if int(info.get('maxInputChannels') or 0) > 0:
+                if int(info.get("maxInputChannels") or 0) > 0:
                     _log(
                         f"[Scribe] WASAPI mic: {info['name']} "
                         f"({int(info['defaultSampleRate'])}Hz)"
@@ -79,12 +80,14 @@ class AudioCapture:
             _log(f"[Scribe] Could not find default mic: {e}")
             return None
 
-    def _find_loopback_device(self) -> Optional[dict]:
+    def _find_loopback_device(self) -> dict | None:
         try:
             default = self.p.get_default_wasapi_loopback()
             if default:
-                _log(f"[Scribe] Default loopback: {default['name']} "
-                     f"({default['defaultSampleRate']}Hz, {default['maxInputChannels']}ch)")
+                _log(
+                    f"[Scribe] Default loopback: {default['name']} "
+                    f"({default['defaultSampleRate']}Hz, {default['maxInputChannels']}ch)"
+                )
                 return default
         except Exception as e:
             _log(f"[Scribe] get_default_wasapi_loopback failed: {e}")
@@ -93,7 +96,9 @@ class AudioCapture:
             wasapi = self.p.get_host_api_info_by_type(pyaudio.paWASAPI)
             for i in range(self.p.get_device_count()):
                 d = self.p.get_device_info_by_index(i)
-                if d.get('hostApi') == wasapi['index'] and d.get('isLoopbackDevice', False):
+                if d.get("hostApi") == wasapi["index"] and d.get(
+                    "isLoopbackDevice", False
+                ):
                     _log(f"[Scribe] Fallback loopback: {d['name']}")
                     return d
         except Exception as e:
@@ -127,14 +132,14 @@ class AudioCapture:
 
         try:
             # Open WAV files for writing BEFORE starting streams
-            self._mic_wav = wave.open(str(self.mic_path), 'wb')
+            self._mic_wav = wave.open(str(self.mic_path), "wb")
             self._mic_wav.setnchannels(1)
             self._mic_wav.setsampwidth(2)
             self._mic_wav.setframerate(self.mic_sample_rate)
 
-            self.loopback_sample_rate = int(self.loopback_device['defaultSampleRate'])
-            self.loopback_channels = int(self.loopback_device['maxInputChannels'])
-            self._loopback_wav = wave.open(str(self.loopback_path), 'wb')
+            self.loopback_sample_rate = int(self.loopback_device["defaultSampleRate"])
+            self.loopback_channels = int(self.loopback_device["maxInputChannels"])
+            self._loopback_wav = wave.open(str(self.loopback_path), "wb")
             self._loopback_wav.setnchannels(self.loopback_channels)
             self._loopback_wav.setsampwidth(2)
             self._loopback_wav.setframerate(self.loopback_sample_rate)
@@ -148,7 +153,7 @@ class AudioCapture:
                 channels=1,
                 rate=self.mic_sample_rate,
                 input=True,
-                input_device_index=int(self.mic_device['index']),
+                input_device_index=int(self.mic_device["index"]),
                 frames_per_buffer=self.chunk_size,
                 stream_callback=self._mic_callback,
                 start=False,
@@ -159,7 +164,7 @@ class AudioCapture:
                 channels=self.loopback_channels,
                 rate=self.loopback_sample_rate,
                 input=True,
-                input_device_index=int(self.loopback_device['index']),
+                input_device_index=int(self.loopback_device["index"]),
                 frames_per_buffer=self.chunk_size,
                 stream_callback=self._loopback_callback,
                 start=False,
@@ -223,7 +228,7 @@ class AudioCapture:
 
     def cleanup(self):
         self.stop()
-        if hasattr(self, 'p') and self.p is not None:
+        if hasattr(self, "p") and self.p is not None:
             try:
                 self.p.terminate()
             except Exception:
@@ -233,7 +238,7 @@ class AudioCapture:
 
 def load_wav_as_int16(path: Path) -> tuple[np.ndarray, int, int]:
     """Read a WAV file → (samples, sample_rate, channels). Samples are int16."""
-    with wave.open(str(path), 'rb') as wf:
+    with wave.open(str(path), "rb") as wf:
         sr = wf.getframerate()
         nchannels = wf.getnchannels()
         nframes = wf.getnframes()
@@ -275,9 +280,7 @@ def wav_has_meaningful_audio(
             samples = np.frombuffer(raw, dtype=np.int16)
             if samples.size == 0:
                 continue
-            frame_rms = float(
-                np.sqrt(np.mean(samples.astype(np.float32) ** 2))
-            )
+            frame_rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
             if frame_rms >= rms_threshold:
                 active_frames += samples.size // channels
                 if active_frames >= required_active_frames:
@@ -285,14 +288,20 @@ def wav_has_meaningful_audio(
     return False
 
 
-def preprocess_audio_source(audio: np.ndarray, sample_rate: int, channels: int,
-                            target_rate: int = 16000, target_rms: float = 3000.0) -> np.ndarray:
+def preprocess_audio_source(
+    audio: np.ndarray,
+    sample_rate: int,
+    channels: int,
+    target_rate: int = 16000,
+    target_rms: float = 3000.0,
+) -> np.ndarray:
     """Convert one captured source to normalized 16 kHz mono int16.
 
     Energy-preserving stereo→mono (sum/√n), polyphase resampling, RMS normalize.
     """
-    from scipy.signal import resample_poly
     from math import gcd
+
+    from scipy.signal import resample_poly
 
     if audio.size == 0:
         return audio.astype(np.int16)
@@ -302,7 +311,7 @@ def preprocess_audio_source(audio: np.ndarray, sample_rate: int, channels: int,
     # Stereo → mono (energy-preserving)
     if channels > 1:
         audio_f = audio_f.reshape(-1, channels)
-        audio_f = audio_f.sum(axis=1) / (channels ** 0.5)
+        audio_f = audio_f.sum(axis=1) / (channels**0.5)
 
     # Resample to target rate
     if sample_rate != target_rate:
@@ -312,9 +321,11 @@ def preprocess_audio_source(audio: np.ndarray, sample_rate: int, channels: int,
         audio_f = resample_poly(audio_f, up, down)
 
     # Normalize to target RMS so quiet system audio remains intelligible.
-    rms = np.sqrt(np.mean(audio_f ** 2))
+    rms = np.sqrt(np.mean(audio_f**2))
     if rms > 1e-3:
-        gain = min(target_rms / rms, 8.0)  # cap gain to avoid runaway on near-silent audio
+        gain = min(
+            target_rms / rms, 8.0
+        )  # cap gain to avoid runaway on near-silent audio
         audio_f = audio_f * gain
 
     return np.clip(audio_f, -32768, 32767).astype(np.int16)
@@ -345,7 +356,9 @@ def prepare_mono_meeting_mix(
     """
     mic_raw, mic_rate, mic_channels = load_wav_as_int16(mic_path)
     loop_raw, loop_rate, loop_channels = load_wav_as_int16(loopback_path)
-    mic = preprocess_audio_source(mic_raw, mic_rate, mic_channels, target_rate=target_rate)
+    mic = preprocess_audio_source(
+        mic_raw, mic_rate, mic_channels, target_rate=target_rate
+    )
     loopback = preprocess_audio_source(
         loop_raw,
         loop_rate,
@@ -356,8 +369,8 @@ def prepare_mono_meeting_mix(
     sample_count = max(mic.size, loopback.size)
     mic_aligned = np.zeros(sample_count, dtype=np.int16)
     loop_aligned = np.zeros(sample_count, dtype=np.int16)
-    mic_aligned[:mic.size] = mic
-    loop_aligned[:loopback.size] = loopback
+    mic_aligned[: mic.size] = mic
+    loop_aligned[: loopback.size] = loopback
 
     mixed = mic_aligned.astype(np.float32) + loop_aligned.astype(np.float32)
     peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
@@ -376,7 +389,7 @@ def source_rms(audio: np.ndarray, start: float, end: float, sample_rate: int) ->
     if last <= first:
         return 0.0
     window = audio[first:last].astype(np.float32)
-    return float(np.sqrt(np.mean(window ** 2))) if window.size else 0.0
+    return float(np.sqrt(np.mean(window**2))) if window.size else 0.0
 
 
 def identify_microphone_speaker(

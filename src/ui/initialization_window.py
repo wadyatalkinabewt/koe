@@ -1,10 +1,9 @@
 import os
 import sys
 import time
-from pathlib import Path
 
-from PyQt5.QtCore import QTimer, QRectF, Qt
-from PyQt5.QtGui import QColor, QBrush, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtCore import QRectF, Qt, QTimer
+from PyQt5.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -17,8 +16,8 @@ from PyQt5.QtWidgets import (
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from ui import theme
 from paths import resource_path
+from ui import theme
 
 
 class InitializationWindow(QMainWindow):

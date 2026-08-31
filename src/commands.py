@@ -7,7 +7,6 @@ import threading
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-
 COMMAND_HOST = "127.0.0.1"
 COMMAND_PORT = 9877
 VALID_COMMANDS = {"snippet", "scribe", "activate"}
@@ -57,7 +56,9 @@ class CommandServer(QObject):
             return False
         self._socket = server
         self.port = int(server.getsockname()[1])
-        self._thread = threading.Thread(target=self._serve, name="KoeCommandServer", daemon=True)
+        self._thread = threading.Thread(
+            target=self._serve, name="KoeCommandServer", daemon=True
+        )
         self._thread.start()
         return True
 
@@ -66,13 +67,15 @@ class CommandServer(QObject):
             try:
                 assert self._socket is not None
                 connection, _address = self._socket.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
             with connection:
                 try:
-                    payload = connection.recv(64).decode("utf-8", errors="ignore").strip()
+                    payload = (
+                        connection.recv(64).decode("utf-8", errors="ignore").strip()
+                    )
                     if payload in VALID_COMMANDS:
                         connection.sendall(b"ok\n")
                         self.command_received.emit(payload)

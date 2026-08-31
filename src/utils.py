@@ -1,12 +1,15 @@
-import yaml
 import os
 import re
 from pathlib import Path
 
+import yaml
+
 from paths import config_path, resource_path
+
 
 class ConfigManager:
     """Manages application configuration settings."""
+
     _instance = None
 
     def __init__(self):
@@ -26,7 +29,7 @@ class ConfigManager:
             cls._instance.load_user_config()
 
     @classmethod
-    def get_instance(cls) -> 'ConfigManager':
+    def get_instance(cls) -> "ConfigManager":
         if cls._instance is None:
             cls.initialize()
         if cls._instance.config is None:  # type: ignore
@@ -78,11 +81,13 @@ class ConfigManager:
         if not config:
             instance.config = {}
             config = instance.config
-            
+
         for key in keys[:-1]:
             if key not in config:
                 config[key] = {}
-            elif getattr(config, "get", None) is None or not isinstance(config[key], dict):
+            elif getattr(config, "get", None) is None or not isinstance(
+                config[key], dict
+            ):
                 config[key] = {}
             config = config[key]  # type: ignore
         config[keys[-1]] = value  # type: ignore
@@ -93,16 +98,17 @@ class ConfigManager:
         if schema_path is None:
             schema_path = resource_path("src", "config_schema.yaml")
 
-        with open(schema_path, 'r') as file:
+        with open(schema_path) as file:
             schema = yaml.safe_load(file)
         return schema
 
     def load_default_config(self):
         """Load default configuration values from the schema."""
+
         def extract_value(item):
             if isinstance(item, dict):
-                if 'value' in item:
-                    return item['value']
+                if "value" in item:
+                    return item["value"]
                 else:
                     return {k: extract_value(v) for k, v in item.items()}
             return item
@@ -114,17 +120,17 @@ class ConfigManager:
 
     def _validate_config_value(self, value, schema_item, path):
         """Validate a config value against its schema definition."""
-        if not isinstance(schema_item, dict) or 'type' not in schema_item:
+        if not isinstance(schema_item, dict) or "type" not in schema_item:
             # Not a leaf node, skip validation
             return True
 
-        expected_type = schema_item['type']
+        expected_type = schema_item["type"]
         type_map = {
-            'str': str,
-            'int': int,
-            'float': float,
-            'bool': bool,
-            'dict': dict,
+            "str": str,
+            "int": int,
+            "float": float,
+            "bool": bool,
+            "dict": dict,
         }
 
         # Allow None for optional values
@@ -135,12 +141,16 @@ class ConfigManager:
         if expected_type in type_map:
             expected_python_type = type_map[expected_type]
             if not isinstance(value, expected_python_type):
-                print(f"[!] Config validation warning: '{path}' should be {expected_type}, got {type(value).__name__}. Using default.")
+                print(
+                    f"[!] Config validation warning: '{path}' should be {expected_type}, got {type(value).__name__}. Using default."
+                )
                 return False
 
         # Check if value is in allowed options
-        if 'options' in schema_item and value not in schema_item['options']:
-            print(f"[!] Config validation warning: '{path}' value '{value}' not in allowed options {schema_item['options']}. Using default.")
+        if "options" in schema_item and value not in schema_item["options"]:
+            print(
+                f"[!] Config validation warning: '{path}' value '{value}' not in allowed options {schema_item['options']}. Using default."
+            )
             return False
 
         return True
@@ -159,16 +169,19 @@ class ConfigManager:
             user_value = user_section[key]
 
             # If schema_value has 'type', it's a leaf node - validate it
-            if isinstance(schema_value, dict) and 'type' in schema_value:
-                if not self._validate_config_value(user_value, schema_value, current_path):
+            if isinstance(schema_value, dict) and "type" in schema_value:
+                if not self._validate_config_value(
+                    user_value, schema_value, current_path
+                ):
                     # Reset to default value
-                    user_section[key] = schema_value.get('value')
+                    user_section[key] = schema_value.get("value")
             elif isinstance(schema_value, dict) and isinstance(user_value, dict):
                 # Recurse into nested sections
                 self._validate_config_section(user_value, schema_value, current_path)
 
     def load_user_config(self, config_file=None):
         """Load user configuration and merge with default config."""
+
         def deep_update(source, overrides, schema):
             for key, value in overrides.items():
                 # The schema is authoritative. Retired or misspelled settings
@@ -176,7 +189,7 @@ class ConfigManager:
                 if key not in source:
                     continue
                 schema_value = schema.get(key, {}) if isinstance(schema, dict) else {}
-                if isinstance(schema_value, dict) and 'type' in schema_value:
+                if isinstance(schema_value, dict) and "type" in schema_value:
                     source[key] = value
                     continue
                 source_value = source[key]
@@ -194,7 +207,7 @@ class ConfigManager:
         config_file = Path(config_file) if config_file else config_path()
         if config_file.is_file():
             try:
-                with open(config_file, 'r', encoding='utf-8') as file:
+                with open(config_file, encoding="utf-8") as file:
                     user_config = yaml.safe_load(file) or {}
                     if not isinstance(user_config, dict):
                         return
@@ -214,16 +227,17 @@ class ConfigManager:
             user_config[section] = settings
 
         import time
+
         filepath = Path(config_file) if config_file else config_path()
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = filepath.with_suffix('.tmp')
-        
+        temp_path = filepath.with_suffix(".tmp")
+
         # Write to temp file first
-        with open(temp_path, 'w', encoding='utf-8') as file:
+        with open(temp_path, "w", encoding="utf-8") as file:
             yaml.dump(instance.config, file, default_flow_style=False)
             file.flush()
             os.fsync(file.fileno())  # Ensure it's on disk
-            
+
         # Try to replace the original file, with retries for Windows file locks
         max_retries = 3
         retry_delay = 0.1
@@ -239,7 +253,7 @@ class ConfigManager:
                     # If we fail after all retries, clean up temp file and raise
                     try:
                         temp_path.unlink()
-                    except:
+                    except OSError:
                         pass
                     raise RuntimeError(f"Failed to save config due to file lock: {e}")
 
@@ -260,8 +274,11 @@ class ConfigManager:
     @classmethod
     def console_print(cls, message):
         """Print a message to the console if enabled in the configuration."""
-        if cls._instance and cls._instance.config.get('misc', {}).get('print_to_terminal'):
+        if cls._instance and cls._instance.config.get("misc", {}).get(
+            "print_to_terminal"
+        ):
             print(message)
+
 
 class TextProcessor:
     """Word-preserving formatting for ElevenLabs snippet output."""
@@ -269,17 +286,17 @@ class TextProcessor:
     @staticmethod
     def normalize_spacing(text):
         """Normalize whitespace and punctuation spacing without changing words."""
-        text = re.sub(r'\s+', ' ', (text or '').strip())
-        text = re.sub(r'\s+([,.?!])', r'\1', text)
-        text = re.sub(r'([,.?!])\s*\1+', r'\1', text)
+        text = re.sub(r"\s+", " ", (text or "").strip())
+        text = re.sub(r"\s+([,.?!])", r"\1", text)
+        text = re.sub(r"([,.?!])\s*\1+", r"\1", text)
         return text
 
     @staticmethod
     def ensure_ending_punctuation(text):
         """Ensure non-empty text ends with sentence punctuation."""
-        text = (text or '').strip()
-        if text and text[-1] not in '.?!':
-            text += '.'
+        text = (text or "").strip()
+        if text and text[-1] not in ".?!":
+            text += "."
         return text
 
     @classmethod
@@ -291,5 +308,5 @@ class TextProcessor:
         text = cls.normalize_spacing(transcription)
         text = cls.ensure_ending_punctuation(text)
         if add_trailing_space:
-            text += ' '
+            text += " "
         return text

@@ -94,12 +94,15 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
         )
         for title, card in cards_by_title.items()
     }
-    assert len(
-        {
-            heading.mapTo(cards_by_title[title], QPoint()).y()
-            for title, heading in card_headings.items()
-        }
-    ) == 1
+    assert (
+        len(
+            {
+                heading.mapTo(cards_by_title[title], QPoint()).y()
+                for title, heading in card_headings.items()
+            }
+        )
+        == 1
+    )
     profile = cards_by_title["Your Name"]
     storage = cards_by_title["Storage"]
     scribe_card = cards_by_title["Scribe"]
@@ -114,18 +117,18 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
         card.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
         for card in cards_by_title.values()
     )
-    assert all(card.layout().alignment() & Qt.AlignTop for card in cards_by_title.values())
+    assert all(
+        card.layout().alignment() & Qt.AlignTop for card in cards_by_title.values()
+    )
     storage_description = next(
         label
         for label in storage.findChildren(QLabel)
         if label.text() == "Choose where transcripts and snippets live."
     )
     snippets_title = next(
-        label for label in storage.findChildren(QLabel) if label.text() == "Snippets Folder"
-    )
-    storage_heading_gap = storage_description.mapTo(storage, QPoint()).y() - (
-        card_headings["Storage"].mapTo(storage, QPoint()).y()
-        + card_headings["Storage"].height()
+        label
+        for label in storage.findChildren(QLabel)
+        if label.text() == "Snippets Folder"
     )
     storage_detail_gap = snippets_title.mapTo(storage, QPoint()).y() - (
         storage_description.mapTo(storage, QPoint()).y() + storage_description.height()
@@ -134,9 +137,10 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert "PDF transcripts and summaries are always saved." in {
         label.text() for label in scribe_card.findChildren(QLabel)
     }
-    assert window.snippets_input.mapTo(window, QPoint()).y() < window.meetings_input.mapTo(
-        window, QPoint()
-    ).y()
+    assert (
+        window.snippets_input.mapTo(window, QPoint()).y()
+        < window.meetings_input.mapTo(window, QPoint()).y()
+    )
     assert window.snippets_input.placeholderText() == (
         f"Leave empty for {default_snippets_dir()}"
     )
@@ -225,9 +229,14 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert status.width() == 207
     assert status.height() <= 54
     assert status.status_label.width() == 88
-    assert status.timer_label.mapTo(status, QPoint()).x() - (
-        status.status_label.mapTo(status, QPoint()).x() + status.status_label.width()
-    ) == 7
+    assert (
+        status.timer_label.mapTo(status, QPoint()).x()
+        - (
+            status.status_label.mapTo(status, QPoint()).x()
+            + status.status_label.width()
+        )
+        == 7
+    )
     assert "border: none" in status.timer_label.styleSheet().lower()
     assert "font-size: 10pt" in status.timer_label.styleSheet().lower()
     status.updateStatus("transcribing")
@@ -266,7 +275,9 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.record_button.text() == "Start"
     assert scribe.record_button.objectName() == "startButton"
     assert scribe.record_button.size().width() == 72
-    assert scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert scribe.meeting_name_input.placeholderText().startswith(
+        "e.g. Invoice workflow"
+    )
     assert scribe.meeting_field_label.text() == "Meeting Name"
     assert scribe.participant_field_label.text() == "Participant Name"
     assert scribe.participant_input.placeholderText() == "Full name works best"
@@ -302,9 +313,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.meeting_mode == MODE_ONLINE_GROUP
     assert not scribe.participant_input.isVisible()
     assert scribe.action_stack.mapTo(scribe, QPoint()).y() == action_y
-    assert ConfigManager.get_config_value(
-        "meeting_options", "last_meeting_mode"
-    ) == MODE_ONLINE_GROUP
+    assert (
+        ConfigManager.get_config_value("meeting_options", "last_meeting_mode")
+        == MODE_ONLINE_GROUP
+    )
     scribe.meeting_type_combo.setCurrentIndex(
         scribe.meeting_type_combo.findData(MODE_ONLINE_ONE_ON_ONE)
     )
@@ -316,9 +328,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert "Capture the conversation" not in labels
     assert "Saved with the meeting" not in labels
     assert scribe.timer_label.objectName() == "scribeTimer"
-    assert scribe.record_button.mapTo(scribe, QPoint()).x() < scribe.timer_label.mapTo(
-        scribe, QPoint()
-    ).x()
+    assert (
+        scribe.record_button.mapTo(scribe, QPoint()).x()
+        < scribe.timer_label.mapTo(scribe, QPoint()).x()
+    )
     assert scribe.participant_input.maximumWidth() == 360
     assert "border: 1px" in scribe.styleSheet().lower()
     assert "background: transparent" in scribe.styleSheet().lower()
@@ -363,9 +376,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.processing_label.text() == "Transcribing Audio…"
     scribe._on_worker_status("Transcribing other audio...")
     assert scribe.processing_label.text() == "Transcribing Audio…"
-    assert scribe._concise_error(
-        'Failed: ElevenLabs HTTP 400: {"detail":"invalid audio"}'
-    ) == "Couldn’t Process Audio"
+    assert (
+        scribe._concise_error('Failed: ElevenLabs HTTP 400: {"detail":"invalid audio"}')
+        == "Couldn’t Process Audio"
+    )
     scribe._on_worker_error("No speech detected in either stream.")
     assert scribe.action_stack.currentWidget() is scribe.record_controls_widget
     assert scribe.retry_label.text() == "No Speech Detected"
@@ -417,10 +431,14 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
         scribe.ready_indicator.mapTo(scribe.action_stack, QPoint()).x(),
         scribe.ready_label.mapTo(scribe.action_stack, QPoint()).x(),
     ) == processing_anchor
-    assert scribe.completion_options.mapTo(scribe.action_stack, QPoint()).x() - (
-        scribe.ready_label.mapTo(scribe.action_stack, QPoint()).x()
-        + scribe.ready_label.width()
-    ) >= 24
+    assert (
+        scribe.completion_options.mapTo(scribe.action_stack, QPoint()).x()
+        - (
+            scribe.ready_label.mapTo(scribe.action_stack, QPoint()).x()
+            + scribe.ready_label.width()
+        )
+        >= 24
+    )
     assert scribe.open_summary_button.width() >= (
         scribe.open_summary_button.fontMetrics().horizontalAdvance("Summary") + 24
     )
@@ -449,14 +467,18 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
 
     group_scribe = ScribeWindow(MODE_ONLINE_GROUP)
     assert group_scribe.meeting_field_label.text() == "Meeting Name"
-    assert group_scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert group_scribe.meeting_name_input.placeholderText().startswith(
+        "e.g. Invoice workflow"
+    )
     assert group_scribe.meeting_type_combo.currentData() == MODE_ONLINE_GROUP
     assert not group_scribe.participant_input.isVisible()
     group_scribe.close()
 
     in_person_scribe = ScribeWindow(MODE_IN_PERSON_GROUP)
     assert in_person_scribe.meeting_field_label.text() == "Meeting Name"
-    assert in_person_scribe.meeting_name_input.placeholderText().startswith("e.g. Invoice workflow")
+    assert in_person_scribe.meeting_name_input.placeholderText().startswith(
+        "e.g. Invoice workflow"
+    )
     assert in_person_scribe.meeting_type_combo.currentData() == MODE_IN_PERSON_GROUP
     assert not in_person_scribe.participant_input.isVisible()
     in_person_scribe.close()
@@ -464,7 +486,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     in_person_one_on_one = ScribeWindow(MODE_IN_PERSON_ONE_ON_ONE)
     in_person_one_on_one.show()
     qapp.processEvents()
-    assert in_person_one_on_one.meeting_type_combo.currentData() == MODE_IN_PERSON_ONE_ON_ONE
+    assert (
+        in_person_one_on_one.meeting_type_combo.currentData()
+        == MODE_IN_PERSON_ONE_ON_ONE
+    )
     assert in_person_one_on_one.participant_input.isVisible()
     in_person_one_on_one.close()
 
@@ -546,6 +571,7 @@ def test_applying_settings_never_stops_an_active_snippet(monkeypatch):
 
 def test_only_tray_exit_is_wired_to_process_shutdown():
     import inspect
+
     import main
 
     initialize_source = inspect.getsource(main.KoeApp.initialize_components)

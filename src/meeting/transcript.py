@@ -7,7 +7,6 @@ the resulting segments and renders the final transcript.
 """
 
 from datetime import datetime
-from typing import List, Dict
 
 
 def format_timestamp(seconds: float) -> str:
@@ -18,7 +17,7 @@ def format_timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
-def merge_consecutive_same_speaker(segments: List[Dict]) -> List[Dict]:
+def merge_consecutive_same_speaker(segments: list[dict]) -> list[dict]:
     """Combine adjacent segments from the same speaker into one utterance.
 
     Each input segment: {start, end, text, label}.
@@ -28,25 +27,27 @@ def merge_consecutive_same_speaker(segments: List[Dict]) -> List[Dict]:
         return []
 
     sorted_segs = sorted(segments, key=lambda s: s.get("start", 0))
-    merged: List[Dict] = []
+    merged: list[dict] = []
     for seg in sorted_segs:
         if merged and merged[-1]["label"] == seg["label"]:
             merged[-1]["end"] = max(merged[-1].get("end", 0), seg.get("end", 0))
             merged[-1]["text"] = (merged[-1]["text"] + " " + seg["text"]).strip()
         else:
-            merged.append({
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 0),
-                "text": seg.get("text", "").strip(),
-                "label": seg.get("label", "Speaker"),
-            })
+            merged.append(
+                {
+                    "start": seg.get("start", 0),
+                    "end": seg.get("end", 0),
+                    "text": seg.get("text", "").strip(),
+                    "label": seg.get("label", "Speaker"),
+                }
+            )
     return merged
 
 
 def render_transcript(
-    segments: List[Dict],
+    segments: list[dict],
     meeting_name: str,
-    participants: List[str],
+    participants: list[str],
     started_at: datetime,
     duration_seconds: float,
     notes_text: str = "",
@@ -60,7 +61,9 @@ def render_transcript(
     lines = [f"# {meeting_name}", ""]
     lines.append(f"**Date**: {started_at.strftime('%Y-%m-%d %H:%M')}")
     duration_min = max(1, round(duration_seconds / 60))
-    lines.append(f"**Duration**: {duration_min} minute{'s' if duration_min != 1 else ''}")
+    lines.append(
+        f"**Duration**: {duration_min} minute{'s' if duration_min != 1 else ''}"
+    )
     if participants:
         lines.append(f"**Participants**: {', '.join(participants)}")
     lines.append("")

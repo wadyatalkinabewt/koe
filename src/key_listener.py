@@ -1,10 +1,9 @@
 """Windows global-hotkey listener for Koe snippets."""
 
+from collections.abc import Callable
 from threading import RLock
-from typing import Callable
 
 from utils import ConfigManager
-
 
 _MODIFIER_NAMES = {
     "CTRL": "CTRL",

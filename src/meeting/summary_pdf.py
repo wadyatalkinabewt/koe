@@ -31,8 +31,8 @@ from meeting.pdf_theme import (
     CORAL,
     INK,
     MUTED,
-    ParticipantBar,
     RULE,
+    ParticipantBar,
     display_date,
     display_duration,
     font_names,
@@ -100,7 +100,9 @@ def _parse_duration(value: str) -> float:
     )
 
 
-def _source_metadata(markdown_text: str) -> tuple[str, datetime | None, float, list[str], list[str]]:
+def _source_metadata(
+    markdown_text: str,
+) -> tuple[str, datetime | None, float, list[str], list[str]]:
     lines = markdown_text.replace("\r\n", "\n").split("\n")
     title = "Meeting Summary"
     started_at = None
@@ -167,9 +169,7 @@ def _parse_sections(lines: list[str]) -> list[SummarySection]:
 
     def flush_bullets() -> None:
         if bullets:
-            ensure_section().blocks.append(
-                SummaryBlock("bullets", items=list(bullets))
-            )
+            ensure_section().blocks.append(SummaryBlock("bullets", items=list(bullets)))
             bullets.clear()
 
     for raw_line in lines:
@@ -499,9 +499,7 @@ def render_summary_pdf(
     resolved_name = str(meeting_name or parsed_name or "Meeting Summary").strip()
     resolved_start = started_at or parsed_start or datetime.now()
     resolved_duration = (
-        float(duration_seconds)
-        if duration_seconds is not None
-        else parsed_duration
+        float(duration_seconds) if duration_seconds is not None else parsed_duration
     )
     resolved_participants = list(participants or parsed_participants)
     sections = _parse_sections(body)
@@ -604,15 +602,11 @@ def render_summary_pdf(
                 marker = colors.HexColor("#A76A18")
             content_width = document.width - 6.4 * mm
             empty_copy = " ".join(paragraphs).strip().rstrip(".").casefold()
-            is_empty_state = (
-                not items
-                and empty_copy
-                in {
-                    "no formal decisions recorded",
-                    "no open questions",
-                    "none recorded",
-                }
-            )
+            is_empty_state = not items and empty_copy in {
+                "no formal decisions recorded",
+                "no open questions",
+                "none recorded",
+            }
             if is_empty_state:
                 story.append(
                     Paragraph(
@@ -716,7 +710,9 @@ def render_summary_pdf(
 
         for block in section.blocks:
             if block.kind == "subheading":
-                story.append(Paragraph(_inline_markup(block.text), styles["subsection"]))
+                story.append(
+                    Paragraph(_inline_markup(block.text), styles["subsection"])
+                )
                 story.append(Spacer(1, 1.4 * mm))
                 continue
 
@@ -726,9 +722,7 @@ def render_summary_pdf(
                 story.append(
                     Spacer(
                         1,
-                        3.2 * mm
-                        if section_key == "topics discussed"
-                        else 1.8 * mm,
+                        3.2 * mm if section_key == "topics discussed" else 1.8 * mm,
                     )
                 )
                 continue

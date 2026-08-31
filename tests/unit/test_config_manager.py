@@ -2,12 +2,10 @@
 Tests for ConfigManager.
 """
 
-import pytest
-import yaml
-from pathlib import Path
 import sys
-import tempfile
-import os
+from pathlib import Path
+
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -34,12 +32,12 @@ class TestConfigManager:
             "test_section": {
                 "string_value": {"type": "str", "value": "default"},
                 "int_value": {"type": "int", "value": 42},
-                "bool_value": {"type": "bool", "value": True}
+                "bool_value": {"type": "bool", "value": True},
             }
         }
 
         schema_path = temp_dir / "schema.yaml"
-        with open(schema_path, 'w') as f:
+        with open(schema_path, "w") as f:
             yaml.dump(schema, f)
 
         # Test that ConfigManager can be initialized
@@ -48,12 +46,20 @@ class TestConfigManager:
         manager.schema = manager.load_config_schema(str(schema_path))
 
         # Valid types should pass
-        assert manager._validate_config_value("test", {"type": "str", "value": ""}, "test.path")
-        assert manager._validate_config_value(42, {"type": "int", "value": 0}, "test.path")
-        assert manager._validate_config_value(True, {"type": "bool", "value": False}, "test.path")
+        assert manager._validate_config_value(
+            "test", {"type": "str", "value": ""}, "test.path"
+        )
+        assert manager._validate_config_value(
+            42, {"type": "int", "value": 0}, "test.path"
+        )
+        assert manager._validate_config_value(
+            True, {"type": "bool", "value": False}, "test.path"
+        )
 
         # None should be allowed (optional values)
-        assert manager._validate_config_value(None, {"type": "str", "value": ""}, "test.path")
+        assert manager._validate_config_value(
+            None, {"type": "str", "value": ""}, "test.path"
+        )
 
     def test_config_validation_options_checking(self, temp_dir):
         """Config validation should check allowed options."""
@@ -61,11 +67,7 @@ class TestConfigManager:
 
         manager = ConfigManager()
 
-        schema_item = {
-            "type": "str",
-            "value": "alpha",
-            "options": ["alpha", "beta"]
-        }
+        schema_item = {"type": "str", "value": "alpha", "options": ["alpha", "beta"]}
 
         # Valid option
         assert manager._validate_config_value("alpha", schema_item, "choice")
@@ -76,28 +78,11 @@ class TestConfigManager:
 
     def test_deep_update_preserves_structure(self):
         """Deep update should merge nested dicts properly."""
-        from utils import ConfigManager
-
-        manager = ConfigManager()
-
         # The load_user_config method uses deep_update internally
         # Test the concept with a simple case
-        base = {
-            "level1": {
-                "level2": {
-                    "value1": "original",
-                    "value2": "original"
-                }
-            }
-        }
+        base = {"level1": {"level2": {"value1": "original", "value2": "original"}}}
 
-        override = {
-            "level1": {
-                "level2": {
-                    "value1": "changed"
-                }
-            }
-        }
+        override = {"level1": {"level2": {"value1": "changed"}}}
 
         # Simulate deep_update
         def deep_update(source, overrides):
@@ -126,13 +111,7 @@ class TestConfigManagerSingleton:
         # For now, just test the method logic
 
         manager = ConfigManager()
-        manager.config = {
-            "level1": {
-                "level2": {
-                    "value": "test"
-                }
-            }
-        }
+        manager.config = {"level1": {"level2": {"value": "test"}}}
 
         # Temporarily set the instance
         original = ConfigManager._instance

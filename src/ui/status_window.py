@@ -2,19 +2,22 @@ import os
 import sys
 import time
 from datetime import datetime
-from pathlib import Path
 
-from PyQt5.QtCore import QTimer, QRectF, Qt, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import QColor, QBrush, QMouseEvent, QPainter, QPainterPath, QPen
+from PyQt5.QtCore import QRectF, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QBrush, QColor, QMouseEvent, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QMainWindow, QPushButton, QWidget,
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QWidget,
 )
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from ui import theme
 from paths import logs_dir
-
+from ui import theme
 
 _DEBUG_LOG = logs_dir() / "debug.log"
 
@@ -23,7 +26,9 @@ def _debug(message: str) -> None:
     try:
         _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(_DEBUG_LOG, "a", encoding="utf-8") as log_file:
-            log_file.write(f"[{datetime.now().strftime('%H:%M:%S')}] [status_window] {message}\n")
+            log_file.write(
+                f"[{datetime.now().strftime('%H:%M:%S')}] [status_window] {message}\n"
+            )
     except Exception:
         pass
 
@@ -63,7 +68,9 @@ class StatusWindow(QMainWindow):
         layout.setSpacing(7)
 
         self.indicator = QLabel("●")
-        self.indicator.setStyleSheet(f"color: {theme.RECORDING_COLOR}; font-size: 14px;")
+        self.indicator.setStyleSheet(
+            f"color: {theme.RECORDING_COLOR}; font-size: 14px;"
+        )
         self.indicator.setFixedWidth(12)
         layout.addWidget(self.indicator)
 
