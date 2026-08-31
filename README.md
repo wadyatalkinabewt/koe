@@ -1,36 +1,88 @@
 # Koe
 
-![Koe icon](assets/koe-icon.png)
+**Catch a thought. Capture the room. Keep the useful part.**
 
-Koe is a Windows tray app for fast voice snippets and meeting transcripts. It
-uses ElevenLabs Scribe v2 for speech-to-text and can use OpenRouter to produce
-structured meeting summaries.
+Koe is a Windows tray app built for the gap between *I should write that down*
+and *what did we actually decide?* Tap a global hotkey for a quick voice
+snippet, or open Scribe to turn microphone and system audio into a diarized
+meeting transcript, clean PDFs, and a structured summary.
 
-## What it does
+It stays out of the way, treats retention as a design constraint, and keeps
+private names and terminology in local configuration rather than in the code.
 
-- **Snippet:** press a global toggle hotkey, speak, and press it again to copy
-  the transcript to the clipboard.
-- **Scribe:** capture microphone and Windows loopback audio, submit one aligned
-  mono recording for diarized transcription, and generate transcript and
-  summary PDFs.
-- **Custom corrections:** supply local exact-token corrections without putting
-  names, organisations, or domain terminology in the repository.
+## Two ways to use it
 
-Snippet audio is kept in memory and is never written to disk. Successfully
-decoded ElevenLabs transcripts are deleted from ElevenLabs by transcription ID.
-Meeting source audio is retained only when the user enables that option.
+| | Snippet | Scribe |
+|---|---|---|
+| **Best for** | Fleeting thoughts, prompts, and dictated text | Calls, interviews, and in-room meetings |
+| **Capture** | Press the hotkey, speak, press again | Record microphone and Windows loopback together |
+| **Result** | Formatted text on the clipboard | Diarized transcript and summary PDFs |
+| **Audio retention** | Never written to disk | Kept only when requested; recovery audio survives failures |
 
-See [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md) for the meeting modes,
-storage behaviour, and privacy boundaries.
+Scribe aligns microphone and loopback audio into **one mono timeline** before
+uploading it. That avoids two separately transcribed recordings drifting out of
+sync, duplicating speakers, or doubling the transcription work.
 
-## Requirements
+## How it fits together
 
-- Windows 11
-- Python 3.13
-- an ElevenLabs API key
-- an OpenRouter API key only if meeting summaries are enabled
+```mermaid
+flowchart LR
+    H["Snippet hotkey"] --> M["In-memory audio"]
+    S["Scribe window"] --> A["Mic + Windows loopback"]
+    A --> X["Aligned mono mix"]
+    M --> T["ElevenLabs Scribe v2"]
+    X --> T
+    T --> C["Local corrections + speaker checks"]
+    C --> B["Clipboard"]
+    C --> P["Transcript PDF"]
+    C --> R["OpenRouter summary<br/>optional, ZDR required"]
+    R --> Q["Summary PDF"]
+```
+
+### Modularity, honestly
+
+Koe is modular around the workflow, but it is not pretending every provider is
+interchangeable:
+
+- **Capture, transcription, correction, speaker resolution, summarisation, and
+  document rendering are separate modules.** A different transcription service
+  would not require rewriting the tray app, capture engine, or PDF pipeline.
+- **Speech-to-text is intentionally Scribe-specific today.** The request shape,
+  diarization data, deletion by transcription ID, and safety checks are built
+  around ElevenLabs Scribe v2. Supporting another API is a contained adapter
+  project, not a one-line model-name swap.
+- **The summary model is easy to swap within OpenRouter.** It is selected in one
+  place and sits behind a structured JSON contract. A replacement model still
+  needs to honour that contract and pass the summary tests.
+- **Post-transcription corrections are local and provider-independent.** They
+  can fix recurring names or jargon without sending a private dictionary to a
+  model provider.
+
+The source map and the invariants between those modules are documented in
+[the development guide](docs/DEVELOPMENT.md).
+
+## Privacy is part of the pipeline
+
+- Snippet audio stays in memory and is never written to disk.
+- Scribe uploads one aligned recording rather than separate microphone and
+  loopback tracks.
+- Successfully decoded ElevenLabs transcripts are deleted from ElevenLabs by
+  transcription ID; failed deletions are retried and recorded locally.
+- Meeting source audio is retained only when enabled. Failed jobs preserve
+  recovery audio instead of silently destroying it.
+- OpenRouter is confined to meeting post-processing and must use a Zero Data
+  Retention endpoint.
+- Custom corrections, settings, secrets, logs, recordings, and generated
+  documents are excluded from Git.
+
+For the exact meeting modes, storage paths, and failure behaviour, see the
+[operator guide](docs/OPERATOR_GUIDE.md).
 
 ## Run from source
+
+Koe currently targets **Windows 11** and **Python 3.13**. It requires an
+ElevenLabs API key; an OpenRouter key is needed only for model-assisted meeting
+summaries and contextual speaker resolution.
 
 ```powershell
 python -m venv .venv
@@ -38,18 +90,18 @@ python -m venv .venv
 .\.venv\Scripts\python.exe run.py
 ```
 
-The first-run window creates local settings. Secrets, settings, logs,
-transcripts, recordings, and custom corrections are ignored by Git.
+The first-run window creates local settings. Source runs keep private runtime
+state in the checkout; packaged runs use the current Windows profile. The
+[development guide](docs/DEVELOPMENT.md) covers contributor setup, runtime
+boundaries, architecture, and verification.
 
-## Custom corrections
+## Teach Koe your vocabulary
 
-For stable speech-to-text substitutions, add a private `corrections` mapping to
-Koe's existing `config.yaml` in the runtime data directory:
+Add exact-token corrections to the private `config.yaml` used by the current
+runtime:
 
 - source run: `<checkout>\config.yaml`
 - packaged run: `%LOCALAPPDATA%\Koe\config.yaml`
-
-This file-based setting intentionally has no Settings-window editor.
 
 ```yaml
 transcription_options:
@@ -57,20 +109,27 @@ transcription_options:
     ack me: Acme
 ```
 
-Corrections match complete words or phrases, ignore case, and preserve the
-matched text's lower/upper/title-style casing. They are applied locally after
-transcription and are never sent to a provider. The real config file is private
-and must not be committed.
+Matching ignores case while preserving lower-, upper-, or title-style casing.
+Corrections run locally after transcription. The real configuration is private
+and must never be committed.
 
-## Development
+## Follow the build
 
-Contributor setup, architecture, runtime paths, and verification commands are
-documented in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+This repository preserves Koe's development history rather than presenting a
+single polished snapshot:
+
+[Commit activity](https://github.com/wadyatalkinabewt/koe/graphs/commit-activity)
+&nbsp;·&nbsp;
+[Contributors graph](https://github.com/wadyatalkinabewt/koe/graphs/contributors)
+&nbsp;·&nbsp;
+[Commit log](https://github.com/wadyatalkinabewt/koe/commits/main)
+&nbsp;·&nbsp;
+[Repository insights](https://github.com/wadyatalkinabewt/koe/pulse)
 
 ## License
 
 Koe's original source code is released under the [MIT License](LICENSE).
-Third-party dependencies retain their own licences. In particular, PyQt5 is
-dual-licensed under GPLv3 or a commercial Riverbank licence; review
+Third-party dependencies retain their own licences. PyQt5 is dual-licensed
+under GPLv3 or a commercial Riverbank licence; review
 [Riverbank's licensing terms](https://www.riverbankcomputing.com/software/pyqt)
 before redistributing a bundled application.
