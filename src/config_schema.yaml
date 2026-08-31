@@ -36,15 +36,14 @@ model_options:
       value: null
       type: str
       description: "Optional ISO language code. null = automatic detection."
-    initial_prompt:
-      value: null
-      type: str
-      description: "Comma-separated vocabulary sent to ElevenLabs as keyterms."
-  elevenlabs:
-    keyterms_enabled:
-      value: false
-      type: bool
-      description: "Send the configured vocabulary as ElevenLabs keyterms."
+
+# Deterministic local post-transcription corrections. This mapping remains
+# private in config.yaml and is never sent to a provider.
+transcription_options:
+  corrections:
+    value: {}
+    type: dict
+    description: "Exact words or phrases mapped to their preferred spelling."
 
 # Activation and recording
 recording_options:

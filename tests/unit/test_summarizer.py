@@ -51,24 +51,24 @@ def test_summarizer_uses_gemini_37_structured_output_and_openrouter_routing(
 
 
 def test_summary_metadata_prefers_meeting_title_after_host_notes():
-    content = """# Notes — Casey
+    content = """# Notes — Jordan
 
 - Confirm the invoice date.
 
-# Casey - Invoice Workflow
+# Jordan - Invoice Workflow
 
 **Date**: 2026-07-20 11:30
 **Duration**: 42 minutes
-**Participants**: Alex, Casey
+**Participants**: Alex, Jordan
 """
 
     metadata = summarizer.SummarizerClient(api_key="test-key")._extract_metadata(content)
 
     assert metadata == {
-        "title": "Casey - Invoice Workflow",
+        "title": "Jordan - Invoice Workflow",
         "date": "2026-07-20 11:30",
         "duration": "42 minutes",
-        "participants": "Alex, Casey",
+        "participants": "Alex, Jordan",
     }
 
 

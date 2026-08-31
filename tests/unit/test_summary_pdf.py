@@ -64,12 +64,12 @@ def test_render_one_on_one_summary_uses_compact_header(tmp_path: Path):
         "# Summary\n\nReviewed the invoice workflow.",
         output,
         meeting_name="Invoice Workflow",
-        participants=["Alex", "Casey Example"],
+        participants=["Alex", "Jordan Lee"],
         started_at=datetime(2026, 7, 20, 9, 0),
         duration_seconds=42 * 60,
         recorder_name="Alex",
         meeting_mode="online_one_on_one",
-        participant_name="Casey Example",
+        participant_name="Jordan Lee",
     )
 
     contents = output.read_bytes()

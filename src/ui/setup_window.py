@@ -76,9 +76,9 @@ def write_setup_files(user_name: str, elevenlabs_key: str, openrouter_key: str =
             "last_meeting_mode": "online_one_on_one",
         },
         "model_options": {
-            "common": {"language": None, "initial_prompt": None},
-            "elevenlabs": {"keyterms_enabled": False},
+            "common": {"language": None},
         },
+        "transcription_options": {"corrections": {}},
         "recording_options": {
             "activation_key": "ctrl+shift+space",
         },

@@ -10,11 +10,10 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 
-def _config_section(_section):
-    return {
-        "common": {"language": None, "initial_prompt": "Koe, ElevenLabs, Koe"},
-        "elevenlabs": {"keyterms_enabled": True},
-    }
+def _config_section(*keys):
+    if keys == ("model_options",):
+        return {"common": {"language": None}}
+    return {}
 
 
 def test_request_is_fixed_to_scribe_v2_no_verbatim(monkeypatch):
@@ -29,25 +28,6 @@ def test_request_is_fixed_to_scribe_v2_no_verbatim(monkeypatch):
     assert ("use_multi_channel", "false") in data
     assert not any(key in ("diarize", "use_speaker_library") for key, _value in data)
     assert not any(key == "language_code" for key, _value in data)
-    assert [value for key, value in data if key == "keyterms"] == ["Koe", "ElevenLabs"]
-
-
-def test_keyterms_are_serialized_as_repeated_multipart_fields(monkeypatch):
-    import transcription
-
-    monkeypatch.setattr(transcription.ConfigManager, "get_config_section", _config_section)
-    data = transcription._elevenlabs_request_data()
-    request = requests.Request(
-        "POST",
-        "https://example.invalid",
-        files={"file": ("audio.wav", io.BytesIO(b"RIFF"), "audio/wav")},
-        data=data,
-    ).prepare()
-
-    assert isinstance(request.body, bytes)
-    assert request.body.count(b'name="keyterms"') == 2
-    assert b'name="keyterms"\r\n\r\nKoe\r\n' in request.body
-    assert b'name="keyterms"\r\n\r\nElevenLabs\r\n' in request.body
 
 
 def test_configured_language_is_sent(monkeypatch):
@@ -56,10 +36,7 @@ def test_configured_language_is_sent(monkeypatch):
     monkeypatch.setattr(
         transcription.ConfigManager,
         "get_config_section",
-        lambda _section: {
-            "common": {"language": "en", "initial_prompt": None},
-            "elevenlabs": {"keyterms_enabled": False},
-        },
+        lambda _section: {"common": {"language": "en"}},
     )
 
     assert ("language_code", "en") in transcription._elevenlabs_request_data()
@@ -120,65 +97,82 @@ def test_non_diarized_words_split_when_local_source_label_changes():
     result = {
         "words": [
             {"type": "word", "text": "Hello", "start": 0.0, "end": 0.2},
-            {"type": "word", "text": "Casey.", "start": 0.2, "end": 0.4},
+            {"type": "word", "text": "Jordan.", "start": 0.2, "end": 0.4},
             {"type": "word", "text": "Hi", "start": 0.5, "end": 0.7},
             {"type": "word", "text": "Alex.", "start": 0.7, "end": 0.9},
         ]
     }
 
     def resolve(start, _end):
-        return "Alex" if start < 0.5 else "Casey"
+        return "Alex" if start < 0.5 else "Jordan"
 
     assert transcription._segments_from_elevenlabs_words(
         result,
         label="Alex",
         label_resolver=resolve,
     ) == [
-        {"start": 0.0, "end": 0.4, "text": "Hello Casey.", "label": "Alex"},
-        {"start": 0.5, "end": 0.9, "text": "Hi Alex.", "label": "Casey"},
+        {"start": 0.0, "end": 0.4, "text": "Hello Jordan.", "label": "Alex"},
+        {"start": 0.5, "end": 0.9, "text": "Hi Alex.", "label": "Jordan"},
     ]
 
 
-def test_known_transcript_substitutions_are_corrected_as_whole_tokens():
+def test_configured_transcript_substitutions_are_corrected_as_whole_tokens():
     import transcription
 
+    corrections = {
+        "ack me": "Acme",
+        "north wnd": "Northwind",
+    }
     assert transcription.apply_transcript_corrections(
-        "Groq, groq, and GROQ heard Taylor, Taylor, Taylor, "
-        "Taylor, Taylor, Taylor, Robin, Robin, Robin, "
-        "Mirror, mirror, MIRROR, Lyft, lyft, and LYFT at "
-        "Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, "
-        "Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, "
-        "Ack Me, Ack Me, Ack Me, "
-        "Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, and Ack Me."
+        "Ack me, ack me, and ACK ME met North Wnd, north wnd, and NORTH WND.",
+        corrections,
     ) == (
-        "Grok, grok, and GROK heard Taylor, Taylor, Taylor, "
-        "Taylor, Taylor, Taylor, Robin, Robin, Robin, "
-        "Morgan, Morgan, Morgan, Lift, lift, and LIFT "
-        "at Acme, Acme, Acme, Acme, Acme, Acme, "
-        "Acme, Acme, Acme, Acme, Acme, Acme, "
-        "Acme, Acme, Acme, "
-        "Acme, Acme, Acme, Acme, Acme, and Acme."
+        "Acme, acme, and ACME met Northwind, northwind, and NORTHWIND."
     )
     assert transcription.apply_transcript_corrections(
-        "GroqCloud, Taylors, Robins, Mirrors, Lyfts, AckMeson, AckMeson, AckMeson, AckMeson, AckMecare, AckMes, and AckMes are different tokens."
-    ) == "GroqCloud, Taylors, Robins, Mirrors, Lyfts, AckMeson, AckMeson, AckMeson, AckMeson, AckMecare, AckMes, and AckMes are different tokens."
+        "Ack myself and North Wnds are different tokens.",
+        corrections,
+    ) == "Ack myself and North Wnds are different tokens."
 
 
-def test_known_transcript_substitutions_apply_to_scribe_segments():
+def test_custom_corrections_apply_to_scribe_segments(monkeypatch):
     import transcription
 
+    monkeypatch.setattr(
+        transcription.ConfigManager,
+        "get_config_section",
+        lambda *keys: (
+            {"ack me": "Acme", "north wnd": "Northwind"}
+            if keys == ("transcription_options", "corrections")
+            else {}
+        ),
+    )
     result = {
         "words": [
             {"type": "word", "text": "Ask", "start": 0.0, "end": 0.2},
-            {"type": "word", "text": "Taylor", "start": 0.2, "end": 0.4},
+            {"type": "word", "text": "Ack", "start": 0.2, "end": 0.3},
+            {"type": "word", "text": "me", "start": 0.3, "end": 0.4},
             {"type": "word", "text": "about", "start": 0.4, "end": 0.6},
-            {"type": "word", "text": "Groq.", "start": 0.6, "end": 0.8},
+            {"type": "word", "text": "North", "start": 0.6, "end": 0.7},
+            {"type": "word", "text": "Wnd.", "start": 0.7, "end": 0.8},
         ]
     }
 
     assert transcription._segments_from_elevenlabs_words(result, label="Speaker") == [
-        {"start": 0.0, "end": 0.8, "text": "Ask Taylor about Grok.", "label": "Speaker"}
+        {"start": 0.0, "end": 0.8, "text": "Ask Acme about Northwind.", "label": "Speaker"}
     ]
+
+
+def test_invalid_custom_corrections_config_is_ignored(monkeypatch):
+    import transcription
+
+    monkeypatch.setattr(
+        transcription.ConfigManager,
+        "get_config_section",
+        lambda *_keys: ["not", "a", "mapping"],
+    )
+
+    assert transcription.load_transcript_corrections() == {}
 
 
 def test_group_file_path_streams_one_request_with_speaker_options(tmp_path, monkeypatch):
@@ -604,12 +598,21 @@ def test_local_formatting_preserves_spoken_words():
     )
 
 
-def test_snippet_post_processing_applies_known_substitutions():
+def test_snippet_post_processing_applies_custom_corrections(monkeypatch):
     import transcription
 
+    monkeypatch.setattr(
+        transcription.ConfigManager,
+        "get_config_section",
+        lambda *keys: (
+            {"ack me": "Acme", "north wnd": "Northwind"}
+            if keys == ("transcription_options", "corrections")
+            else {}
+        ),
+    )
     assert transcription.post_process_transcription(
-        "Ask Taylor whether Groq can help"
-    ) == "Ask Taylor whether Grok can help. "
+        "Ask Ack me whether North Wnd can help"
+    ) == "Ask Acme whether Northwind can help. "
 
 
 def test_quiet_audio_normalization_is_bounded():

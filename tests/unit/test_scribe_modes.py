@@ -29,10 +29,10 @@ def test_group_folder_component_uses_underscores():
     from meeting.app import _sanitize
 
     assert _sanitize("Management Meeting", underscores=True) == "Management_Meeting"
-    assert _sanitize("Casey", underscores=False) == "Casey"
+    assert _sanitize("Jordan", underscores=False) == "Jordan"
 
 
-def test_unique_labels_puts_Alex_first_and_preserves_library_names():
+def test_unique_labels_puts_owner_first_and_preserves_library_names():
     from meeting.app import _unique_labels
 
     segments = [
@@ -575,7 +575,7 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
         calls.append((Path(file_path), kwargs))
         return [
             {"start": 0.0, "end": 0.5, "text": "Hello.", "label": "Alex"},
-            {"start": 0.6, "end": 1.0, "text": "Hi.", "label": "Casey"},
+            {"start": 0.6, "end": 1.0, "text": "Hi.", "label": "Jordan"},
         ]
 
     monkeypatch.setattr(transcription, "transcribe_file_segments", fake_file_segments)
@@ -599,7 +599,7 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
         started_at=datetime(2026, 7, 13, 9, 0),
         save_audio=False,
         save_markdown=True,
-        participant_name="Casey",
+        participant_name="Jordan",
     )
     worker.run()
 
@@ -615,7 +615,7 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
     assert (meeting_dir / "transcript.md").exists()
     _assert_pdf(meeting_dir / "transcript.pdf")
     transcript = (meeting_dir / "transcript.md").read_text(encoding="utf-8")
-    assert "Alex" in transcript and "Casey" in transcript
+    assert "Alex" in transcript and "Jordan" in transcript
     assert not (meeting_dir / "microphone.wav").exists()
     assert not (meeting_dir / "meeting-audio.wav").exists()
 
@@ -629,7 +629,7 @@ def test_no_speech_retry_preserves_reserved_meeting_folder_and_local_audio(tmp_p
     loopback = source_dir / "loopback.wav"
     _write_wav(mic)
     _write_wav(loopback)
-    reserved_dir = tmp_path / "Meetings" / "26_07_14_Casey"
+    reserved_dir = tmp_path / "Meetings" / "26_07_14_Jordan"
     reserved_dir.mkdir(parents=True)
     marker = reserved_dir / "existing.txt"
     marker.write_text("keep", encoding="utf-8")
@@ -640,7 +640,7 @@ def test_no_speech_retry_preserves_reserved_meeting_folder_and_local_audio(tmp_p
         mic_wav=mic,
         loopback_wav=loopback,
         user_name="Alex",
-        meeting_subject="Casey",
+        meeting_subject="Jordan",
         meeting_mode=MODE_ONLINE_ONE_ON_ONE,
         notes_text="",
         output_root=tmp_path / "Meetings",

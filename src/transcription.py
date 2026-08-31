@@ -47,24 +47,7 @@ ELEVENLABS_API_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY"
 ELEVENLABS_DELETE_MAX_ATTEMPTS = 3
 ELEVENLABS_DELETE_RETRY_DELAYS = (1.0, 3.0)
 ELEVENLABS_DELETE_TIMEOUT = 15.0
-
-# Exact-token corrections for stable Scribe substitutions that vocabulary
-# keyterms do not prevent. Keep this list deliberately small and evidence-led.
-TRANSCRIPT_CORRECTIONS = {
-    "groq": "Grok",
-    "Taylor": "Taylor",
-    "Taylor": "Taylor",
-    "Robin": "Robin",
-    "mirror": "Morgan",
-    "lyft": "Lift",
-    "Ack Me": "Acme",
-    "Ack Me": "Acme",
-    "Ack Me": "Acme",
-    "Ack Me": "Acme",
-    "Ack Me": "Acme",
-    "Ack Me": "Acme",
-    "Ack Me": "Acme",
-}
+MAX_CORRECTION_LENGTH = 100
 
 
 def _debug(message: str) -> None:
@@ -153,32 +136,6 @@ def _api_key_from_env(*names: str) -> str:
     return ""
 
 
-def _initial_prompt_keyterms() -> list[str]:
-    """Convert the configured vocabulary hint into ElevenLabs keyterms."""
-    model_options = ConfigManager.get_config_section("model_options") or {}
-    common = model_options.get("common", {}) or {}
-    vocabulary = common.get("initial_prompt") or ""
-    if not vocabulary:
-        return []
-
-    keyterms: list[str] = []
-    seen: set[str] = set()
-    for raw_term in re.split(r"[,;\n]", str(vocabulary)):
-        term = re.sub(r"\s+", " ", raw_term.strip().strip("."))
-        if not term or re.search(r"[<>{}\[\]\\]", term):
-            continue
-        if len(term.split()) > 5 or len(term) >= 50:
-            continue
-        normalized = term.lower()
-        if normalized in seen:
-            continue
-        keyterms.append(term)
-        seen.add(normalized)
-        if len(keyterms) >= 1000:
-            break
-    return keyterms
-
-
 def _chunk_max_samples(sample_rate: int) -> int:
     return CHUNK_SECONDS * int(sample_rate or 16000)
 
@@ -238,7 +195,6 @@ def _elevenlabs_request_data(
         raise ValueError("num_speakers must be between 1 and 32")
     model_options = ConfigManager.get_config_section("model_options") or {}
     common = model_options.get("common", {}) or {}
-    elevenlabs = model_options.get("elevenlabs", {}) or {}
 
     data = [
         ("model_id", "scribe_v2"),
@@ -253,8 +209,6 @@ def _elevenlabs_request_data(
     language = common.get("language")
     if language:
         data.append(("language_code", str(language)))
-    if elevenlabs.get("keyterms_enabled", False):
-        data.extend(("keyterms", term) for term in _initial_prompt_keyterms())
     if diarize:
         data.append(("diarize", "true"))
         if num_speakers is not None:
@@ -451,19 +405,56 @@ def _elevenlabs_result_text(result: dict) -> str:
     return str(result.get("text") or "").strip() if isinstance(result, dict) else ""
 
 
-def apply_transcript_corrections(text: str) -> str:
-    """Correct known whole-token Scribe substitutions while preserving case."""
+def load_transcript_corrections() -> dict[str, str]:
+    """Load private exact-token corrections from Koe's existing config."""
+    raw_corrections = ConfigManager.get_config_section(
+        "transcription_options", "corrections"
+    )
+    if not isinstance(raw_corrections, dict):
+        _debug("Ignoring transcript corrections because they are not a mapping")
+        return {}
+
+    corrections: dict[str, str] = {}
+    for raw_source, raw_target in raw_corrections.items():
+        if not isinstance(raw_source, str) or not isinstance(raw_target, str):
+            continue
+        source = re.sub(r"\s+", " ", raw_source.strip())
+        target = re.sub(r"\s+", " ", raw_target.strip())
+        if not source or not target:
+            continue
+        if len(source) > MAX_CORRECTION_LENGTH or len(target) > MAX_CORRECTION_LENGTH:
+            continue
+        if any(character in source or character in target for character in "\r\n\t"):
+            continue
+        corrections[source.casefold()] = target
+    return corrections
+
+
+def apply_transcript_corrections(
+    text: str,
+    corrections: dict[str, str] | None = None,
+) -> str:
+    """Apply configured whole-token substitutions while preserving case."""
     if not text:
+        return text
+    active_corrections = (
+        load_transcript_corrections() if corrections is None else corrections
+    )
+    if not active_corrections:
         return text
 
     pattern = re.compile(
-        r"(?<!\w)(" + "|".join(map(re.escape, TRANSCRIPT_CORRECTIONS)) + r")(?!\w)",
+        r"(?<!\w)("
+        + "|".join(
+            map(re.escape, sorted(active_corrections, key=len, reverse=True))
+        )
+        + r")(?!\w)",
         flags=re.IGNORECASE,
     )
 
     def replace(match: re.Match) -> str:
         original = match.group(0)
-        corrected = TRANSCRIPT_CORRECTIONS[original.lower()]
+        corrected = active_corrections[original.casefold()]
         if original.isupper():
             return corrected.upper()
         if original.islower():

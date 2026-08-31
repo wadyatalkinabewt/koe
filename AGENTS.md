@@ -12,8 +12,8 @@ Koe is a Windows-only tray application with two workflows:
 - ElevenLabs Scribe v2 is the only speech-to-text backend.
 - Every transcription request uses `no_verbatim=true`.
 - Snippet formatting may normalize whitespace, punctuation, the paste-friendly
-  trailing space, and the small exact-token correction map in
-  `src/transcription.py`. Add corrections only for stable observed substitutions.
+  trailing space, and exact-token corrections from the private `config.yaml`.
+  Add corrections only for stable observed substitutions.
 - Snippet audio is transient and must never be written to disk. Only rotating
   snippet Markdown and text diagnostics may persist. Scribe meeting audio
   remains independently optional.
@@ -61,11 +61,11 @@ Koe is a Windows-only tray application with two workflows:
 
 ## Data boundaries
 
-Source/dev runs keep Alex's complete working state under the repository:
+Source/dev runs keep the operator's complete working state under the repository:
 
-- `C:\Projects\koe`: `.env`, `config.yaml`, `.setup_complete`, and local shortcuts.
-- `C:\Projects\koe\logs` and `C:\Projects\koe\.scribe_temp`: diagnostics and temporary audio.
-- `C:\Projects\koe\Snippets` and `C:\Projects\koe\Meetings`: durable output.
+- `<checkout>`: `.env`, `config.yaml`, `.setup_complete`, and local shortcuts.
+- `<checkout>\logs` and `<checkout>\.scribe_temp`: diagnostics and temporary audio.
+- `<checkout>\Snippets` and `<checkout>\Meetings`: durable output.
 
 Packaged installs retain normal per-user Windows storage:
 
@@ -74,8 +74,8 @@ Packaged installs retain normal per-user Windows storage:
 
 Never delete or rewrite either runtime layout without explicit user approval.
 Never commit `.env`, `config.yaml`, private build secrets, recordings,
-transcripts, vocabulary, or local paths. Installer upgrades and uninstall must
-preserve packaged runtime state.
+transcripts, vocabulary, or local paths. Installer upgrades
+and uninstall must preserve packaged runtime state.
 
 ## Source map
 
@@ -84,7 +84,8 @@ preserve packaged runtime state.
 - `src/commands.py`: localhost single-instance shortcut command channel.
 - `src/paths.py`: source-local and packaged per-user runtime locations.
 - `src/result_thread.py`: snippet microphone capture and lifecycle.
-- `src/transcription.py`: ElevenLabs requests and rotating snippet text storage.
+- `src/transcription.py`: ElevenLabs requests, private corrections, and rotating
+  snippet text storage.
 - `src/meeting/capture.py`: mic/loopback capture, mono mixing, and host mapping.
 - `src/meeting/app.py`: Scribe UI and single-upload worker.
 - `src/meeting/transcript.py`: Markdown transcript rendering.

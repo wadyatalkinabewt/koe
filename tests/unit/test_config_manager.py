@@ -190,7 +190,14 @@ class TestConfigSchema:
         with open(schema_path) as f:
             schema = yaml.safe_load(f)
 
-        required_sections = ["profile", "model_options", "recording_options", "meeting_options", "misc"]
+        required_sections = [
+            "profile",
+            "model_options",
+            "transcription_options",
+            "recording_options",
+            "meeting_options",
+            "misc",
+        ]
 
         for section in required_sections:
             assert section in schema, f"Missing required section: {section}"
@@ -210,6 +217,10 @@ class TestConfigSchema:
             "in_person_one_on_one",
             "in_person_group",
         ]
+
+        corrections = schema["transcription_options"]["corrections"]
+        assert corrections["type"] == "dict"
+        assert corrections["value"] == {}
 
 
 def test_retired_config_keys_are_ignored_while_supported_values_load(temp_dir):
@@ -259,3 +270,40 @@ def test_malformed_scalar_cannot_replace_supported_config_section(temp_dir):
 
     assert manager.config["model_options"] == original_model_options
     assert manager.config["misc"]["noise_on_completion"] is False
+
+
+def test_dynamic_correction_mapping_loads_from_private_config(temp_dir):
+    from utils import ConfigManager
+
+    manager = ConfigManager()
+    manager.schema = manager.load_config_schema()
+    manager.config = manager.load_default_config()
+    config_path = temp_dir / "config.yaml"
+    config_path.write_text(
+        "transcription_options:\n"
+        "  corrections:\n"
+        "    ack me: Acme\n"
+        "    north wnd: Northwind\n",
+        encoding="utf-8",
+    )
+
+    manager.load_user_config(config_path)
+
+    assert manager.config["transcription_options"]["corrections"] == {
+        "ack me": "Acme",
+        "north wnd": "Northwind",
+    }
+
+    original = ConfigManager._instance
+    ConfigManager._instance = manager
+    try:
+        manager.set_config_value("Alex", "profile", "user_name")
+        manager.save_config(config_path)
+    finally:
+        ConfigManager._instance = original
+
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["transcription_options"]["corrections"] == {
+        "ack me": "Acme",
+        "north wnd": "Northwind",
+    }

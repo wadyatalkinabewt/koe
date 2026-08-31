@@ -123,7 +123,8 @@ class ConfigManager:
             'str': str,
             'int': int,
             'float': float,
-            'bool': bool
+            'bool': bool,
+            'dict': dict,
         }
 
         # Allow None for optional values
@@ -168,11 +169,15 @@ class ConfigManager:
 
     def load_user_config(self, config_file=None):
         """Load user configuration and merge with default config."""
-        def deep_update(source, overrides):
+        def deep_update(source, overrides, schema):
             for key, value in overrides.items():
                 # The schema is authoritative. Retired or misspelled settings
                 # are ignored instead of silently restoring removed features.
                 if key not in source:
+                    continue
+                schema_value = schema.get(key, {}) if isinstance(schema, dict) else {}
+                if isinstance(schema_value, dict) and 'type' in schema_value:
+                    source[key] = value
                     continue
                 source_value = source[key]
                 if isinstance(source_value, dict):
@@ -180,7 +185,7 @@ class ConfigManager:
                     # supported section and break later nested lookups.
                     if not isinstance(value, dict):
                         continue
-                    deep_update(source_value, value)
+                    deep_update(source_value, value, schema_value)
                     continue
                 if isinstance(value, dict):
                     continue
@@ -195,7 +200,7 @@ class ConfigManager:
                         return
                     # Validate before merging
                     self._validate_config_section(user_config, self.schema)
-                    deep_update(self.config, user_config)
+                    deep_update(self.config, user_config, self.schema)
             except yaml.YAMLError:
                 print("Error in configuration file. Using default configuration.")
 

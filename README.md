@@ -1,117 +1,34 @@
 # Koe
 
-Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
+Koe is a Windows tray app for fast voice snippets and meeting transcripts. It
+uses ElevenLabs Scribe v2 for speech-to-text and can use OpenRouter to produce
+structured meeting summaries.
 
-- **Snippet:** press `Ctrl+Shift+Space`, speak, and press it again to copy the
-  transcript to the clipboard.
-- **Scribe:** record a meeting, keep notes, produce a labelled transcript, and
-  optionally generate a structured OpenRouter summary.
+## What it does
 
-Every transcription request uses `no_verbatim=true`. ElevenLabs is the single
-speech-to-text path.
+- **Snippet:** press a global toggle hotkey, speak, and press it again to copy
+  the transcript to the clipboard.
+- **Scribe:** capture microphone and Windows loopback audio, submit one aligned
+  mono recording for diarized transcription, and generate transcript and
+  summary PDFs.
+- **Private corrections:** supply local exact-token corrections without putting
+  names, organisations, or domain terminology in the repository.
 
-After Koe safely decodes a successful ElevenLabs response, it immediately
-deletes the server-side transcript by its returned `transcription_id`. This
-applies independently to every snippet chunk and every Scribe meeting upload.
-Deletion failures are retried and recorded in Koe's local diagnostic log
-without discarding the transcript already received.
+Snippet audio is kept in memory and is never written to disk. Successfully
+decoded ElevenLabs transcripts are deleted from ElevenLabs by transcription ID.
+Meeting source audio is retained only when the user enables that option.
 
-After transcription, Koe applies a deliberately small exact-token correction
-map for stable Scribe substitutions that vocabulary hints do not prevent. The
-same corrections apply to snippets and Scribe meeting transcripts.
+See [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md) for the meeting modes,
+storage behaviour, and privacy boundaries.
 
-Snippet recordings stay in memory only and are never saved as audio. The
-**Save Scribe meeting audio** preference applies only to Scribe meetings.
-Successful Scribe runs remove their temporary microphone, loopback, and mixed
-WAV files after the documents and any requested durable audio copies are
-verified. Failed transcription attempts preserve those temporary WAVs for
-local recovery.
+## Requirements
 
-Scribe keeps the meeting type in the recording window and remembers the last
-selection:
+- Windows 11
+- Python 3.13
+- an ElevenLabs API key
+- an OpenRouter API key only if meeting summaries are enabled
 
-- **Online / One-on-One:** enter a meeting name and the other participant's
-  name. Koe diarizes the recording, maps the microphone-aligned voice to the
-  current user when loopback is active, and maps the other voice to the named
-  participant.
-- **Online / Group Meeting:** the microphone is the current user and loopback
-  may contain multiple remote participants.
-- **In Person / One-on-One:** the microphone is shared by both local speakers.
-  Koe keeps diarized generic labels unless the later contextual transcript pass
-  has exact evidence for a name. It does not use ElevenLabs speaker-library
-  matching or guess the Settings owner from a shared microphone.
-- **In Person / Group Meeting:** the microphone is shared by any number of
-  local speakers. Loopback is still captured for anyone joining by call.
-
-For either in-person mode, an effectively empty loopback track is omitted from
-transcription and retention.
-
-## Scribe billing and speaker labels
-
-Koe opens both capture devices before either starts, records microphone and
-Windows loopback separately, overlays them into one aligned mono WAV, and sends
-that file once with `use_multi_channel=false`. A one-hour meeting therefore
-produces one one-hour transcription upload rather than two one-hour channel
-uploads.
-
-The original microphone track is never transcribed separately. Every mode uses
-one diarized upload with speaker-library matching disabled. Online meetings use
-synchronized mic/loopback timing locally to map the microphone-aligned voice to
-the name in Settings. When a loudspeaker or in-person setup puts every voice on
-the shared microphone, Koe preserves readable `Speaker 1`, `Speaker 2`, and so
-on instead of forcing the whole recording to the owner.
-
-The existing OpenRouter analysis then asks `google/gemini-3.7-flash` for both
-the structured summary and conservative contextual identity proposals for any
-remaining generic labels. Every request enforces OpenRouter Zero Data Retention
-and fails rather than routing meeting text to a retaining provider endpoint.
-Koe accepts only high-confidence proposals backed by
-exact transcript excerpts, applies the validated mapping to both documents,
-and preserves distinct numbering when several unknown people share one role or
-organisation. Ambiguous speakers remain `Speaker N`. This contextual pass does
-not inspect voices or replace the separate proposed local speaker-embedding
-library in ``.
-
-Every successful Scribe meeting writes polished transcript and summary PDFs.
-The transcript PDF lists recognised names first, renumbers remaining anonymous
-voices from `Speaker 1`, and consistently assigns Koe green to the participant
-matching **Your Name** in Settings.
-
-Enable **Save Markdown copies** in Settings to keep `transcript.md` and
-`summary.md` alongside those PDFs. Meeting notes are folded into a clearly
-labelled Notes section at the bottom of the transcript PDF and optional
-Markdown transcript; Koe does not create a separate notes file.
-
-One-on-one PDF summaries use the meeting name, participant, date, and duration
-as a compact header; group summaries use a duration-and-participants panel.
-Summaries keep the overview brief, group actions by owner, and visually
-distinguish decisions and open questions. If **Save Scribe meeting audio** is
-enabled, the original source tracks are also kept with the meeting:
-
-```text
-transcript.pdf
-summary.pdf
-transcript.md       # only when Save Markdown copies is enabled
-summary.md          # only when Save Markdown copies is enabled
-microphone.wav     # only when audio retention is enabled
-meeting-audio.wav  # only when audio retention is enabled
-```
-
-## Development
-
-Koe is developed and tested on Windows 11 with Python 3.13.
-
-Source runs keep the complete local development instance inside the checkout:
-
-```text
-C:\Projects\koe\.env
-C:\Projects\koe\config.yaml
-C:\Projects\koe\logs\
-C:\Projects\koe\.scribe_temp\
-C:\Projects\koe\Snippets\
-C:\Projects\koe\Meetings\
-C:\Projects\koe\.venv\
-```
+## Run from source
 
 ```powershell
 python -m venv .venv
@@ -119,14 +36,33 @@ python -m venv .venv
 .\.venv\Scripts\python.exe run.py
 ```
 
-Tests can override the runtime layout with `KOE_APPDATA_DIR` and
-`KOE_DOCUMENTS_DIR`.
+The first-run window creates local settings. Secrets, settings, logs,
+transcripts, recordings, and custom corrections are ignored by Git.
 
-## Verification
+## Custom corrections
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-$files = @('run.py') + (Get-ChildItem src -Recurse -Filter *.py | ForEach-Object FullName)
-.\.venv\Scripts\python.exe -m py_compile $files
-git diff --check
+For stable speech-to-text substitutions, add a private `corrections` mapping to
+Koe's existing `config.yaml` in the runtime data directory:
+
+- source run: `<checkout>\config.yaml`
+- packaged run: `%LOCALAPPDATA%\Koe\config.yaml`
+
+This file-based setting intentionally has no Settings-window editor.
+
+```yaml
+transcription_options:
+  corrections:
+    ack me: Acme
 ```
+
+Corrections match complete words or phrases, ignore case, and preserve the
+matched text's lower/upper/title-style casing. They are applied locally after
+transcription and are never sent to a provider. The real config file is private
+and must not be committed.
+
+## Development
+
+Architecture, runtime paths, and verification commands are documented in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+Koe currently runs directly from source.

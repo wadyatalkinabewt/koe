@@ -14,14 +14,14 @@ def test_timestamp_formats_minutes_and_hours():
 
 def test_consecutive_speaker_segments_merge_in_time_order():
     segments = [
-        {"start": 4, "end": 5, "text": "Second", "label": "Jordan"},
+        {"start": 4, "end": 5, "text": "Second", "label": "Taylor"},
         {"start": 0, "end": 1, "text": "Hello", "label": "Alex"},
         {"start": 1, "end": 2, "text": "again", "label": "Alex"},
     ]
 
     assert merge_consecutive_same_speaker(segments) == [
         {"start": 0, "end": 2, "text": "Hello again", "label": "Alex"},
-        {"start": 4, "end": 5, "text": "Second", "label": "Jordan"},
+        {"start": 4, "end": 5, "text": "Second", "label": "Taylor"},
     ]
 
 
@@ -29,13 +29,13 @@ def test_render_transcript_includes_stream_labels():
     rendered = render_transcript(
         segments=[{"start": 0, "end": 1, "text": "Hello.", "label": "Alex"}],
         meeting_name="Planning",
-        participants=["Alex", "Jordan"],
+        participants=["Alex", "Taylor"],
         started_at=datetime(2026, 7, 13, 10, 30),
         duration_seconds=60,
     )
 
     assert "# Planning" in rendered
-    assert "**Participants**: Alex, Jordan" in rendered
+    assert "**Participants**: Alex, Taylor" in rendered
     assert "**[00:00] Alex**: Hello." in rendered
 
 
@@ -46,8 +46,8 @@ def test_render_transcript_appends_notes_as_a_final_section():
         participants=["Alex"],
         started_at=datetime(2026, 7, 13, 10, 30),
         duration_seconds=60,
-        notes_text="Follow up with Casey.\nConfirm the deadline.",
+        notes_text="Follow up with Jordan.\nConfirm the deadline.",
     )
 
     assert rendered.index("## Transcript") < rendered.index("## Notes")
-    assert rendered.endswith("Follow up with Casey.\nConfirm the deadline.\n")
+    assert rendered.endswith("Follow up with Jordan.\nConfirm the deadline.\n")

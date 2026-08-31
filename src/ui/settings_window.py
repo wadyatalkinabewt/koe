@@ -16,7 +16,6 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -144,7 +143,7 @@ class SettingsWindow(BaseWindow):
         self._load_values()
         self._connect_autosave()
         self._loading_values = False
-        QTimer.singleShot(0, self._refresh_content_size)
+        QTimer.singleShot(0, self._fit_window_to_content)
 
     @staticmethod
     def _local_stylesheet() -> str:
@@ -159,11 +158,6 @@ class SettingsWindow(BaseWindow):
                 color: {theme.TEXT_COLOR};
                 font-size: 9pt;
                 font-weight: 600;
-            }}
-            QTextEdit:disabled {{
-                background: #0D121B;
-                border-color: {theme.DIVIDER_COLOR};
-                color: {theme.DIM_TEXT};
             }}
         """
 
@@ -225,28 +219,6 @@ class SettingsWindow(BaseWindow):
         self.beep_checkbox = ToggleRow("Play a sound when a snippet is ready")
         snippet.layout().addWidget(self.beep_checkbox)
         self.content_layout.addWidget(snippet)
-
-        transcription = self._card("Transcription")
-        self.transcription_card = transcription
-        transcription.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        transcription.layout().setAlignment(Qt.AlignTop)
-        transcription.layout().setSpacing(9)
-        self.keyterms_checkbox = ToggleRow(
-            "Use vocabulary hints for names and technical terms"
-        )
-        self.keyterms_checkbox.label.setWordWrap(False)
-        self.keyterms_checkbox.layout().setContentsMargins(0, 0, 0, 0)
-        transcription.layout().addWidget(self.keyterms_checkbox)
-        transcription.layout().addWidget(_label("Vocabulary", "subsectionTitle"))
-        self.initial_prompt_edit = QTextEdit()
-        self.initial_prompt_edit.setAcceptRichText(False)
-        self.initial_prompt_edit.setPlaceholderText(
-            "Comma-separated names, products, and technical terms"
-        )
-        self.initial_prompt_edit.setMinimumHeight(96)
-        self.initial_prompt_edit.setMaximumHeight(240)
-        transcription.layout().addWidget(self.initial_prompt_edit)
-        self.content_layout.addWidget(transcription)
 
         self.scroll.setWidget(self.content)
         self.main_layout.addWidget(self.scroll, 1)
@@ -317,18 +289,6 @@ class SettingsWindow(BaseWindow):
         self.beep_checkbox.setChecked(
             bool(ConfigManager.get_config_value("misc", "noise_on_completion"))
         )
-        self.keyterms_checkbox.setChecked(
-            bool(
-                ConfigManager.get_config_value(
-                    "model_options", "elevenlabs", "keyterms_enabled"
-                )
-            )
-        )
-        self.initial_prompt_edit.setPlainText(
-            ConfigManager.get_config_value("model_options", "common", "initial_prompt")
-            or ""
-        )
-        self._sync_vocabulary_editor()
         self._loading_values = False
 
     def _connect_autosave(self) -> None:
@@ -343,25 +303,8 @@ class SettingsWindow(BaseWindow):
             self.save_meeting_audio_checkbox,
             self.save_markdown_checkbox,
             self.beep_checkbox,
-            self.keyterms_checkbox,
         ):
             toggle.toggled.connect(self._schedule_save)
-        self.keyterms_checkbox.toggled.connect(self._sync_vocabulary_editor)
-        self.initial_prompt_edit.textChanged.connect(self._schedule_save)
-        self.initial_prompt_edit.textChanged.connect(self._refresh_content_size)
-
-    def _sync_vocabulary_editor(self, *_args) -> None:
-        enabled = self.keyterms_checkbox.isChecked()
-        self.initial_prompt_edit.setEnabled(enabled)
-        self.initial_prompt_edit.setToolTip(
-            "" if enabled else "Turn on vocabulary hints to edit this list."
-        )
-
-    def _refresh_content_size(self, *_args) -> None:
-        document_height = self.initial_prompt_edit.document().documentLayout().documentSize().height()
-        editor_height = max(96, min(240, int(document_height) + 28))
-        self.initial_prompt_edit.setFixedHeight(editor_height)
-        QTimer.singleShot(0, self._fit_window_to_content)
 
     def _fit_window_to_content(self) -> None:
         self.content.adjustSize()
@@ -411,18 +354,6 @@ class SettingsWindow(BaseWindow):
         ConfigManager.set_config_value(
             self.beep_checkbox.isChecked(), "misc", "noise_on_completion"
         )
-        ConfigManager.set_config_value(
-            self.keyterms_checkbox.isChecked(),
-            "model_options",
-            "elevenlabs",
-            "keyterms_enabled",
-        )
-        ConfigManager.set_config_value(
-            self.initial_prompt_edit.toPlainText().strip() or None,
-            "model_options",
-            "common",
-            "initial_prompt",
-        )
         try:
             ConfigManager.save_config()
             self._save_failed = False
@@ -450,7 +381,7 @@ class SettingsWindow(BaseWindow):
         self.save_status_label.setStyleSheet("")
         self.save_status_label.clear()
         self.save_status_label.hide()
-        self._refresh_content_size()
+        self._fit_window_to_content()
         super().showEvent(event)
 
     def closeEvent(self, event) -> None:

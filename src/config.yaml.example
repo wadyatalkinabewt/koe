@@ -15,9 +15,11 @@ recording_options:
 model_options:
   common:
     language: null
-    initial_prompt: null
-  elevenlabs:
-    keyterms_enabled: false
+
+transcription_options:
+  corrections:
+    ack me: Acme
+    north wnd: Northwind
 
 misc:
   noise_on_completion: true

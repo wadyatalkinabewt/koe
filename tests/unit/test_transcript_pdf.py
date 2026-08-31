@@ -6,12 +6,12 @@ def test_known_speakers_precede_cleanly_renumbered_unknowns():
     from meeting.pdf_theme import normalize_speaker_labels
 
     ordered, labels = normalize_speaker_labels(
-        ["Speaker 7", "Casey", "Speaker 3", "Alex"],
+        ["Speaker 7", "Jordan", "Speaker 3", "Alex"],
     )
 
-    assert ordered == ["Casey", "Alex", "Speaker 7", "Speaker 3"]
+    assert ordered == ["Jordan", "Alex", "Speaker 7", "Speaker 3"]
     assert [labels[label] for label in ordered] == [
-        "Casey",
+        "Jordan",
         "Alex",
         "Speaker 1",
         "Speaker 2",
@@ -25,11 +25,11 @@ def test_configured_recorder_gets_reserved_koe_green():
         normalize_speaker_labels,
     )
 
-    ordered, labels = normalize_speaker_labels(["Casey", "Alex", "Speaker 8"])
+    ordered, labels = normalize_speaker_labels(["Jordan", "Alex", "Speaker 8"])
     assigned = assign_speaker_colors(ordered, labels, "Alex")
 
     assert assigned["Alex"].hexval() == KOE_GREEN.hexval()
-    assert assigned["Casey"].hexval() != KOE_GREEN.hexval()
+    assert assigned["Jordan"].hexval() != KOE_GREEN.hexval()
     assert assigned["Speaker 8"].hexval() != KOE_GREEN.hexval()
 
 

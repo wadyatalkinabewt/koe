@@ -173,7 +173,7 @@ def test_record_audio_refreshes_default_device_before_each_snippet(
     opened = []
     devices = [
         {
-            "name": "Microphone (5- Logitech USB Headset Wireless Gaming Headset)",
+            "name": "Microphone (5- Example USB Headset)",
             "hostapi": 0,
             "max_input_channels": 1,
             "max_output_channels": 0,

@@ -68,7 +68,6 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert isinstance(window.save_markdown_checkbox, ToggleRow)
     assert window.findChildren(QCheckBox) == []
     assert "microphone.wav and meeting-audio.wav" not in labels
-    assert not window.keyterms_checkbox.label.wordWrap()
     window.show()
     qapp.processEvents()
     original_size = window.size()
@@ -104,7 +103,7 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     profile = cards_by_title["Your Name"]
     storage = cards_by_title["Storage"]
     scribe_card = cards_by_title["Scribe"]
-    transcription = cards_by_title["Transcription"]
+    assert "Transcription" not in cards_by_title
     assert "Recording" not in cards_by_title
     assert window.user_name_input.parentWidget() is profile
     assert window.save_meeting_audio_checkbox.parentWidget() is scribe_card
@@ -116,9 +115,6 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
         for card in cards_by_title.values()
     )
     assert all(card.layout().alignment() & Qt.AlignTop for card in cards_by_title.values())
-    assert transcription is window.transcription_card
-    assert transcription.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
-    assert transcription.layout().alignment() & Qt.AlignTop
     storage_description = next(
         label
         for label in storage.findChildren(QLabel)
@@ -127,34 +123,17 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     snippets_title = next(
         label for label in storage.findChildren(QLabel) if label.text() == "Snippets Folder"
     )
-    vocabulary_title = next(
-        label
-        for label in transcription.findChildren(QLabel)
-        if label.text() == "Vocabulary"
-    )
     storage_heading_gap = storage_description.mapTo(storage, QPoint()).y() - (
         card_headings["Storage"].mapTo(storage, QPoint()).y()
         + card_headings["Storage"].height()
     )
-    transcription_heading_gap = window.keyterms_checkbox.label.mapTo(
-        transcription, QPoint()
-    ).y() - (
-        card_headings["Transcription"].mapTo(transcription, QPoint()).y()
-        + card_headings["Transcription"].height()
-    )
     storage_detail_gap = snippets_title.mapTo(storage, QPoint()).y() - (
         storage_description.mapTo(storage, QPoint()).y() + storage_description.height()
     )
-    transcription_detail_gap = vocabulary_title.mapTo(transcription, QPoint()).y() - (
-        window.keyterms_checkbox.label.mapTo(transcription, QPoint()).y()
-        + window.keyterms_checkbox.label.height()
-    )
-    assert transcription_heading_gap == storage_heading_gap
-    assert transcription_detail_gap <= storage_detail_gap
+    assert storage_detail_gap > 0
     assert "PDF transcripts and summaries are always saved." in {
         label.text() for label in scribe_card.findChildren(QLabel)
     }
-    assert window.keyterms_checkbox.height() == window.keyterms_checkbox.switch.height()
     assert window.snippets_input.mapTo(window, QPoint()).y() < window.meetings_input.mapTo(
         window, QPoint()
     ).y()
@@ -169,12 +148,6 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert "esc to close" not in labels
     assert not hasattr(window, "provider_combo")
 
-    window._loading_values = True
-    window.keyterms_checkbox.setChecked(False)
-    assert not window.initial_prompt_edit.isEnabled()
-    window.keyterms_checkbox.setChecked(True)
-    assert window.initial_prompt_edit.isEnabled()
-    window._loading_values = False
     window.close()
 
 

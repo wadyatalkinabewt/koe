@@ -40,9 +40,9 @@ def mock_config():
     return {
         "profile": {"user_name": "Test User"},
         "model_options": {
-            "common": {"language": None, "initial_prompt": "Koe, ElevenLabs"},
-            "elevenlabs": {"keyterms_enabled": True},
+            "common": {"language": None},
         },
+        "transcription_options": {"corrections": {"ack me": "Acme"}},
         "recording_options": {
             "activation_key": "ctrl+shift+space",
         },
