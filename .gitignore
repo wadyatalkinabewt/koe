@@ -18,6 +18,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+/.aider.tags.cache.v4/
 .coverage
 htmlcov/
 .venv/

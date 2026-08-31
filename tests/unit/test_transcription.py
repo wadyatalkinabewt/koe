@@ -145,21 +145,23 @@ def test_known_transcript_substitutions_are_corrected_as_whole_tokens():
     assert transcription.apply_transcript_corrections(
         "Groq, groq, and GROQ heard Taylor, Taylor, Taylor, "
         "Taylor, Taylor, Taylor, Robin, Robin, Robin, "
-        "Mirror, mirror, and MIRROR at "
+        "Mirror, mirror, MIRROR, Lyft, lyft, and LYFT at "
+        "Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, "
         "Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, "
         "Ack Me, Ack Me, Ack Me, "
-        "Ack Me, Ack Me, and Ack Me."
+        "Ack Me, Ack Me, Ack Me, Ack Me, Ack Me, and Ack Me."
     ) == (
         "Grok, grok, and GROK heard Taylor, Taylor, Taylor, "
         "Taylor, Taylor, Taylor, Robin, Robin, Robin, "
-        "Morgan, Morgan, and Morgan "
+        "Morgan, Morgan, Morgan, Lift, lift, and LIFT "
         "at Acme, Acme, Acme, Acme, Acme, Acme, "
+        "Acme, Acme, Acme, Acme, Acme, Acme, "
         "Acme, Acme, Acme, "
-        "Acme, Acme, and Acme."
+        "Acme, Acme, Acme, Acme, Acme, and Acme."
     )
     assert transcription.apply_transcript_corrections(
-        "GroqCloud, Taylors, Robins, Mirrors, AckMeson, AckMeson, AckMeson, and AckMes are different tokens."
-    ) == "GroqCloud, Taylors, Robins, Mirrors, AckMeson, AckMeson, AckMeson, and AckMes are different tokens."
+        "GroqCloud, Taylors, Robins, Mirrors, Lyfts, AckMeson, AckMeson, AckMeson, AckMeson, AckMecare, AckMes, and AckMes are different tokens."
+    ) == "GroqCloud, Taylors, Robins, Mirrors, Lyfts, AckMeson, AckMeson, AckMeson, AckMeson, AckMecare, AckMes, and AckMes are different tokens."
 
 
 def test_known_transcript_substitutions_apply_to_scribe_segments():
