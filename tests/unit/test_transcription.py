@@ -262,6 +262,161 @@ def test_group_upload_retries_wrapped_write_timeout_from_byte_zero(tmp_path, mon
     assert delays == [2.0, 5.0]
 
 
+def test_snippet_response_is_deleted_after_successful_receipt(monkeypatch):
+    import transcription
+
+    events = []
+    deleted = {}
+
+    class PostResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            events.append("decoded")
+            return {
+                "transcription_id": "snippet/transcript id",
+                "text": "Received safely.",
+            }
+
+    class DeleteResponse:
+        status_code = 200
+
+    monkeypatch.setattr(
+        transcription.requests,
+        "post",
+        lambda *_args, **_kwargs: PostResponse(),
+    )
+
+    def fake_delete(url, *, headers, timeout):
+        events.append("deleted")
+        deleted.update(url=url, headers=headers, timeout=timeout)
+        return DeleteResponse()
+
+    monkeypatch.setattr(transcription.requests, "delete", fake_delete)
+
+    result, error = transcription._elevenlabs_post(
+        io.BytesIO(b"RIFF"),
+        [("model_id", "scribe_v2")],
+        "test-key",
+        timeout=180,
+    )
+
+    assert error is None
+    assert result["text"] == "Received safely."
+    assert events == ["decoded", "deleted"]
+    assert deleted["url"].endswith("/snippet%2Ftranscript%20id")
+    assert deleted["headers"] == {"xi-api-key": "test-key"}
+    assert deleted["timeout"] == transcription.ELEVENLABS_DELETE_TIMEOUT
+
+
+def test_meeting_response_is_deleted_after_successful_receipt(tmp_path, monkeypatch):
+    import transcription
+
+    wav_path = tmp_path / "meeting-mix.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(np.zeros(1600, dtype=np.int16).tobytes())
+
+    events = []
+
+    class PostResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            events.append("decoded")
+            return {"transcription_id": "meeting-id", "words": []}
+
+    class DeleteResponse:
+        status_code = 204
+
+    monkeypatch.setattr(
+        transcription.requests,
+        "post",
+        lambda *_args, **_kwargs: PostResponse(),
+    )
+    monkeypatch.setattr(
+        transcription.requests,
+        "delete",
+        lambda *_args, **_kwargs: events.append("deleted") or DeleteResponse(),
+    )
+
+    result, error = transcription._elevenlabs_post_file(
+        wav_path,
+        [("model_id", "scribe_v2")],
+        "test-key",
+        timeout=900,
+    )
+
+    assert error is None
+    assert result == {"transcription_id": "meeting-id", "words": []}
+    assert events == ["decoded", "deleted"]
+
+
+def test_invalid_transcription_response_is_not_deleted(monkeypatch):
+    import transcription
+
+    class PostResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            raise ValueError("invalid JSON")
+
+    monkeypatch.setattr(
+        transcription.requests,
+        "post",
+        lambda *_args, **_kwargs: PostResponse(),
+    )
+    monkeypatch.setattr(
+        transcription.requests,
+        "delete",
+        lambda *_args, **_kwargs: pytest.fail(
+            "deletion requires a successfully decoded transcript ID"
+        ),
+    )
+
+    result, error = transcription._elevenlabs_post(
+        io.BytesIO(b"RIFF"),
+        [("model_id", "scribe_v2")],
+        "test-key",
+        timeout=180,
+    )
+
+    assert result is None
+    assert error == "ElevenLabs returned an invalid JSON response"
+
+
+def test_transcript_deletion_retries_a_transient_server_failure(monkeypatch):
+    import transcription
+
+    statuses = iter((503, 200))
+    delays = []
+
+    class DeleteResponse:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    monkeypatch.setattr(
+        transcription.requests,
+        "delete",
+        lambda *_args, **_kwargs: DeleteResponse(next(statuses)),
+    )
+    monkeypatch.setattr(transcription.time, "sleep", delays.append)
+
+    assert transcription._delete_elevenlabs_transcript(
+        {"transcription_id": "retry-id"},
+        "test-key",
+    ) is True
+    assert delays == [1.0]
+
+
 def test_group_upload_timeout_scales_for_very_slow_connections(tmp_path, monkeypatch):
     import transcription
 

@@ -47,7 +47,7 @@ def test_summarizer_uses_gemini_37_structured_output_and_openrouter_routing(
     assert result.speaker_mapping == {}
     assert captured["body"]["model"] == "google/gemini-3.7-flash"
     assert captured["body"]["response_format"] == {"type": "json_object"}
-    assert "provider" not in captured["body"]
+    assert captured["body"]["provider"] == {"zdr": True}
 
 
 def test_summary_metadata_prefers_meeting_title_after_host_notes():

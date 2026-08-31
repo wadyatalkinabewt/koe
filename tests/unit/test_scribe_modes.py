@@ -123,7 +123,7 @@ def test_group_worker_sends_one_mixed_request_and_saves_original_sources(tmp_pat
         "file_path": source_dir / "meeting-mix.wav",
         "label": "Speaker",
         "diarize": True,
-        "use_speaker_library": True,
+        "use_speaker_library": False,
         "num_speakers": None,
     }
     assert (meeting_dir / "transcript.md").exists()
@@ -295,7 +295,7 @@ def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(tmp_path
     assert request["frames"] == 4800
     assert ("use_multi_channel", "false") in request["data"]
     assert ("diarize", "true") in request["data"]
-    assert ("use_speaker_library", "true") in request["data"]
+    assert not any(key == "use_speaker_library" for key, _value in request["data"])
     assert "Alex" in (
         tmp_path / "Meetings" / "26_07_15_Management_Meeting" / "transcript.md"
     ).read_text(encoding="utf-8")
@@ -427,7 +427,7 @@ def test_in_person_worker_uses_shared_mic_and_omits_silent_loopback(
     meeting_dir = tmp_path / "Meetings" / "26_07_27_Planning_Session"
     assert captured["file_path"] == source_dir / "meeting-mix.wav"
     assert captured["diarize"] is True
-    assert captured["use_speaker_library"] is True
+    assert captured["use_speaker_library"] is False
     assert captured["peak"] > 1000
     transcript = (meeting_dir / "transcript.md").read_text(encoding="utf-8")
     _assert_pdf(meeting_dir / "transcript.pdf")
@@ -488,7 +488,7 @@ def test_in_person_worker_retains_meaningful_loopback(tmp_path, monkeypatch):
     assert (meeting_dir / "meeting-audio.wav").exists()
 
 
-def test_in_person_one_on_one_uses_library_owner_to_name_other_speaker(
+def test_in_person_one_on_one_uses_known_owner_label_to_name_other_speaker(
     tmp_path, monkeypatch
 ):
     import transcription
@@ -539,7 +539,7 @@ def test_in_person_one_on_one_uses_library_owner_to_name_other_speaker(
 
     meeting_dir = tmp_path / "Meetings" / "26_07_27_Supplier_Catch-up"
     assert captured["diarize"] is True
-    assert captured["use_speaker_library"] is True
+    assert captured["use_speaker_library"] is False
     assert captured["num_speakers"] == 2
     transcript = (meeting_dir / "transcript.md").read_text(encoding="utf-8")
     assert "Shaun" in transcript and "Virginia" in transcript
@@ -609,7 +609,7 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
     assert calls[0][1] == {
         "label": "Speaker",
         "diarize": True,
-        "use_speaker_library": True,
+        "use_speaker_library": False,
         "num_speakers": 2,
     }
     assert (meeting_dir / "transcript.md").exists()
@@ -620,7 +620,7 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
     assert not (meeting_dir / "meeting-audio.wav").exists()
 
 
-def test_no_speech_retry_preserves_reserved_meeting_folder_and_cleans_attempt(tmp_path, monkeypatch):
+def test_no_speech_retry_preserves_reserved_meeting_folder_and_local_audio(tmp_path, monkeypatch):
     import transcription
     from meeting.app import MODE_ONLINE_ONE_ON_ONE, MeetingWorker
 
@@ -651,7 +651,11 @@ def test_no_speech_retry_preserves_reserved_meeting_folder_and_cleans_attempt(tm
 
     worker.run()
 
-    assert errors == ["No speech detected in either stream."]
+    assert len(errors) == 1
+    assert errors[0].startswith("No speech detected in either stream.")
+    assert str(source_dir) in errors[0]
     assert marker.read_text(encoding="utf-8") == "keep"
     assert reserved_dir.exists()
-    assert not source_dir.exists()
+    assert mic.exists()
+    assert loopback.exists()
+    assert (source_dir / "meeting-mix.wav").exists()

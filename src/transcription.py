@@ -17,6 +17,7 @@ import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 import numpy as np
 import requests
@@ -41,7 +42,11 @@ MAX_ELEVENLABS_FILE_BYTES = 5_000_000_000
 MAX_ELEVENLABS_DURATION_SECONDS = 10 * 60 * 60
 MIN_ELEVENLABS_DURATION_SECONDS = 0.1
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVENLABS_TRANSCRIPT_URL = f"{ELEVENLABS_URL}/transcripts"
 ELEVENLABS_API_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+ELEVENLABS_DELETE_MAX_ATTEMPTS = 3
+ELEVENLABS_DELETE_RETRY_DELAYS = (1.0, 3.0)
+ELEVENLABS_DELETE_TIMEOUT = 15.0
 
 # Exact-token corrections for stable Scribe substitutions that vocabulary
 # keyterms do not prevent. Keep this list deliberately small and evidence-led.
@@ -278,9 +283,68 @@ def _elevenlabs_post(
     if response.status_code != 200:
         return None, f"ElevenLabs HTTP {response.status_code}: {response.text[:300]}"
     try:
-        return response.json(), None
+        result = response.json()
     except ValueError:
         return None, "ElevenLabs returned an invalid JSON response"
+    _delete_elevenlabs_transcript(result, api_key)
+    return result, None
+
+
+def _delete_elevenlabs_transcript(result: object, api_key: str) -> bool:
+    """Best-effort removal of a completed STT input/output from ElevenLabs.
+
+    The deletion runs only after a successful response has been decoded locally.
+    A missing ID or failed deletion must not discard the transcript already
+    received by Koe, but the failure is recorded in the local diagnostic log.
+    """
+    if not isinstance(result, dict):
+        _debug("ElevenLabs response had no deletable transcription_id")
+        return False
+    transcription_id = str(result.get("transcription_id") or "").strip()
+    if not transcription_id:
+        _debug("ElevenLabs response had no deletable transcription_id")
+        return False
+
+    delete_url = f"{ELEVENLABS_TRANSCRIPT_URL}/{quote(transcription_id, safe='')}"
+    for attempt in range(1, ELEVENLABS_DELETE_MAX_ATTEMPTS + 1):
+        try:
+            response = requests.delete(
+                delete_url,
+                headers={"xi-api-key": api_key},
+                timeout=ELEVENLABS_DELETE_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            if attempt >= ELEVENLABS_DELETE_MAX_ATTEMPTS:
+                _debug(
+                    "ElevenLabs transcript deletion failed after "
+                    f"{attempt} attempts: {exc}"
+                )
+                return False
+        else:
+            if 200 <= response.status_code < 300 or response.status_code == 404:
+                _debug("ElevenLabs transcript deleted after successful receipt")
+                return True
+            if response.status_code != 429 and response.status_code < 500:
+                _debug(
+                    "ElevenLabs transcript deletion failed: "
+                    f"HTTP {response.status_code}"
+                )
+                return False
+            if attempt >= ELEVENLABS_DELETE_MAX_ATTEMPTS:
+                _debug(
+                    "ElevenLabs transcript deletion failed after "
+                    f"{attempt} attempts: HTTP {response.status_code}"
+                )
+                return False
+
+        delay = ELEVENLABS_DELETE_RETRY_DELAYS[attempt - 1]
+        _debug(
+            "Retrying ElevenLabs transcript deletion "
+            f"({attempt}/{ELEVENLABS_DELETE_MAX_ATTEMPTS}) in {delay:.0f}s"
+        )
+        time.sleep(delay)
+
+    return False
 
 
 def _elevenlabs_post_file(
@@ -356,9 +420,11 @@ def _elevenlabs_post_file(
     if response.status_code != 200:
         return None, f"ElevenLabs HTTP {response.status_code}: {response.text[:300]}"
     try:
-        return response.json(), None
+        result = response.json()
     except ValueError:
         return None, "ElevenLabs returned an invalid JSON response"
+    _delete_elevenlabs_transcript(result, api_key)
+    return result, None
 
 
 def _transcribe_elevenlabs_audio(

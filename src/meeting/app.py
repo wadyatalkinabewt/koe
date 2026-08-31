@@ -3,7 +3,7 @@
 Microphone and loopback are overlaid into one mono diarized request so an
 hour-long meeting is billed as one hour. Online meetings use the synchronized
 mic track to map the host when loopback is active. In-person and speakerphone
-recordings rely on speaker-library identity rather than falsely treating the
+recordings preserve generic speaker labels rather than falsely treating the
 entire shared microphone as the host.
 """
 
@@ -143,15 +143,6 @@ def _persist_meeting_audio(
         raise
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
-
-
-def _discard_temp_audio(*sources: Path) -> None:
-    """Remove an unusable no-speech attempt without touching a meeting folder."""
-    for source in sources:
-        source.unlink(missing_ok=True)
-    temp_dir = sources[0].parent if sources else None
-    if temp_dir and temp_dir.exists() and not any(temp_dir.iterdir()):
-        temp_dir.rmdir()
 
 
 def _relabel_mixed_segments(
@@ -310,7 +301,7 @@ class MeetingWorker(QThread):
                 mixed_wav,
                 label="Speaker",
                 diarize=True,
-                use_speaker_library=True,
+                use_speaker_library=False,
                 num_speakers=2 if _is_one_on_one(self.meeting_mode) else None,
             )
             microphone_label = None
@@ -333,8 +324,10 @@ class MeetingWorker(QThread):
                     self.participant_name,
                 )
             if not all_segments:
-                _discard_temp_audio(self.mic_wav, self.loopback_wav, mixed_wav)
-                self.error_signal.emit("No speech detected in either stream.")
+                self.error_signal.emit(
+                    "No speech detected in either stream. "
+                    f"Temporary audio was preserved in {self.mic_wav.parent}."
+                )
                 return
 
             # ----- transcript -----

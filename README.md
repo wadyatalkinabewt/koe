@@ -10,12 +10,22 @@ Koe is a Windows tray app for two ElevenLabs Scribe v2 workflows:
 Every transcription request uses `no_verbatim=true`. ElevenLabs is the single
 speech-to-text path.
 
+After Koe safely decodes a successful ElevenLabs response, it immediately
+deletes the server-side transcript by its returned `transcription_id`. This
+applies independently to every snippet chunk and every Scribe meeting upload.
+Deletion failures are retried and recorded in Koe's local diagnostic log
+without discarding the transcript already received.
+
 After transcription, Koe applies a deliberately small exact-token correction
 map for stable Scribe substitutions that vocabulary hints do not prevent. The
 same corrections apply to snippets and Scribe meeting transcripts.
 
 Snippet recordings stay in memory only and are never saved as audio. The
 **Save Scribe meeting audio** preference applies only to Scribe meetings.
+Successful Scribe runs remove their temporary microphone, loopback, and mixed
+WAV files after the documents and any requested durable audio copies are
+verified. Failed transcription attempts preserve those temporary WAVs for
+local recovery.
 
 Scribe keeps the meeting type in the recording window and remembers the last
 selection:
@@ -27,9 +37,9 @@ selection:
 - **Online / Group Meeting:** the microphone is the current user and loopback
   may contain multiple remote participants.
 - **In Person / One-on-One:** the microphone is shared by both local speakers.
-  Koe uses the speaker library to identify the Settings owner, then safely maps
-  every other voice to the entered participant. If the owner is not recognised,
-  Koe keeps generic labels instead of guessing.
+  Koe keeps diarized generic labels unless the later contextual transcript pass
+  has exact evidence for a name. It does not use ElevenLabs speaker-library
+  matching or guess the Settings owner from a shared microphone.
 - **In Person / Group Meeting:** the microphone is shared by any number of
   local speakers. Loopback is still captured for anyone joining by call.
 
@@ -45,16 +55,17 @@ produces one one-hour transcription upload rather than two one-hour channel
 uploads.
 
 The original microphone track is never transcribed separately. Every mode uses
-one diarized, speaker-library-enabled upload. Online meetings use synchronized
-mic/loopback timing locally to map the microphone-aligned voice to the name in
-Settings. When a loudspeaker or in-person setup puts every voice on the shared
-microphone, Koe relies on the speaker library instead of forcing the whole
-recording to the owner. Other speakers keep recognised library names or
-readable `Speaker 1`, `Speaker 2`, and so on when unknown.
+one diarized upload with speaker-library matching disabled. Online meetings use
+synchronized mic/loopback timing locally to map the microphone-aligned voice to
+the name in Settings. When a loudspeaker or in-person setup puts every voice on
+the shared microphone, Koe preserves readable `Speaker 1`, `Speaker 2`, and so
+on instead of forcing the whole recording to the owner.
 
 The existing OpenRouter analysis then asks `google/gemini-3.7-flash` for both
 the structured summary and conservative contextual identity proposals for any
-remaining generic labels. Koe accepts only high-confidence proposals backed by
+remaining generic labels. Every request enforces OpenRouter Zero Data Retention
+and fails rather than routing meeting text to a retaining provider endpoint.
+Koe accepts only high-confidence proposals backed by
 exact transcript excerpts, applies the validated mapping to both documents,
 and preserves distinct numbering when several unknown people share one role or
 organisation. Ambiguous speakers remain `Speaker N`. This contextual pass does

@@ -177,6 +177,9 @@ class SummarizerClient:
             "max_tokens": 4096,
             "temperature": 0.0,
             "response_format": {"type": "json_object"},
+            # Fail closed instead of routing meeting text to a provider endpoint
+            # that retains prompts or responses.
+            "provider": {"zdr": True},
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",

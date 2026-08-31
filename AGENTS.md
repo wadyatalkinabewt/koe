@@ -28,8 +28,8 @@ Koe is a Windows-only tray application with two workflows:
 - Scribe sends one mono meeting file with `use_multi_channel=false`. Never
   reintroduce separate billable mic and loopback transcription requests or
   multichannel billing.
-- Every Scribe mode enables diarization and speaker-library matching. One-on-one
-  requests cap the expected result at two speakers.
+- Every Scribe mode enables diarization with speaker-library matching disabled.
+  One-on-one requests cap the expected result at two speakers.
 - Online group mic audio remains local attribution evidence only. Its detected
   diarized label maps to the current Settings name.
 - Online one-on-one uses that same mic evidence when loopback is active, then
@@ -37,9 +37,14 @@ Koe is a Windows-only tray application with two workflows:
 - In-person Scribe treats the microphone as a shared-room source, never forces
   one microphone speaker to the Settings name, and still captures loopback for
   remote callers. Effectively empty loopback is neither uploaded nor retained.
-- In-person or speakerphone one-on-one only assigns the entered participant
-  name after the speaker library identifies the Settings owner. Otherwise it
-  preserves honest generic speaker labels.
+- In-person or speakerphone recordings preserve honest generic speaker labels
+  unless contextual analysis validates a name from exact transcript evidence.
+- Every successfully decoded ElevenLabs transcription response is immediately
+  deleted from ElevenLabs using its returned `transcription_id`.
+- OpenRouter meeting analysis must enforce per-request Zero Data Retention.
+- Failed Scribe transcription attempts preserve local temporary audio for
+  recovery. Successful runs remove temporary audio after document generation
+  and any requested durable audio copies are verified.
 - Every successful Scribe run writes `transcript.pdf` and `summary.pdf`.
   Markdown copies are written only when **Save Markdown copies** is enabled.
   The transcript PDF puts known names before cleanly renumbered anonymous
