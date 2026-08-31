@@ -7,6 +7,8 @@
 `Windows 11` &nbsp;·&nbsp; `Python 3.13` &nbsp;·&nbsp;
 `ElevenLabs Scribe v2` &nbsp;·&nbsp; `MIT`
 
+[![Windows tests](https://github.com/wadyatalkinabewt/koe/actions/workflows/tests.yml/badge.svg)](https://github.com/wadyatalkinabewt/koe/actions/workflows/tests.yml)
+
 Koe is a Windows tray app built for the gap between *I should write that down*
 and *what did we actually decide?* Tap a global hotkey for a quick voice
 snippet, or open Scribe to turn microphone and system audio into a diarized
