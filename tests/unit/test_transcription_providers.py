@@ -159,7 +159,6 @@ def test_mistral_voxtral_contract_returns_normalized_diarized_segments(monkeypat
     assert captured["headers"] == {"Authorization": "Bearer mistral-key"}
     assert captured["data"] == [
         ("model", "voxtral-mini-latest"),
-        ("language", "en"),
         ("diarize", "true"),
         ("timestamp_granularities", "segment"),
     ]
@@ -177,6 +176,33 @@ def test_mistral_voxtral_contract_returns_normalized_diarized_segments(monkeypat
     }
 
 
+def test_mistral_snippet_keeps_configured_language_without_timestamps(monkeypatch):
+    from providers import mistral
+
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return _Response({"text": "Hello.", "segments": []})
+
+    monkeypatch.setattr(mistral.requests, "post", fake_post)
+    result, error = mistral.transcribe_stream(
+        io.BytesIO(b"RIFF"),
+        "snippet.wav",
+        "mistral-key",
+        language="en",
+        diarize=False,
+        timeout=30,
+    )
+
+    assert error is None
+    assert result == {"text": "Hello.", "words": []}
+    assert captured["data"] == [
+        ("model", "voxtral-mini-latest"),
+        ("language", "en"),
+    ]
+
+
 def test_mistral_rejects_unlabelled_diarized_segments():
     from providers import mistral
 
@@ -190,4 +216,3 @@ def test_mistral_rejects_unlabelled_diarized_segments():
 
     assert result is None
     assert error == "Mistral diarization returned an unlabelled segment"
-

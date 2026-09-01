@@ -55,7 +55,11 @@ def transcribe_stream(
 ) -> tuple[dict | None, str | None]:
     """Upload audio to Voxtral and return Koe's normalized result shape."""
     data: list[tuple[str, str]] = [("model", MODEL)]
-    if language:
+    # Mistral documents ``language`` and ``timestamp_granularities`` as
+    # mutually incompatible. Scribe needs timed diarized segments, so let
+    # Voxtral detect the language for that path. Snippets may still use the
+    # configured language because they do not request timestamps.
+    if language and not diarize:
         data.append(("language", language))
     if diarize:
         data.extend(
@@ -107,4 +111,3 @@ def transcribe_file(
             )
     except OSError as exc:
         return None, f"Mistral request error: {exc}"
-

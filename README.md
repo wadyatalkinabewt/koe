@@ -76,11 +76,14 @@ For the exact meeting modes, storage paths, and failure behaviour, see the
 
 ## Run from source
 
-Koe currently targets **Windows 11** and **Python 3.13**. The first-run setup
-uses ElevenLabs by default. Create an
+Koe currently targets **Windows 11** and **Python 3.13**. First-run setup lets
+you choose ElevenLabs, Deepgram, or Mistral; ElevenLabs remains the default.
+Create an
 [ElevenLabs API key](https://elevenlabs.io/app/api/api-keys) with only
 **Speech to Text → Access** enabled. Koe does not require User, History, or any
-administrative permission. An
+administrative permission. Deepgram and Mistral link directly to their key
+consoles when selected. Setup checks the selected provider's actual
+speech-to-text capability before saving it. An
 [OpenRouter API key](https://openrouter.ai/workspaces/default/keys) is needed
 only for model-assisted meeting summaries and contextual speaker resolution.
 
@@ -108,8 +111,9 @@ end-to-end certification.
 | Deepgram | Nova-3 | Yes | All four modes; native batch diarization (`latest`) | 2 GB | Account/contract dependent; not required | No deletable transcript ID returned |
 | Mistral | Voxtral Mini Transcribe 2 | Yes | All four modes; native diarized segments | 500 MB / 60 minutes | Account/contract dependent; not required | No deletable transcript ID returned |
 
-To use an alternative provider, add its key to `.env` and select the adapter in
-the private `config.yaml`:
+First-run setup writes the selected provider and matching key. To switch an
+existing source checkout manually, add its key to `.env` and select the adapter
+in the private `config.yaml`:
 
 ```dotenv
 DEEPGRAM_API_KEY=your-key
