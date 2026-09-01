@@ -16,7 +16,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5.QtCore import QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt5.QtCore import QPoint, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -870,7 +870,7 @@ class ScribeWindow(QMainWindow):
         header_state_layout.addStretch()
         self.header_state_label = QLabel("")
         self.header_state_label.setObjectName("headerStateMessage")
-        self.header_state_label.setAlignment(Qt.AlignCenter)
+        self.header_state_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.header_state_label.setFixedWidth(334)
         header_state_layout.addWidget(self.header_state_label)
         self.header_state_label.hide()
@@ -971,13 +971,22 @@ class ScribeWindow(QMainWindow):
         self.action_stack.show()
         self.timer_label.show()
 
-    def _show_header_message(self, text: str, action_widget: QWidget) -> None:
+    def _show_header_message(
+        self, text: str, action_widget: QWidget, anchor_button: QPushButton
+    ) -> None:
         self.completion_options.hide()
-        self.header_state_label.setText(text)
-        self.header_state_label.show()
         self.action_stack.setCurrentWidget(action_widget)
         self.action_stack.show()
         self.timer_label.show()
+        self.header_state_label.setText(text)
+        self.header_state_label.show()
+        self.action_stack.layout().activate()
+        self.header_state_row.layout().activate()
+        central = self.centralWidget()
+        anchor_offset = anchor_button.mapTo(central, QPoint()).x() - (
+            self.header_state_label.mapTo(central, QPoint()).x()
+        )
+        self.header_state_label.setContentsMargins(max(0, anchor_offset), 0, 0, 0)
 
     def _show_completion_actions(self) -> None:
         self.header_state_label.clear()
@@ -1188,12 +1197,16 @@ class ScribeWindow(QMainWindow):
             self._set_timer_recording(False)
             self.header_state_label.setToolTip(msg)
             self._show_header_message(
-                "No speech detected", self.record_controls_widget
+                "No speech detected",
+                self.record_controls_widget,
+                self.record_button,
             )
             return
         self.header_state_label.setToolTip(msg)
         self._show_header_message(
-            "Couldn’t process audio", self.recovery_controls_widget
+            "Couldn’t process audio",
+            self.recovery_controls_widget,
+            self.recovery_button,
         )
 
     def _on_worker_done(self, folder_path: str, summary_path: str):

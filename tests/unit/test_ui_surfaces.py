@@ -388,6 +388,11 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.header_state_label.toolTip() == "No speech detected in either stream."
     assert scribe.header_state_row.isVisible()
     assert scribe.header_state_label.isVisible()
+    no_speech_text_left = (
+        scribe.header_state_label.mapTo(scribe, QPoint()).x()
+        + scribe.header_state_label.contentsMargins().left()
+    )
+    assert no_speech_text_left == scribe.record_button.mapTo(scribe, QPoint()).x()
     assert scribe.record_button.text() == "Start"
     assert scribe.timer_label.text() == "00:00"
     assert scribe.meeting_name_input.isEnabled()
@@ -417,6 +422,13 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.header_state_label.text() == "Couldn’t process audio"
     assert scribe.timer_label.isVisible()
     assert scribe.divider.mapTo(scribe, QPoint()).y() == divider_y
+    processing_error_text_left = (
+        scribe.header_state_label.mapTo(scribe, QPoint()).x()
+        + scribe.header_state_label.contentsMargins().left()
+    )
+    assert processing_error_text_left == scribe.recovery_button.mapTo(
+        scribe, QPoint()
+    ).x()
 
     meeting_dir = tmp_path / "meeting"
     meeting_dir.mkdir()
