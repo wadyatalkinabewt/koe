@@ -3,9 +3,26 @@
 ## Snippets
 
 The snippet hotkey is press-to-toggle. A second press stops capture, sends the
-audio to ElevenLabs Scribe v2, copies the formatted result to the clipboard,
-and rotates five local Markdown snippets. Snippet audio is transient and is not
-written to disk.
+audio to the transcription provider selected during setup, copies the formatted
+result to the clipboard, and rotates five local Markdown snippets. Snippet audio
+is transient and is not written to disk.
+
+## Transcription provider setup
+
+First-run setup offers ElevenLabs Scribe v2, Deepgram Nova-3, and Mistral
+Voxtral Mini Transcribe 2. The API-key link and validation request change with
+the selected provider, and Koe saves the selection only after that provider's
+speech-to-text endpoint accepts the key.
+
+- [ElevenLabs API keys](https://elevenlabs.io/app/api/api-keys): enable only
+  **Speech to Text -> Access**. User, History, and administrative access are not
+  required.
+- [Deepgram API keys](https://developers.deepgram.com/docs/create-additional-api-keys)
+- [Mistral audio transcription](https://docs.mistral.ai/studio/audio/speech_to_text/offline_transcription)
+
+The same selected adapter handles both Snippet and Scribe. An OpenRouter key is
+separate and optional; it enables meeting summaries and conservative contextual
+speaker resolution, not transcription.
 
 ## Scribe meeting modes
 
@@ -19,9 +36,10 @@ written to disk.
   speakers, while loopback can still capture remote callers.
 
 Koe opens microphone and loopback together, aligns them, mixes one mono meeting
-file, and sends a single transcription request with diarization enabled and
-speaker-library matching disabled. An effectively empty loopback track is not
-uploaded or retained.
+file, and sends one transcription request through the selected adapter. Each
+adapter requests its native diarized output; ElevenLabs additionally disables
+speaker-library matching. An effectively empty loopback track is not uploaded
+or retained.
 
 ## Documents and optional audio
 
@@ -41,6 +59,10 @@ Notes are appended to the transcript rather than written to a separate file.
 Failed transcription attempts preserve temporary audio for recovery. Successful
 runs remove temporary audio after document generation and any requested durable
 copies have been verified.
+
+On completion, **Summary** opens `summary.pdf` and **Transcript** opens
+`transcript.pdf`. If a PDF is unavailable and the optional Markdown copy exists,
+the corresponding button opens the Markdown document instead.
 
 ## Speaker labels and summaries
 
@@ -65,4 +87,6 @@ frozen Windows app, it uses:
 
 Every successful ElevenLabs response is deleted from ElevenLabs by its returned
 transcription ID. Deletion failures are retried and recorded locally without
-discarding the decoded transcript.
+discarding the decoded transcript. Deepgram and Mistral return synchronous
+responses without an equivalent deletable transcript ID, so their account
+retention terms apply.

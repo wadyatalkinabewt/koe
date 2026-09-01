@@ -195,7 +195,7 @@ def test_settings_debounces_changes_and_saves_automatically(qapp, monkeypatch):
     assert closed_after_change == [True]
 
 
-def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
+def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     from meeting.app import (
         MODE_IN_PERSON_GROUP,
         MODE_IN_PERSON_ONE_ON_ONE,
@@ -278,12 +278,12 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     assert scribe.meeting_name_input.placeholderText().startswith(
         "e.g. Invoice workflow"
     )
-    assert scribe.meeting_field_label.text() == "Meeting Name"
-    assert scribe.participant_field_label.text() == "Participant Name"
+    assert scribe.meeting_field_label.text() == "Meeting name"
+    assert scribe.participant_field_label.text() == "Participant name"
     assert scribe.participant_input.placeholderText() == "Full name works best"
     assert scribe.participant_input.isVisible()
-    assert scribe.meeting_type_label.text() == "Meeting Type"
-    assert scribe.meeting_type_combo.accessibleName() == "Meeting Type"
+    assert scribe.meeting_type_label.text() == "Meeting type"
+    assert scribe.meeting_type_combo.accessibleName() == "Meeting type"
     assert scribe.meeting_type_combo.maximumWidth() == 360
     assert [
         scribe.meeting_type_combo.itemText(index)
@@ -305,7 +305,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     ]
     assert scribe.meeting_type_combo.currentData() == MODE_ONLINE_ONE_ON_ONE
     action_y = scribe.action_stack.mapTo(scribe, QPoint()).y()
-    assert action_y == scribe.meeting_type_combo.mapTo(scribe, QPoint()).y()
+    timer_y = scribe.timer_label.mapTo(scribe, QPoint()).y()
+    assert action_y + scribe.action_stack.height() // 2 == (
+        timer_y + scribe.timer_label.height() // 2
+    )
     scribe.meeting_type_combo.setCurrentIndex(
         scribe.meeting_type_combo.findData(MODE_ONLINE_GROUP)
     )
@@ -323,14 +326,13 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     qapp.processEvents()
     assert scribe.participant_input.isVisible()
     assert scribe.action_stack.mapTo(scribe, QPoint()).y() == action_y
-    assert "Meeting Notes" in labels
-    assert "Scribe" not in labels
+    assert "Meeting notes" in labels
+    assert "Scribe" in labels
     assert "Capture the conversation" not in labels
     assert "Saved with the meeting" not in labels
     assert scribe.timer_label.objectName() == "scribeTimer"
-    assert (
-        scribe.record_button.mapTo(scribe, QPoint()).x()
-        < scribe.timer_label.mapTo(scribe, QPoint()).x()
+    assert scribe.record_button.mapTo(scribe, QPoint()).x() < (
+        scribe.timer_label.mapTo(scribe, QPoint()).x()
     )
     assert scribe.participant_input.maximumWidth() == 360
     assert "border: 1px" in scribe.styleSheet().lower()
@@ -360,41 +362,39 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
 
     scribe.timer_label.setText("12:34")
     scribe._show_processing()
-    assert scribe.processing_label.text() == "Preparing Transcript…"
-    assert scribe.processing_timer_label.text() == "12:34"
-    assert scribe.processing_timer_label.objectName() == "scribeTimer"
-    assert scribe.processing_timer_label.isVisible()
-    assert scribe.processing_timer_label.mapTo(scribe.action_stack, QPoint()).x() == (
-        scribe.timer_label.mapTo(scribe.action_stack, QPoint()).x()
-    )
-    processing_anchor = (
-        scribe.processing_indicator.mapTo(scribe.action_stack, QPoint()).x(),
-        scribe.processing_label.mapTo(scribe.action_stack, QPoint()).x(),
-    )
-    assert processing_anchor == (0, 17)
+    qapp.processEvents()
+    assert scribe.working_status_label.text() == "Preparing"
+    assert scribe.action_stack.currentWidget() is scribe.status_controls_widget
+    assert scribe.timer_label.text() == "12:34"
+    assert scribe.timer_label.isVisible()
+    assert not scribe.header_state_row.isVisible()
     scribe._on_worker_status("Transcribing your audio...")
-    assert scribe.processing_label.text() == "Transcribing Audio…"
+    assert scribe.working_status_label.text() == "Transcribing"
     scribe._on_worker_status("Transcribing other audio...")
-    assert scribe.processing_label.text() == "Transcribing Audio…"
+    assert scribe.working_status_label.text() == "Transcribing"
+    scribe._on_worker_status("Generating summary...")
+    assert scribe.working_status_label.text() == "Summarising"
     assert (
         scribe._concise_error('Failed: ElevenLabs HTTP 400: {"detail":"invalid audio"}')
-        == "Couldn’t Process Audio"
+        == "Couldn’t process audio"
     )
     scribe._on_worker_error("No speech detected in either stream.")
+    qapp.processEvents()
     assert scribe.action_stack.currentWidget() is scribe.record_controls_widget
-    assert scribe.retry_label.text() == "No Speech Detected"
-    assert scribe.retry_label.toolTip() == "No speech detected in either stream."
-    assert scribe.retry_label.isVisible()
-    assert scribe.retry_indicator.isVisible()
-    assert (
-        scribe.retry_indicator.mapTo(scribe.action_stack, QPoint()).x(),
-        scribe.retry_label.mapTo(scribe.action_stack, QPoint()).x(),
-    ) == processing_anchor
+    assert scribe.header_state_label.text() == "No speech detected"
+    assert scribe.header_state_label.toolTip() == "No speech detected in either stream."
+    assert scribe.header_state_row.isVisible()
     assert scribe.record_button.text() == "Start"
     assert scribe.timer_label.text() == "00:00"
     assert scribe.meeting_name_input.isEnabled()
     assert scribe.participant_input.isEnabled()
     assert scribe.notes_edit.isEnabled()
+    message_top = scribe.header_state_label.mapTo(scribe, QPoint()).y()
+    message_bottom = message_top + scribe.header_state_label.height()
+    timer_bottom = scribe.timer_label.mapTo(scribe, QPoint()).y() + scribe.timer_label.height()
+    divider_top = scribe.divider.mapTo(scribe, QPoint()).y()
+    assert message_top - timer_bottom > divider_top - message_bottom
+    assert divider_top - message_bottom <= 2
     assert not hasattr(scribe, "status_label")
 
     scribe.output_root = Path("C:/tmp/Meetings")
@@ -404,49 +404,78 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     second_meeting_dir = scribe._meeting_directory_for_session("Renamed Meeting")
     assert second_meeting_dir == first_meeting_dir
 
-    scribe._on_worker_done("C:/tmp/meeting", "C:/tmp/meeting/summary.pdf")
-    assert scribe.action_stack.currentWidget() is scribe.done_controls_widget
-    assert not scribe.processing_timer_label.isVisible()
-    assert not hasattr(scribe, "done_pill")
-    assert scribe.ready_label.text() == "Ready"
+    scribe._on_worker_error("Provider request failed")
+    qapp.processEvents()
+    assert scribe.action_stack.currentWidget() is scribe.recovery_controls_widget
+    assert scribe.recovery_button.text() == "Recovery Folder"
+    assert scribe.recovery_button.height() == 34
+    assert scribe.header_state_label.text() == "Couldn’t process audio"
+    assert scribe.timer_label.isVisible()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    summary_pdf = meeting_dir / "summary.pdf"
+    transcript_pdf = meeting_dir / "transcript.pdf"
+    summary_pdf.write_bytes(b"summary")
+    transcript_pdf.write_bytes(b"transcript")
+    scribe._on_worker_done(str(meeting_dir), str(summary_pdf))
+    qapp.processEvents()
+    assert not scribe.action_stack.isVisible()
+    assert not scribe.timer_label.isVisible()
+    assert not scribe.header_state_row.isVisible()
+    assert scribe.completion_options.isVisible()
     assert scribe.open_summary_button.text() == "Summary"
-    assert scribe.open_folder_button.text() == "Folder"
+    assert scribe.open_transcript_button.text() == "Transcript"
     assert scribe.open_summary_button.accessibleName() == "Open summary"
-    assert scribe.open_folder_button.accessibleName() == "Open folder"
+    assert scribe.open_transcript_button.accessibleName() == "Open transcript"
     assert scribe.open_summary_button.objectName() == "summaryButton"
-    assert scribe.open_folder_button.objectName() == "folderButton"
-    assert scribe.open_summary_button.height() == 28
-    assert scribe.open_folder_button.height() == 28
+    assert scribe.open_transcript_button.objectName() == "transcriptButton"
+    assert scribe.open_summary_button.height() == 34
+    assert scribe.open_transcript_button.height() == 34
     assert scribe.completion_options.objectName() == "completionOptions"
-    assert not hasattr(scribe, "completion_separator")
-    assert scribe.ready_label.font().pointSizeF() == 9.0
-    ready_dot_center = scribe.ready_indicator.mapTo(
-        scribe.action_stack, scribe.ready_indicator.rect().center()
-    ).y()
-    ready_text_center = scribe.ready_label.mapTo(
-        scribe.action_stack, scribe.ready_label.rect().center()
-    ).y()
-    assert abs(ready_dot_center - ready_text_center) <= 1
-    assert (
-        scribe.ready_indicator.mapTo(scribe.action_stack, QPoint()).x(),
-        scribe.ready_label.mapTo(scribe.action_stack, QPoint()).x(),
-    ) == processing_anchor
-    assert (
-        scribe.completion_options.mapTo(scribe.action_stack, QPoint()).x()
-        - (
-            scribe.ready_label.mapTo(scribe.action_stack, QPoint()).x()
-            + scribe.ready_label.width()
-        )
-        >= 24
+    button_gap = scribe.open_transcript_button.mapTo(
+        scribe.completion_options, QPoint()
+    ).x() - (
+        scribe.open_summary_button.mapTo(scribe.completion_options, QPoint()).x()
+        + scribe.open_summary_button.width()
     )
+    assert button_gap == 7
+    completion_right = (
+        scribe.completion_options.mapTo(scribe.centralWidget(), QPoint()).x()
+        + scribe.completion_options.width()
+    )
+    assert scribe.centralWidget().width() - completion_right == 28
     assert scribe.open_summary_button.width() >= (
         scribe.open_summary_button.fontMetrics().horizontalAdvance("Summary") + 24
     )
-    assert scribe.open_folder_button.width() >= (
-        scribe.open_folder_button.fontMetrics().horizontalAdvance("Folder") + 22
+    assert scribe.open_transcript_button.width() >= (
+        scribe.open_transcript_button.fontMetrics().horizontalAdvance("Transcript")
+        + 24
     )
     assert scribe.open_summary_button.width() < 120
-    assert scribe.open_folder_button.width() < 110
+    assert scribe.open_transcript_button.width() < 180
+    assert scribe._done_summary_path == str(summary_pdf)
+    assert scribe._done_transcript_path == str(transcript_pdf)
+
+    from PyQt5.QtGui import QDesktopServices
+
+    opened_paths = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        staticmethod(lambda url: opened_paths.append(url.toLocalFile()) or True),
+    )
+    QTest.mouseClick(scribe.open_summary_button, Qt.LeftButton)
+    QTest.mouseClick(scribe.open_transcript_button, Qt.LeftButton)
+    assert [Path(path) for path in opened_paths] == [summary_pdf, transcript_pdf]
+
+    transcript_pdf.unlink()
+    transcript_markdown = meeting_dir / "transcript.md"
+    transcript_markdown.write_text("transcript", encoding="utf-8")
+    assert (
+        scribe._preferred_document_path(str(meeting_dir), "transcript")
+        == str(transcript_markdown)
+    )
     assert not hasattr(scribe, "close_button")
 
     class FakeCapture:
@@ -466,7 +495,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     scribe.close()
 
     group_scribe = ScribeWindow(MODE_ONLINE_GROUP)
-    assert group_scribe.meeting_field_label.text() == "Meeting Name"
+    assert group_scribe.meeting_field_label.text() == "Meeting name"
     assert group_scribe.meeting_name_input.placeholderText().startswith(
         "e.g. Invoice workflow"
     )
@@ -475,7 +504,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch):
     group_scribe.close()
 
     in_person_scribe = ScribeWindow(MODE_IN_PERSON_GROUP)
-    assert in_person_scribe.meeting_field_label.text() == "Meeting Name"
+    assert in_person_scribe.meeting_field_label.text() == "Meeting name"
     assert in_person_scribe.meeting_name_input.placeholderText().startswith(
         "e.g. Invoice workflow"
     )

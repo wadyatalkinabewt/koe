@@ -50,6 +50,11 @@ instance, confirm that no snippet or Scribe recording is active.
 
 - ElevenLabs Scribe v2 is the default transcription backend. Deepgram Nova-3
   and Mistral Voxtral adapters declare the same Snippet and Scribe contracts.
+- First-run setup persists the selected provider and matching environment key
+  only after a real request to that provider's speech-to-text endpoint succeeds.
+- Provider credentials remain distinct: `ELEVENLABS_API_KEY`,
+  `DEEPGRAM_API_KEY`, and `MISTRAL_API_KEY`. `OPENROUTER_API_KEY` is optional
+  post-processing configuration and is never used as a transcription key.
 - Every ElevenLabs request uses `no_verbatim=true`.
 - Snippet audio never persists to disk.
 - Scribe sends one aligned mono upload. ElevenLabs explicitly sets
