@@ -34,47 +34,16 @@ Scribe aligns microphone and loopback audio into **one mono timeline** before
 uploading it. That avoids two separately transcribed recordings drifting out of
 sync, duplicating speakers, or doubling the transcription work.
 
-## How it fits together
-
-```mermaid
-flowchart LR
-    H["Snippet hotkey"] --> M["In-memory audio"]
-    S["Scribe window"] --> A["Mic + Windows loopback"]
-    A --> X["Aligned mono mix"]
-    M --> T["ElevenLabs Scribe v2"]
-    X --> T
-    T --> C["Local corrections + speaker checks"]
-    C --> B["Clipboard"]
-    C --> P["Transcript PDF"]
-    C --> R["OpenRouter summary<br/>optional, ZDR required"]
-    R --> Q["Summary PDF"]
-
-    classDef capture fill:#252E52,stroke:#7C8DFF,color:#F4F7FB
-    classDef core fill:#171F2E,stroke:#93A1FF,color:#F4F7FB
-    classDef output fill:#142A25,stroke:#55D6A5,color:#F4F7FB
-    classDef optional fill:#321A22,stroke:#FF6F79,color:#F4F7FB
-    class H,S,A,M,X capture
-    class T,C core
-    class B,P,Q output
-    class R optional
-```
-
 <p align="center">
   <img src="assets/readme/documents.png" alt="Synthetic Koe transcript and summary PDF examples" width="100%">
 </p>
 
-### Modularity, honestly
-
-Koe is modular around the workflow, but it is not pretending every provider is
-interchangeable:
+### Built in layers
 
 - **Capture, transcription, correction, speaker resolution, summarisation, and
-  document rendering are separate modules.** A different transcription service
-  would not require rewriting the tray app, capture engine, or PDF pipeline.
-- **Speech-to-text is intentionally Scribe-specific today.** The request shape,
-  diarization data, deletion by transcription ID, and safety checks are built
-  around ElevenLabs Scribe v2. Supporting another API is a contained adapter
-  project, not a one-line model-name swap.
+  document rendering are separate modules.** ElevenLabs Scribe v2 is the current
+  transcription adapter; the capture, correction, and document stages do not
+  depend on its interface.
 - **The summary model is easy to swap within OpenRouter.** It is selected in one
   place and sits behind a structured JSON contract. A replacement model still
   needs to honour that contract and pass the summary tests.
@@ -104,9 +73,11 @@ For the exact meeting modes, storage paths, and failure behaviour, see the
 
 ## Run from source
 
-Koe currently targets **Windows 11** and **Python 3.13**. It requires an
-ElevenLabs API key; an OpenRouter key is needed only for model-assisted meeting
-summaries and contextual speaker resolution.
+Koe currently targets **Windows 11** and **Python 3.13**. Create an
+[ElevenLabs API key](https://elevenlabs.io/app/api/api-keys) with only
+**Speech to Text → Access** enabled. Koe does not require User, History, or any
+administrative permission. An OpenRouter key is needed only for model-assisted
+meeting summaries and contextual speaker resolution.
 
 ```powershell
 python -m venv .venv

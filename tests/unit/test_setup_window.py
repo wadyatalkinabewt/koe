@@ -6,6 +6,27 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 
+def test_setup_window_uses_readable_current_api_key_link(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    from PyQt5.QtWidgets import QApplication, QLabel
+    from ui import theme
+    from ui.setup_window import SetupWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = SetupWindow()
+    labels = [label.text() for label in window.findChildren(QLabel)]
+    combined = " ".join(labels)
+
+    assert "Welcome to Koe" in labels
+    assert "Add your details once" not in combined
+    assert "https://elevenlabs.io/app/api/api-keys" in combined
+    assert theme.LINK_COLOR.lower() in combined.lower()
+
+    window.close()
+    app.processEvents()
+
+
 def test_first_run_defaults_have_empty_custom_corrections(monkeypatch):
     from paths import config_path
     from ui.setup_window import write_setup_files

@@ -134,11 +134,6 @@ class SetupWindow(QDialog):
         title = QLabel("Welcome to Koe")
         title.setObjectName("windowTitle")
         root.addWidget(title)
-
-        subtitle = QLabel("Add your details once, then Koe is ready whenever you are.")
-        subtitle.setObjectName("windowSubtitle")
-        subtitle.setWordWrap(True)
-        root.addWidget(subtitle)
         root.addSpacing(10)
 
         form = QFormLayout()
@@ -171,7 +166,10 @@ class SetupWindow(QDialog):
         root.addLayout(form)
 
         help_label = QLabel(
-            '<a href="https://elevenlabs.io/app/settings/api-keys">Create or copy an ElevenLabs API key</a>'
+            '<a href="https://elevenlabs.io/app/api/api-keys">'
+            f'<span style="color: {theme.LINK_COLOR};">'
+            "Create or copy an ElevenLabs API key"
+            "</span></a>"
         )
         help_label.setOpenExternalLinks(True)
         help_label.setObjectName("windowSubtitle")
