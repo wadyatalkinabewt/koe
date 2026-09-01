@@ -306,6 +306,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.meeting_type_combo.currentData() == MODE_ONLINE_ONE_ON_ONE
     action_y = scribe.action_stack.mapTo(scribe, QPoint()).y()
     timer_y = scribe.timer_label.mapTo(scribe, QPoint()).y()
+    divider_y = scribe.divider.mapTo(scribe, QPoint()).y()
     assert action_y + scribe.action_stack.height() // 2 == (
         timer_y + scribe.timer_label.height() // 2
     )
@@ -367,7 +368,9 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.action_stack.currentWidget() is scribe.status_controls_widget
     assert scribe.timer_label.text() == "12:34"
     assert scribe.timer_label.isVisible()
-    assert not scribe.header_state_row.isVisible()
+    assert scribe.header_state_row.isVisible()
+    assert not scribe.header_state_label.isVisible()
+    assert scribe.divider.mapTo(scribe, QPoint()).y() == divider_y
     scribe._on_worker_status("Transcribing your audio...")
     assert scribe.working_status_label.text() == "Transcribing"
     scribe._on_worker_status("Transcribing other audio...")
@@ -384,6 +387,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.header_state_label.text() == "No speech detected"
     assert scribe.header_state_label.toolTip() == "No speech detected in either stream."
     assert scribe.header_state_row.isVisible()
+    assert scribe.header_state_label.isVisible()
     assert scribe.record_button.text() == "Start"
     assert scribe.timer_label.text() == "00:00"
     assert scribe.meeting_name_input.isEnabled()
@@ -393,6 +397,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     message_bottom = message_top + scribe.header_state_label.height()
     timer_bottom = scribe.timer_label.mapTo(scribe, QPoint()).y() + scribe.timer_label.height()
     divider_top = scribe.divider.mapTo(scribe, QPoint()).y()
+    assert divider_top == divider_y
     assert message_top - timer_bottom > divider_top - message_bottom
     assert divider_top - message_bottom <= 2
     assert not hasattr(scribe, "status_label")
@@ -411,6 +416,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.recovery_button.height() == 34
     assert scribe.header_state_label.text() == "Couldn’t process audio"
     assert scribe.timer_label.isVisible()
+    assert scribe.divider.mapTo(scribe, QPoint()).y() == divider_y
 
     meeting_dir = tmp_path / "meeting"
     meeting_dir.mkdir()
@@ -422,7 +428,9 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     qapp.processEvents()
     assert not scribe.action_stack.isVisible()
     assert not scribe.timer_label.isVisible()
-    assert not scribe.header_state_row.isVisible()
+    assert scribe.header_state_row.isVisible()
+    assert not scribe.header_state_label.isVisible()
+    assert scribe.divider.mapTo(scribe, QPoint()).y() == divider_y
     assert scribe.completion_options.isVisible()
     assert scribe.open_summary_button.text() == "Summary"
     assert scribe.open_transcript_button.text() == "Transcript"

@@ -873,7 +873,7 @@ class ScribeWindow(QMainWindow):
         self.header_state_label.setAlignment(Qt.AlignCenter)
         self.header_state_label.setFixedWidth(334)
         header_state_layout.addWidget(self.header_state_label)
-        self.header_state_row.hide()
+        self.header_state_label.hide()
 
         self.divider = QFrame()
         self.divider.setObjectName("scribeDivider")
@@ -964,7 +964,8 @@ class ScribeWindow(QMainWindow):
         )
 
     def _clear_retry_status(self) -> None:
-        self.header_state_row.hide()
+        self.header_state_label.clear()
+        self.header_state_label.hide()
         self.completion_options.hide()
         self.action_stack.setCurrentWidget(self.record_controls_widget)
         self.action_stack.show()
@@ -973,13 +974,14 @@ class ScribeWindow(QMainWindow):
     def _show_header_message(self, text: str, action_widget: QWidget) -> None:
         self.completion_options.hide()
         self.header_state_label.setText(text)
-        self.header_state_row.show()
+        self.header_state_label.show()
         self.action_stack.setCurrentWidget(action_widget)
         self.action_stack.show()
         self.timer_label.show()
 
     def _show_completion_actions(self) -> None:
-        self.header_state_row.hide()
+        self.header_state_label.clear()
+        self.header_state_label.hide()
         self.action_stack.hide()
         self.timer_label.hide()
         self._fit_header_actions()
@@ -1003,7 +1005,8 @@ class ScribeWindow(QMainWindow):
         self.record_button.setIcon(self._recording_dot_icon(active=self._pulse_on))
 
     def _show_working_status(self, text: str) -> None:
-        self.header_state_row.hide()
+        self.header_state_label.clear()
+        self.header_state_label.hide()
         self.completion_options.hide()
         self.working_status_label.setText(text)
         self.action_stack.setCurrentWidget(self.status_controls_widget)
