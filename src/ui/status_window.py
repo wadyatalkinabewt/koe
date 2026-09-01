@@ -33,6 +33,30 @@ def _debug(message: str) -> None:
         pass
 
 
+class StateIndicator(QWidget):
+    """Small state marker with a quiet halo instead of a text glyph."""
+
+    def __init__(self, color: str, parent=None) -> None:
+        super().__init__(parent)
+        self._color = QColor(color)
+        self.setFixedSize(12, 20)
+
+    def set_color(self, color: str) -> None:
+        self._color = QColor(color)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        halo = QColor(self._color)
+        halo.setAlpha(58)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(halo)
+        painter.drawEllipse(QRectF(1, 5, 10, 10))
+        painter.setBrush(self._color)
+        painter.drawEllipse(QRectF(3, 7, 6, 6))
+
+
 class StatusWindow(QMainWindow):
     """Compact always-on-top card for snippet capture and transcription state."""
 
@@ -67,17 +91,14 @@ class StatusWindow(QMainWindow):
         layout.setContentsMargins(12, 9, 10, 9)
         layout.setSpacing(7)
 
-        self.indicator = QLabel("●")
-        self.indicator.setStyleSheet(
-            f"color: {theme.RECORDING_COLOR}; font-size: 14px;"
-        )
+        self.indicator = StateIndicator(theme.RECORDING_COLOR)
         self.indicator.setFixedWidth(12)
         layout.addWidget(self.indicator)
 
         self.status_label = QLabel("Listening")
         self.status_label.setStyleSheet(
             f"color: {theme.TEXT_COLOR}; font-family: {theme.FONT_FAMILY}; "
-            "font-size: 11pt; font-weight: 650;"
+            "font-size: 10.5pt; font-weight: 650;"
         )
         self.status_label.setFixedWidth(88)
         self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -88,7 +109,7 @@ class StatusWindow(QMainWindow):
         self.timer_label.setFixedWidth(42)
         self.timer_label.setStyleSheet(
             f"color: {theme.SECONDARY_TEXT}; background: transparent; border: none; "
-            f"font-family: {theme.FONT_FAMILY}; font-size: 10pt; font-weight: 600;"
+            f"font-family: {theme.FONT_FAMILY}; font-size: 9pt; font-weight: 650;"
         )
         layout.addWidget(self.timer_label)
 
@@ -99,8 +120,8 @@ class StatusWindow(QMainWindow):
         self.cancel_button.setCursor(Qt.PointingHandCursor)
         self.cancel_button.setFixedSize(22, 22)
         self.cancel_button.setStyleSheet(
-            "QPushButton { color: #F0A7AE; background: transparent; "
-            "border: none; border-radius: 7px; font-size: 15pt; font-weight: 500; "
+            "QPushButton { color: #DDA1A7; background: transparent; "
+            "border: none; border-radius: 6px; font-size: 14pt; font-weight: 500; "
             "padding: 0; margin: 0; } "
             "QPushButton:hover { color: #FF7884; background: #2A171D; } "
             "QPushButton:pressed { color: #FF5F6D; background: #351A21; }"
@@ -124,13 +145,13 @@ class StatusWindow(QMainWindow):
 
     def paintEvent(self, event) -> None:
         path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 14, 14)
+        path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 12, 12)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         background = QColor(theme.SURFACE_COLOR)
-        background.setAlpha(250)
+        background.setAlpha(252)
         painter.setBrush(QBrush(background))
-        painter.setPen(QPen(QColor(theme.BORDER_COLOR), 1))
+        painter.setPen(QPen(QColor(theme.CONTROL_BORDER), 1))
         painter.drawPath(path)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -151,7 +172,7 @@ class StatusWindow(QMainWindow):
     def _pulse_indicator(self) -> None:
         self._pulse_on = not self._pulse_on
         color = self._indicator_color if self._pulse_on else theme.DIM_TEXT
-        self.indicator.setStyleSheet(f"color: {color}; font-size: 14px;")
+        self.indicator.set_color(color)
 
     def update_timer(self) -> None:
         if self.recording_start_time is None:
@@ -171,7 +192,7 @@ class StatusWindow(QMainWindow):
 
     def _set_state(self, title: str, color: str, *, cancellable: bool = False) -> None:
         self._indicator_color = color
-        self.indicator.setStyleSheet(f"color: {color}; font-size: 14px;")
+        self.indicator.set_color(color)
         self.status_label.setText(title)
         self.cancel_button.setEnabled(cancellable)
         self.cancel_button.setVisible(cancellable)

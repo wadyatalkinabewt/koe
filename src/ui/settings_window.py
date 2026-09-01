@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from paths import default_meetings_dir, default_snippets_dir, resource_path
+from paths import resource_path
 from ui import theme
 from ui.base_window import BaseWindow
 from utils import ConfigManager
@@ -149,15 +149,34 @@ class SettingsWindow(BaseWindow):
     def _local_stylesheet() -> str:
         return f"""
             QFrame#settingsHeader {{ background: {theme.BG_COLOR}; }}
+            QFrame#settingsSection {{
+                background: transparent;
+                border: none;
+            }}
+            QFrame#settingsDivider {{
+                background: {theme.DIVIDER_COLOR};
+                border: none;
+                min-height: 1px;
+                max-height: 1px;
+            }}
             QLabel#autoSaveStatus {{
                 color: {theme.SUCCESS_COLOR};
                 font-size: 9pt;
                 font-weight: 600;
             }}
             QLabel#subsectionTitle {{
-                color: {theme.TEXT_COLOR};
+                color: {theme.SECONDARY_TEXT};
                 font-size: 9pt;
                 font-weight: 600;
+            }}
+            QPushButton#folderButton {{
+                color: {theme.SECONDARY_TEXT};
+                background: transparent;
+                border-color: {theme.CONTROL_BORDER};
+            }}
+            QPushButton#folderButton:hover {{
+                color: {theme.TEXT_COLOR};
+                background: {theme.SURFACE_HOVER};
             }}
         """
 
@@ -165,8 +184,12 @@ class SettingsWindow(BaseWindow):
         self.header = QFrame()
         self.header.setObjectName("settingsHeader")
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(28, 24, 28, 10)
-        header_layout.addWidget(_label("Settings", "windowTitle"))
+        header_layout.setContentsMargins(32, 26, 32, 18)
+        heading = QVBoxLayout()
+        heading.setSpacing(3)
+        heading.addWidget(_label("Settings", "windowTitle"))
+        heading.addWidget(_label("Changes save automatically.", "windowSubtitle"))
+        header_layout.addLayout(heading)
         header_layout.addStretch()
         self.save_status_label = _label("", "autoSaveStatus")
         self.save_status_label.hide()
@@ -178,30 +201,34 @@ class SettingsWindow(BaseWindow):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.content = QWidget()
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(28, 4, 28, 24)
-        self.content_layout.setSpacing(14)
+        self.content_layout.setContentsMargins(32, 0, 32, 29)
+        self.content_layout.setSpacing(0)
         self.content_layout.setAlignment(Qt.AlignTop)
 
-        profile = self._card("Your Name")
+        profile = self._section("Your name")
         self.user_name_input = QLineEdit()
         self.user_name_input.setPlaceholderText("Your name")
         profile.layout().addWidget(self.user_name_input)
         self.content_layout.addWidget(profile)
+        self.content_layout.addWidget(self._divider())
 
-        storage = self._card("Storage", "Choose where transcripts and snippets live.")
+        storage = self._section(
+            "Storage", "Choose where snippets and meeting documents are saved."
+        )
         self.snippets_input = self._folder_picker(
-            "Snippets Folder",
+            "Snippets folder",
             storage.layout(),
-            f"Leave empty for {default_snippets_dir()}",
+            r"Default: Documents\Koe\Snippets",
         )
         self.meetings_input = self._folder_picker(
-            "Meetings Folder",
+            "Meetings folder",
             storage.layout(),
-            f"Leave empty for {default_meetings_dir()}",
+            r"Default: Documents\Koe\Meetings",
         )
         self.content_layout.addWidget(storage)
+        self.content_layout.addWidget(self._divider())
 
-        scribe = self._card(
+        scribe = self._section(
             "Scribe",
             "PDF transcripts and summaries are always saved.",
         )
@@ -210,9 +237,10 @@ class SettingsWindow(BaseWindow):
         self.save_meeting_audio_checkbox = ToggleRow("Save Scribe meeting audio")
         scribe.layout().addWidget(self.save_meeting_audio_checkbox)
         self.content_layout.addWidget(scribe)
+        self.content_layout.addWidget(self._divider())
 
-        snippet = self._card("Snippet")
-        snippet.layout().addWidget(_label("Activation Hotkey", "subsectionTitle"))
+        snippet = self._section("Snippet")
+        snippet.layout().addWidget(_label("Activation hotkey", "subsectionTitle"))
         self.hotkey_input = QLineEdit()
         self.hotkey_input.setPlaceholderText("ctrl+shift+space")
         snippet.layout().addWidget(self.hotkey_input)
@@ -224,13 +252,13 @@ class SettingsWindow(BaseWindow):
         self.main_layout.addWidget(self.scroll, 1)
 
     @staticmethod
-    def _card(title: str, description: str | None = None) -> QFrame:
-        card = QFrame()
-        card.setObjectName("card")
-        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 18)
-        layout.setSpacing(9)
+    def _section(title: str, description: str | None = None) -> QFrame:
+        section = QFrame()
+        section.setObjectName("settingsSection")
+        section.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 18, 0, 17)
+        layout.setSpacing(10)
         layout.setAlignment(Qt.AlignTop)
         layout.addWidget(_label(title, "sectionTitle"))
         if description:
@@ -238,7 +266,15 @@ class SettingsWindow(BaseWindow):
             description_label.setWordWrap(True)
             layout.addWidget(description_label)
             layout.addSpacing(2)
-        return card
+        return section
+
+    @staticmethod
+    def _divider() -> QFrame:
+        divider = QFrame()
+        divider.setObjectName("settingsDivider")
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFixedHeight(1)
+        return divider
 
     def _folder_picker(
         self,
@@ -253,6 +289,7 @@ class SettingsWindow(BaseWindow):
         field.setPlaceholderText(placeholder)
         row.addWidget(field, 1)
         browse = QPushButton("Browse")
+        browse.setObjectName("folderButton")
         browse.setFixedWidth(78)
         browse.clicked.connect(lambda: self._browse(field))
         row.addWidget(browse)

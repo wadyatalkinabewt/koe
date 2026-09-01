@@ -9,6 +9,7 @@ SURFACE_ELEVATED = "#171F2E"
 SURFACE_HOVER = "#1D2738"
 BORDER_COLOR = "#29354A"
 DIVIDER_COLOR = "#222C3D"
+CONTROL_BORDER = "#344159"
 
 # Type
 TEXT_COLOR = "#F4F7FB"
@@ -53,7 +54,7 @@ def application_stylesheet() -> str:
         QLabel {{ background: transparent; color: {TEXT_COLOR}; }}
         QLabel#windowTitle {{ font-size: 22pt; font-weight: 700; }}
         QLabel#windowSubtitle {{ color: {SECONDARY_TEXT}; font-size: 10pt; }}
-        QLabel#sectionTitle {{ font-size: 11pt; font-weight: 600; }}
+        QLabel#sectionTitle {{ font-size: 11pt; font-weight: 650; }}
         QLabel#fieldLabel {{ color: {SECONDARY_TEXT}; font-size: 9pt; }}
         QLabel#eyebrow {{ color: {ACCENT_COLOR}; font-size: 8pt; font-weight: 700; }}
         QFrame#card {{
@@ -64,8 +65,8 @@ def application_stylesheet() -> str:
         QLineEdit, QTextEdit, QSpinBox, QComboBox {{
             background-color: {INPUT_BG};
             color: {TEXT_COLOR};
-            border: 1px solid {INPUT_BORDER};
-            border-radius: 8px;
+            border: 1px solid {CONTROL_BORDER};
+            border-radius: 7px;
             padding: 9px 11px;
             selection-background-color: {SELECTION_BG};
             selection-color: {SELECTION_TEXT};
@@ -79,7 +80,7 @@ def application_stylesheet() -> str:
             background-color: {BUTTON_BG};
             color: {TEXT_COLOR};
             border: 1px solid {BUTTON_BORDER};
-            border-radius: 8px;
+            border-radius: 7px;
             padding: 9px 16px;
             font-weight: 600;
         }}
@@ -104,7 +105,7 @@ def application_stylesheet() -> str:
             width: 17px;
             height: 17px;
             border: 1px solid {INPUT_BORDER};
-            border-radius: 5px;
+            border-radius: 4px;
             background: {INPUT_BG};
         }}
         QCheckBox::indicator:checked {{
@@ -136,14 +137,14 @@ def tray_menu_stylesheet() -> str:
             background-color: {SURFACE_COLOR};
             color: {TEXT_COLOR};
             border: 1px solid {BORDER_COLOR};
-            border-radius: 10px;
+            border-radius: 8px;
             padding: 7px;
             font-family: {FONT_FAMILY};
             font-size: 10pt;
         }}
         QMenu::item {{
             padding: 9px 30px 9px 14px;
-            border-radius: 7px;
+            border-radius: 6px;
             margin: 1px 0;
         }}
         QMenu::item:selected {{ background-color: {ACCENT_SOFT}; color: {TEXT_COLOR}; }}

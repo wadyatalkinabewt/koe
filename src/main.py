@@ -144,7 +144,7 @@ class KoeApp(QObject):
 
         self.tray_menu.addSeparator()
 
-        self.exit_action = QAction("Exit", self.app)
+        self.exit_action = QAction("Quit Koe", self.app)
         self.exit_action.triggered.connect(self.exit_app)
         self.tray_menu.addAction(self.exit_action)
 

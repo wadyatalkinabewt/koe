@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 def test_setup_window_changes_key_help_with_transcription_provider(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 
+    from PyQt5.QtCore import QPoint
     from PyQt5.QtWidgets import QApplication, QLabel
     from ui import theme
     from ui.setup_window import SetupWindow
@@ -21,6 +22,25 @@ def test_setup_window_changes_key_help_with_transcription_provider(monkeypatch):
 
     assert "Welcome to Koe" in labels
     assert "Add your details once" not in combined
+    assert "Welcome to Koe" in labels
+    assert "Your name" in labels
+    assert "Provider" in labels
+    assert "API key" in labels
+    assert "OpenRouter API key" in labels
+    assert "Finish Setup" not in combined
+    assert window.finish_button.text() == "Finish setup"
+    assert window.openrouter_input.placeholderText() == (
+        "Optional. Adds structured meeting summaries."
+    )
+    assert window.findChildren(QLabel, "setupFieldLabel")
+    assert all(
+        field.mapTo(window, QPoint()).x() == window.name_input.mapTo(window, QPoint()).x()
+        for field in (
+            window.provider_combo,
+            window.api_key_input,
+            window.openrouter_input,
+        )
+    )
     assert "https://elevenlabs.io/app/api/api-keys" in combined
     assert theme.LINK_COLOR.lower() in combined.lower()
     assert window.provider_combo.count() == 3

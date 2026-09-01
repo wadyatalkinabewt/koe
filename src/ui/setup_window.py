@@ -10,12 +10,11 @@ import requests
 import yaml
 from dotenv import dotenv_values
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -220,7 +219,16 @@ class SetupWindow(QDialog):
         )
         self.setFixedWidth(520)
         self.setModal(True)
-        self.setStyleSheet(theme.application_stylesheet())
+        self.setStyleSheet(
+            theme.application_stylesheet()
+            + f"""
+                QLabel#setupFieldLabel {{
+                    color: {theme.SECONDARY_TEXT};
+                    font-size: 9pt;
+                    font-weight: 650;
+                }}
+            """
+        )
 
         icon_path = resource_path("assets", "koe-icon.ico")
         if icon_path.exists():
@@ -228,56 +236,71 @@ class SetupWindow(QDialog):
         apply_window_icon(self, icon_path, app_id="Koe.Setup.App")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(32, 28, 32, 28)
-        root.setSpacing(12)
+        root.setContentsMargins(32, 24, 32, 21)
+        root.setSpacing(7)
 
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        mark = QLabel()
+        mark.setFixedSize(42, 42)
+        mark.setAlignment(Qt.AlignCenter)
+        mark_path = resource_path("assets", "koe-icon.png")
+        if mark_path.exists():
+            mark.setPixmap(
+                QPixmap(str(mark_path)).scaled(
+                    40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+            )
+        header.addWidget(mark, 0, Qt.AlignTop)
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
         title = QLabel("Welcome to Koe")
         title.setObjectName("windowTitle")
-        root.addWidget(title)
-        root.addSpacing(10)
+        heading.addWidget(title)
+        header.addLayout(heading, 1)
+        root.addLayout(header)
+        root.addSpacing(8)
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        form.setFormAlignment(Qt.AlignTop)
-        form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(14)
-
+        root.addWidget(self._field_label("Your name"))
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Your first name")
-        self.name_input.setMinimumHeight(40)
-        form.addRow("Your Name", self.name_input)
+        self.name_input.setMinimumHeight(36)
+        root.addWidget(self.name_input)
 
+        root.addSpacing(2)
+        root.addWidget(self._field_label("Provider"))
         self.provider_combo = QComboBox()
-        self.provider_combo.setMinimumHeight(40)
+        self.provider_combo.setMinimumHeight(36)
         self.provider_combo.setAccessibleName("Transcription Provider")
         for provider, details in PROVIDERS.items():
             self.provider_combo.addItem(
                 f'{details["name"]} — {details["model"]}', provider
             )
-        form.addRow("Provider", self.provider_combo)
+        root.addWidget(self.provider_combo)
 
+        root.addSpacing(2)
+        root.addWidget(self._field_label("API key"))
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.Password)
-        self.api_key_input.setMinimumHeight(40)
-        form.addRow("API Key", self.api_key_input)
-
-        self.openrouter_input: QLineEdit | None = None
-        if not _existing_openrouter_key():
-            self.openrouter_input = QLineEdit()
-            self.openrouter_input.setEchoMode(QLineEdit.Password)
-            self.openrouter_input.setPlaceholderText(
-                "Optional — Scribe meeting summaries"
-            )
-            self.openrouter_input.setMinimumHeight(40)
-            form.addRow("OpenRouter Key", self.openrouter_input)
-
-        root.addLayout(form)
+        self.api_key_input.setMinimumHeight(36)
+        root.addWidget(self.api_key_input)
 
         self.help_label = QLabel()
         self.help_label.setOpenExternalLinks(True)
         self.help_label.setObjectName("windowSubtitle")
         root.addWidget(self.help_label)
-        root.addSpacing(8)
+
+        self.openrouter_input: QLineEdit | None = None
+        if not _existing_openrouter_key():
+            root.addSpacing(2)
+            root.addWidget(self._field_label("OpenRouter API key"))
+            self.openrouter_input = QLineEdit()
+            self.openrouter_input.setEchoMode(QLineEdit.Password)
+            self.openrouter_input.setPlaceholderText(
+                "Optional. Adds structured meeting summaries."
+            )
+            self.openrouter_input.setMinimumHeight(36)
+            root.addWidget(self.openrouter_input)
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
@@ -289,12 +312,18 @@ class SetupWindow(QDialog):
 
         actions = QHBoxLayout()
         actions.addStretch()
-        self.finish_button = QPushButton("Finish Setup")
+        self.finish_button = QPushButton("Finish setup")
         self.finish_button.setObjectName("primaryButton")
-        self.finish_button.setMinimumSize(126, 40)
+        self.finish_button.setMinimumSize(126, 36)
         self.finish_button.clicked.connect(self._finish)
         actions.addWidget(self.finish_button)
         root.addLayout(actions)
+
+    @staticmethod
+    def _field_label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("setupFieldLabel")
+        return label
 
     def _selected_provider(self) -> str:
         return str(self.provider_combo.currentData())

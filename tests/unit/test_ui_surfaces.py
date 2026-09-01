@@ -42,7 +42,6 @@ def reset_config_manager():
 
 
 def test_settings_autosaves_without_footer_or_retired_controls(qapp):
-    from paths import default_meetings_dir, default_snippets_dir
     from ui.settings_window import SettingsWindow, ToggleRow
 
     window = SettingsWindow()
@@ -57,7 +56,7 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert "elevenlabs" not in labels
     assert "keep koe focused" not in labels
     assert "profile" not in labels
-    assert "choose where transcripts and snippets live" in labels
+    assert "choose where snippets and meeting documents are saved" in labels
     assert "no-verbatim mode is always on" not in labels
     assert "koe uses one speech-to-text path" not in labels
     assert hasattr(window, "save_meeting_audio_checkbox")
@@ -77,76 +76,76 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert window.minimumSize() == window.maximumSize() == window.size()
     assert not window.windowFlags() & Qt.WindowMaximizeButtonHint
     assert window.windowFlags() & Qt.MSWindowsFixedSizeDialogHint
-    cards = window.findChildren(QFrame, "card")
-    cards_by_title = {
+    assert window.findChildren(QFrame, "card") == []
+    sections = window.findChildren(QFrame, "settingsSection")
+    sections_by_title = {
         next(
             label.text()
-            for label in card.findChildren(QLabel)
+            for label in section.findChildren(QLabel)
             if label.objectName() == "sectionTitle"
-        ): card
-        for card in cards
+        ): section
+        for section in sections
     }
-    card_headings = {
+    section_headings = {
         title: next(
             label
-            for label in card.findChildren(QLabel)
+            for label in section.findChildren(QLabel)
             if label.objectName() == "sectionTitle" and label.text() == title
         )
-        for title, card in cards_by_title.items()
+        for title, section in sections_by_title.items()
     }
     assert (
         len(
             {
-                heading.mapTo(cards_by_title[title], QPoint()).y()
-                for title, heading in card_headings.items()
+                heading.mapTo(sections_by_title[title], QPoint()).y()
+                for title, heading in section_headings.items()
             }
         )
         == 1
     )
-    profile = cards_by_title["Your Name"]
-    storage = cards_by_title["Storage"]
-    scribe_card = cards_by_title["Scribe"]
-    assert "Transcription" not in cards_by_title
-    assert "Recording" not in cards_by_title
+    profile = sections_by_title["Your name"]
+    storage = sections_by_title["Storage"]
+    scribe_section = sections_by_title["Scribe"]
+    assert "Transcription" not in sections_by_title
+    assert "Recording" not in sections_by_title
     assert window.user_name_input.parentWidget() is profile
-    assert window.save_meeting_audio_checkbox.parentWidget() is scribe_card
-    assert window.save_markdown_checkbox.parentWidget() is scribe_card
+    assert window.save_meeting_audio_checkbox.parentWidget() is scribe_section
+    assert window.save_markdown_checkbox.parentWidget() is scribe_section
     assert window.save_meeting_audio_checkbox.parentWidget() is not storage
     assert "show the snippet status card" not in labels
     assert all(
-        card.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
-        for card in cards_by_title.values()
+        section.sizePolicy().verticalPolicy() == QSizePolicy.Maximum
+        for section in sections_by_title.values()
     )
     assert all(
-        card.layout().alignment() & Qt.AlignTop for card in cards_by_title.values()
+        section.layout().alignment() & Qt.AlignTop
+        for section in sections_by_title.values()
     )
+    assert len(window.findChildren(QFrame, "settingsDivider")) == 3
+    assert "changes save automatically" in labels
     storage_description = next(
         label
         for label in storage.findChildren(QLabel)
-        if label.text() == "Choose where transcripts and snippets live."
+        if label.text() == "Choose where snippets and meeting documents are saved."
     )
     snippets_title = next(
         label
         for label in storage.findChildren(QLabel)
-        if label.text() == "Snippets Folder"
+        if label.text() == "Snippets folder"
     )
     storage_detail_gap = snippets_title.mapTo(storage, QPoint()).y() - (
         storage_description.mapTo(storage, QPoint()).y() + storage_description.height()
     )
     assert storage_detail_gap > 0
     assert "PDF transcripts and summaries are always saved." in {
-        label.text() for label in scribe_card.findChildren(QLabel)
+        label.text() for label in scribe_section.findChildren(QLabel)
     }
     assert (
         window.snippets_input.mapTo(window, QPoint()).y()
         < window.meetings_input.mapTo(window, QPoint()).y()
     )
-    assert window.snippets_input.placeholderText() == (
-        f"Leave empty for {default_snippets_dir()}"
-    )
-    assert window.meetings_input.placeholderText() == (
-        f"Leave empty for {default_meetings_dir()}"
-    )
+    assert window.snippets_input.placeholderText() == r"Default: Documents\Koe\Snippets"
+    assert window.meetings_input.placeholderText() == r"Default: Documents\Koe\Meetings"
     assert "Documents/Koe" not in window.snippets_input.placeholderText()
     assert "Documents/Koe" not in window.meetings_input.placeholderText()
     assert "esc to close" not in labels
@@ -238,7 +237,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
         == 7
     )
     assert "border: none" in status.timer_label.styleSheet().lower()
-    assert "font-size: 10pt" in status.timer_label.styleSheet().lower()
+    assert "font-size: 9pt" in status.timer_label.styleSheet().lower()
     status.updateStatus("transcribing")
     assert status.status_label.text() == "Transcribing"
     assert status.cancel_button.isVisible()
@@ -259,7 +258,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     QTest.mouseClick(status.cancel_button, Qt.LeftButton)
     assert dismissed == [True]
     assert not status.isVisible()
-    assert "#f0a7ae" in status.cancel_button.styleSheet().lower()
+    assert "#dda1a7" in status.cancel_button.styleSheet().lower()
 
     scribe = ScribeWindow(MODE_ONLINE_ONE_ON_ONE)
     scribe.show()
@@ -626,6 +625,7 @@ def test_only_tray_exit_is_wired_to_process_shutdown():
     tray_source = inspect.getsource(main.KoeApp.create_tray_icon)
 
     assert "closeApp.connect(self.exit_app)" not in initialize_source
+    assert 'QAction("Quit Koe"' in tray_source
     assert "exit_action.triggered.connect(self.exit_app)" in tray_source
 
 
