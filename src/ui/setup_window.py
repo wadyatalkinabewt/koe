@@ -25,14 +25,16 @@ from compat import apply_window_icon, enable_dark_titlebar
 from paths import app_data_dir, config_path, env_path, resource_path, setup_marker_path
 from ui import theme
 
-ELEVENLABS_USER_URL = "https://api.elevenlabs.io/v1/user"
+ELEVENLABS_BATCH_SCRIBE_TOKEN_URL = (
+    "https://api.elevenlabs.io/v1/single-use-token/batch_scribe"
+)
 
 
 def validate_elevenlabs_key(api_key: str, timeout: float = 15.0) -> tuple[bool, str]:
-    """Validate a key without consuming transcription credits."""
+    """Validate Speech to Text access without consuming transcription credits."""
     try:
-        response = requests.get(
-            ELEVENLABS_USER_URL,
+        response = requests.post(
+            ELEVENLABS_BATCH_SCRIBE_TOKEN_URL,
             headers={"xi-api-key": api_key.strip()},
             timeout=timeout,
         )
@@ -45,8 +47,14 @@ def validate_elevenlabs_key(api_key: str, timeout: float = 15.0) -> tuple[bool, 
         return False, f"Could not reach ElevenLabs: {exc}"
     if response.status_code == 200:
         return True, ""
-    if response.status_code in (401, 403):
+    if response.status_code == 401:
         return False, "That ElevenLabs API key was not accepted."
+    if response.status_code == 403:
+        return (
+            False,
+            "That key cannot access Speech to Text. Enable Speech to Text access "
+            "and check any IP restrictions.",
+        )
     return False, f"ElevenLabs returned HTTP {response.status_code}. Try again shortly."
 
 

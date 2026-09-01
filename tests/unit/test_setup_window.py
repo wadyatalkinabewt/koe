@@ -33,7 +33,7 @@ def test_first_run_preserves_preloaded_openrouter_key():
     assert "OPENROUTER_API_KEY=test-summary-key" in contents
 
 
-def test_elevenlabs_key_validation_uses_non_transcription_user_endpoint(monkeypatch):
+def test_elevenlabs_key_validation_uses_batch_scribe_token_endpoint(monkeypatch):
     from ui import setup_window
 
     captured = {}
@@ -41,12 +41,34 @@ def test_elevenlabs_key_validation_uses_non_transcription_user_endpoint(monkeypa
     class Response:
         status_code = 200
 
-    def fake_get(url, headers, timeout):
+    def fake_post(url, headers, timeout):
         captured.update(url=url, headers=headers, timeout=timeout)
         return Response()
 
-    monkeypatch.setattr(setup_window.requests, "get", fake_get)
+    monkeypatch.setattr(setup_window.requests, "post", fake_post)
 
     assert setup_window.validate_elevenlabs_key("test-key") == (True, "")
-    assert captured["url"] == "https://api.elevenlabs.io/v1/user"
+    assert captured["url"] == (
+        "https://api.elevenlabs.io/v1/single-use-token/batch_scribe"
+    )
     assert captured["headers"] == {"xi-api-key": "test-key"}
+
+
+def test_elevenlabs_key_validation_explains_missing_speech_to_text_access(
+    monkeypatch,
+):
+    from ui import setup_window
+
+    class Response:
+        status_code = 403
+
+    monkeypatch.setattr(
+        setup_window.requests,
+        "post",
+        lambda url, headers, timeout: Response(),
+    )
+
+    valid, message = setup_window.validate_elevenlabs_key("restricted-key")
+
+    assert valid is False
+    assert "Speech to Text" in message
