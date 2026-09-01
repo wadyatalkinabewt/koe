@@ -5,7 +5,8 @@
 **Catch a thought. Capture the room. Keep the useful part.**
 
 `Windows 11` &nbsp;·&nbsp; `Python 3.13` &nbsp;·&nbsp;
-`ElevenLabs · Deepgram · Mistral` &nbsp;·&nbsp; `MIT`
+`ElevenLabs · Deepgram · Mistral` &nbsp;·&nbsp;
+`MIT source · GPLv3 application`
 
 [![Windows tests](https://github.com/wadyatalkinabewt/koe/actions/workflows/tests.yml/badge.svg)](https://github.com/wadyatalkinabewt/koe/actions/workflows/tests.yml)
 
@@ -171,8 +172,9 @@ single polished snapshot:
 
 ## License
 
-Koe's original source code is released under the [MIT License](LICENSE).
-Third-party dependencies retain their own licences. PyQt5 is dual-licensed
-under GPLv3 or a commercial Riverbank licence; review
-[Riverbank's licensing terms](https://www.riverbankcomputing.com/software/pyqt)
-before redistributing a bundled application.
+Koe's original source code is released under the [MIT License](LICENSE). Koe
+uses the GPLv3 build of PyQt5, so the combined Koe and PyQt5 application must be
+distributed under the [GNU General Public License v3](COPYING.GPL-3.0).
+Third-party dependencies retain their own licences. See
+[Riverbank's PyQt licensing terms](https://www.riverbankcomputing.com/software/pyqt)
+for the alternative commercial licence.
