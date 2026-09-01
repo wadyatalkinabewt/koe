@@ -43,14 +43,16 @@ or retained.
 
 ## Documents and optional audio
 
-Every successful meeting produces `transcript.pdf` and `summary.pdf`. Optional
-settings can also retain Markdown copies and the original meeting audio:
+Every successful transcription produces `transcript.pdf`. A successful
+OpenRouter post-processing request also produces `summary.pdf`. Optional
+settings can retain Markdown copies of the documents that were created and the
+original meeting audio:
 
 ```text
 transcript.pdf
-summary.pdf
+summary.pdf          # only after successful OpenRouter post-processing
 transcript.md       # optional
-summary.md          # optional
+summary.md          # optional; only when summary.pdf exists
 microphone.wav      # optional
 meeting-audio.wav   # optional
 ```
@@ -60,9 +62,19 @@ Failed transcription attempts preserve temporary audio for recovery. Successful
 runs remove temporary audio after document generation and any requested durable
 copies have been verified.
 
-On completion, **Summary** opens `summary.pdf` and **Transcript** opens
-`transcript.pdf`. If a PDF is unavailable and the optional Markdown copy exists,
-the corresponding button opens the Markdown document instead.
+If `OPENROUTER_API_KEY` is absent, Scribe deliberately completes in
+transcript-only mode: it does not call OpenRouter or create summary files. If
+OpenRouter returns an error, Scribe records the diagnostic locally, keeps the
+completed transcript, and creates no `summary.pdf` or `summary.md` containing
+the error. This is a completed transcription, so normal temporary-audio cleanup
+still applies.
+
+On completion, **Summary** appears only when `summary.pdf` was created and
+**Transcript** opens `transcript.pdf`. For transcript-only completion,
+**Transcript** is the sole primary action. A provider failure is shown as
+**Summary unavailable** without putting the raw provider diagnostic in a
+meeting document. If an available PDF is missing and its optional Markdown copy
+exists, the corresponding action opens the Markdown document instead.
 
 ## Speaker labels and summaries
 
@@ -74,7 +86,8 @@ local validation.
 
 OpenRouter is used only for Scribe post-processing. Requests require a Zero Data
 Retention endpoint and must produce Summary, Key Decisions, Topics Discussed,
-Action Items, and Open Questions.
+Action Items, and Open Questions. Missing configuration and provider failures
+never turn diagnostic text into a summary deliverable.
 
 ## Storage and privacy
 

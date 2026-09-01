@@ -230,7 +230,7 @@ class SettingsWindow(BaseWindow):
 
         scribe = self._section(
             "Scribe",
-            "PDF transcripts and summaries are always saved.",
+            "Transcript PDFs are always saved; summaries are added when available.",
         )
         self.save_markdown_checkbox = ToggleRow("Save Markdown copies")
         scribe.layout().addWidget(self.save_markdown_checkbox)

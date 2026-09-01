@@ -11,11 +11,12 @@
 
 Koe is a Windows tray app built for the gap between *I should write that down*
 and *what did we actually decide?* Tap a global hotkey for a quick voice
-snippet, or open Scribe to turn microphone and system audio into a diarized
-meeting transcript, clean PDFs, and a structured summary.
+snippet, or open Scribe to capture microphone and system audio as a diarized
+meeting transcript. With OpenRouter configured, Scribe can also produce a
+structured meeting summary.
 
-It stays out of the way, treats retention as a design constraint, and keeps
-private names and terminology in local configuration rather than in the code.
+Koe stays out of the way and treats retention as part of the product: snippet
+audio is ephemeral, while meeting audio is saved only when requested.
 
 ## Two ways to use it
 
@@ -23,7 +24,7 @@ private names and terminology in local configuration rather than in the code.
 |---|---|---|
 | **Best for** | Fleeting thoughts, prompts, and dictated text | Calls, interviews, and in-room meetings |
 | **Capture** | Press the hotkey, speak, press again | Record microphone and Windows loopback together |
-| **Result** | Formatted text on the clipboard | Diarized transcript and summary PDFs |
+| **Result** | Formatted text on the clipboard | Diarized transcript PDF; optional summary PDF |
 | **Audio retention** | Never written to disk | Kept only when requested; recovery audio survives failures |
 
 <p align="center">
@@ -40,13 +41,14 @@ sync, duplicating speakers, or doubling the transcription work.
 
 ### Built in layers
 
-- **Capture, transcription, correction, speaker resolution, summarisation, and
-  document rendering are separate modules.** ElevenLabs Scribe v2 is the
-  default transcription adapter; Deepgram Nova-3 and Mistral Voxtral implement
-  the same Snippet and Scribe contracts.
-- **The summary model is easy to swap within OpenRouter.** It is selected in one
-  place and sits behind a structured JSON contract. A replacement model still
-  needs to honour that contract and pass the summary tests.
+- **The pipeline is modular.** Capture, transcription, correction, speaker
+  resolution, summarisation, and document rendering are separate modules.
+  ElevenLabs Scribe v2 is the default transcription adapter; Deepgram Nova-3
+  and Mistral Voxtral implement the same Snippet and Scribe contracts.
+- **The optional summary model is easy to swap within OpenRouter.** It is
+  selected in one place and sits behind a structured JSON contract. A
+  replacement model still needs to honour that contract and pass the summary
+  tests.
 - **Post-transcription corrections are local and provider-independent.** They
   can fix recurring names or jargon without sending a private dictionary to a
   model provider.
@@ -64,8 +66,8 @@ The source map and the invariants between those modules are documented in
 - Deepgram and Mistral return synchronous transcription responses without the
   deletable transcript ID Koe uses for ElevenLabs. Their account retention
   policies therefore apply.
-- Meeting source audio is retained only when enabled. Failed jobs preserve
-  recovery audio instead of silently destroying it.
+- Meeting source audio is retained only when enabled. Failed transcription
+  attempts preserve recovery audio instead of silently destroying it.
 - OpenRouter is confined to meeting post-processing and must use a Zero Data
   Retention endpoint.
 - Custom corrections, settings, secrets, logs, recordings, and generated
@@ -86,6 +88,9 @@ consoles when selected. Setup checks the selected provider's actual
 speech-to-text capability before saving it. An
 [OpenRouter API key](https://openrouter.ai/workspaces/default/keys) is needed
 only for model-assisted meeting summaries and contextual speaker resolution.
+Without it, Scribe completes with the transcript alone. If OpenRouter fails,
+Koe keeps the completed transcript, creates no diagnostic summary document,
+and reports that the summary is unavailable.
 
 ```powershell
 python -m venv .venv

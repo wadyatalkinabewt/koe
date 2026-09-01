@@ -137,7 +137,7 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
         storage_description.mapTo(storage, QPoint()).y() + storage_description.height()
     )
     assert storage_detail_gap > 0
-    assert "PDF transcripts and summaries are always saved." in {
+    assert "Transcript PDFs are always saved; summaries are added when available." in {
         label.text() for label in scribe_section.findChildren(QLabel)
     }
     assert (
@@ -487,6 +487,24 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     QTest.mouseClick(scribe.open_summary_button, Qt.LeftButton)
     QTest.mouseClick(scribe.open_transcript_button, Qt.LeftButton)
     assert [Path(path) for path in opened_paths] == [summary_pdf, transcript_pdf]
+
+    from meeting.app import SUMMARY_FAILED, SUMMARY_NOT_CONFIGURED
+
+    scribe._on_worker_done(str(meeting_dir), "", SUMMARY_NOT_CONFIGURED)
+    qapp.processEvents()
+    assert scribe._done_summary_path == ""
+    assert scribe.open_summary_button.isHidden()
+    assert scribe.open_transcript_button.isVisible()
+    assert scribe.open_transcript_button.property("primaryCompletion") is True
+    assert not scribe.header_state_label.isVisible()
+    assert scribe.completion_options.width() == scribe.open_transcript_button.width()
+
+    scribe._on_worker_done(str(meeting_dir), "", SUMMARY_FAILED)
+    qapp.processEvents()
+    assert scribe.open_summary_button.isHidden()
+    assert scribe.header_state_label.text() == "Summary unavailable"
+    assert scribe.header_state_label.isVisible()
+    assert "saved successfully" in scribe.header_state_label.toolTip()
 
     transcript_pdf.unlink()
     transcript_markdown = meeting_dir / "transcript.md"

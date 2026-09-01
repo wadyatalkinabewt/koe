@@ -60,7 +60,9 @@ instance, confirm that no snippet or Scribe recording is active.
 - Scribe sends one aligned mono upload. ElevenLabs explicitly sets
   `use_multi_channel=false`; other adapters receive that same mono file.
 - OpenRouter is confined to Scribe post-processing and requires Zero Data
-  Retention.
+  Retention. A missing key skips that optional stage; a provider failure leaves
+  the transcript as the sole deliverable and never produces a diagnostic
+  `summary.pdf` or `summary.md`.
 - Successfully decoded ElevenLabs responses are deleted by transcription ID.
 - Deepgram and Mistral return no equivalent deletable transcript ID; their
   provider retention policies apply and are documented in the README matrix.

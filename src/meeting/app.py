@@ -67,6 +67,9 @@ MEETING_MODE_OPTIONS = (
 )
 SCRIBE_APP_ID = "Koe.Scribe.App"
 SCRIBE_ICON = resource_path("assets", "koe-icon.ico")
+SUMMARY_READY = "ready"
+SUMMARY_NOT_CONFIGURED = "not_configured"
+SUMMARY_FAILED = "failed"
 
 
 def _is_one_on_one(meeting_mode: str) -> bool:
@@ -260,10 +263,12 @@ def _participants_for_meeting(
 
 
 class MeetingWorker(QThread):
-    """Transcribe + summarize in the background. UI updates via signals."""
+    """Transcribe and optionally summarize in the background."""
 
     status_signal = pyqtSignal(str)
-    done_signal = pyqtSignal(str, str)  # (folder_path, summary_path)
+    done_signal = pyqtSignal(
+        str, str, str
+    )  # (folder_path, summary_path, summary_status)
     error_signal = pyqtSignal(str)
 
     def __init__(
@@ -386,75 +391,88 @@ class MeetingWorker(QThread):
                 notes_text=self.notes_text,
             )
 
-            # ----- contextual speaker resolution + summary -----
-            self.status_signal.emit("Generating summary...")
+            # ----- optional contextual speaker resolution + summary -----
+            summary_text = None
             summary_path = meeting_dir / "summary.pdf"
-            try:
-                analysis = SummarizerClient().analyze(
-                    transcript_md,
-                    speaker_labels=_unique_labels(all_segments, preferred_first=""),
-                )
-                summary_text = analysis.summary
-                if analysis.speaker_mapping:
-                    contextual_segments = _apply_contextual_speaker_mapping(
-                        all_segments,
-                        analysis.speaker_mapping,
+            summary_status = SUMMARY_NOT_CONFIGURED
+            if os.getenv("OPENROUTER_API_KEY", "").strip():
+                self.status_signal.emit("Generating summary...")
+                try:
+                    analysis = SummarizerClient().analyze(
+                        transcript_md,
+                        speaker_labels=_unique_labels(
+                            all_segments, preferred_first=""
+                        ),
                     )
-                    contextual_participants = _participants_for_meeting(
-                        contextual_segments,
-                        self.meeting_mode,
-                        self.user_name,
-                        self.participant_name,
-                    )
-                    contextual_transcript_md = render_transcript(
-                        segments=contextual_segments,
-                        meeting_name=self.meeting_subject,
-                        participants=contextual_participants,
-                        started_at=self.started_at,
-                        duration_seconds=duration,
-                        notes_text=self.notes_text,
-                    )
-                    contextual_path = meeting_dir / ".transcript-contextual.pdf"
-                    try:
-                        render_transcript_pdf(
+                    summary_text = analysis.summary
+                    if analysis.speaker_mapping:
+                        contextual_segments = _apply_contextual_speaker_mapping(
+                            all_segments,
+                            analysis.speaker_mapping,
+                        )
+                        contextual_participants = _participants_for_meeting(
+                            contextual_segments,
+                            self.meeting_mode,
+                            self.user_name,
+                            self.participant_name,
+                        )
+                        contextual_transcript_md = render_transcript(
                             segments=contextual_segments,
                             meeting_name=self.meeting_subject,
                             participants=contextual_participants,
                             started_at=self.started_at,
                             duration_seconds=duration,
-                            recorder_name=self.user_name,
-                            output_path=contextual_path,
                             notes_text=self.notes_text,
                         )
-                        os.replace(contextual_path, transcript_path)
-                    finally:
-                        contextual_path.unlink(missing_ok=True)
-                    all_segments = contextual_segments
-                    participants = contextual_participants
-                    transcript_md = contextual_transcript_md
-            except Exception as e:
-                summary_text = f"# Summary\n\nSummary generation failed: {e}\n"
+                        contextual_path = meeting_dir / ".transcript-contextual.pdf"
+                        try:
+                            render_transcript_pdf(
+                                segments=contextual_segments,
+                                meeting_name=self.meeting_subject,
+                                participants=contextual_participants,
+                                started_at=self.started_at,
+                                duration_seconds=duration,
+                                recorder_name=self.user_name,
+                                output_path=contextual_path,
+                                notes_text=self.notes_text,
+                            )
+                            os.replace(contextual_path, transcript_path)
+                        finally:
+                            contextual_path.unlink(missing_ok=True)
+                        all_segments = contextual_segments
+                        participants = contextual_participants
+                        transcript_md = contextual_transcript_md
+                    summary_status = SUMMARY_READY
+                except Exception as exc:
+                    summary_text = None
+                    summary_status = SUMMARY_FAILED
+                    ConfigManager.console_print(
+                        f"Scribe summary generation failed: {exc}"
+                    )
 
-            # ----- final summary document -----
-            from meeting.summary_pdf import render_summary_pdf
+            if summary_text is not None:
+                from meeting.summary_pdf import render_summary_pdf
 
-            render_summary_pdf(
-                summary_text,
-                summary_path,
-                meeting_name=self.meeting_subject,
-                participants=participants,
-                started_at=self.started_at,
-                duration_seconds=duration,
-                recorder_name=self.user_name,
-                meeting_mode=self.meeting_mode,
-                participant_name=self.participant_name,
-            )
+                render_summary_pdf(
+                    summary_text,
+                    summary_path,
+                    meeting_name=self.meeting_subject,
+                    participants=participants,
+                    started_at=self.started_at,
+                    duration_seconds=duration,
+                    recorder_name=self.user_name,
+                    meeting_mode=self.meeting_mode,
+                    participant_name=self.participant_name,
+                )
 
             transcript_markdown_path = meeting_dir / "transcript.md"
             summary_markdown_path = meeting_dir / "summary.md"
             if self.save_markdown:
                 transcript_markdown_path.write_text(transcript_md, encoding="utf-8")
-                summary_markdown_path.write_text(summary_text, encoding="utf-8")
+                if summary_text is not None:
+                    summary_markdown_path.write_text(summary_text, encoding="utf-8")
+                else:
+                    summary_markdown_path.unlink(missing_ok=True)
             else:
                 transcript_markdown_path.unlink(missing_ok=True)
                 summary_markdown_path.unlink(missing_ok=True)
@@ -484,7 +502,11 @@ class MeetingWorker(QThread):
             if temp_dir.exists() and not any(temp_dir.iterdir()):
                 temp_dir.rmdir()
 
-            self.done_signal.emit(str(meeting_dir), str(summary_path))
+            self.done_signal.emit(
+                str(meeting_dir),
+                str(summary_path) if summary_status == SUMMARY_READY else "",
+                summary_status,
+            )
 
         except Exception as e:
             import traceback
@@ -694,7 +716,8 @@ class ScribeWindow(QMainWindow):
                 background: transparent;
                 border: none;
             }}
-            QPushButton#summaryButton {{
+            QPushButton#summaryButton,
+            QPushButton#transcriptButton[primaryCompletion="true"] {{
                 min-height: 0;
                 min-width: 0;
                 background: {theme.ACCENT_COLOR};
@@ -705,7 +728,8 @@ class ScribeWindow(QMainWindow):
                 font-size: 9pt;
                 font-weight: 600;
             }}
-            QPushButton#summaryButton:hover {{
+            QPushButton#summaryButton:hover,
+            QPushButton#transcriptButton[primaryCompletion="true"]:hover {{
                 background: {theme.ACCENT_HOVER};
                 border-color: {theme.ACCENT_HOVER};
             }}
@@ -956,12 +980,14 @@ class ScribeWindow(QMainWindow):
             button.ensurePolished()
             text_width = button.fontMetrics().horizontalAdvance(button.text())
             button.setFixedWidth(text_width + horizontal_room)
-        self.completion_options.setFixedSize(
-            self.open_summary_button.width()
-            + self.open_transcript_button.width()
-            + 7,
-            38,
-        )
+        visible_buttons = [
+            button
+            for button in (self.open_summary_button, self.open_transcript_button)
+            if not button.isHidden()
+        ]
+        visible_width = sum(button.width() for button in visible_buttons)
+        visible_width += max(0, len(visible_buttons) - 1) * 7
+        self.completion_options.setFixedSize(visible_width, 38)
 
     def _clear_retry_status(self) -> None:
         self.header_state_label.clear()
@@ -988,9 +1014,17 @@ class ScribeWindow(QMainWindow):
         )
         self.header_state_label.setContentsMargins(max(0, anchor_offset), 0, 0, 0)
 
-    def _show_completion_actions(self) -> None:
-        self.header_state_label.clear()
-        self.header_state_label.hide()
+    def _show_completion_actions(self, summary_status: str) -> None:
+        if summary_status == SUMMARY_FAILED:
+            self.header_state_label.setText("Summary unavailable")
+            self.header_state_label.setToolTip(
+                "The transcript was saved successfully; summary generation failed."
+            )
+            self.header_state_label.show()
+        else:
+            self.header_state_label.clear()
+            self.header_state_label.setToolTip("")
+            self.header_state_label.hide()
         self.action_stack.hide()
         self.timer_label.hide()
         self._fit_header_actions()
@@ -1209,16 +1243,28 @@ class ScribeWindow(QMainWindow):
             self.recovery_button,
         )
 
-    def _on_worker_done(self, folder_path: str, summary_path: str):
+    def _on_worker_done(
+        self,
+        folder_path: str,
+        summary_path: str,
+        summary_status: str = SUMMARY_READY,
+    ):
         self._set_record_button_state(recording=False)
         self._done_folder_path = folder_path
-        self._done_summary_path = self._preferred_document_path(
-            folder_path, "summary", summary_path
+        self._done_summary_path = (
+            self._preferred_document_path(folder_path, "summary", summary_path)
+            if summary_path
+            else ""
         )
         self._done_transcript_path = self._preferred_document_path(
             folder_path, "transcript"
         )
-        self._show_completion_actions()
+        summary_ready = bool(self._done_summary_path)
+        self.open_summary_button.setVisible(summary_ready)
+        self.open_transcript_button.setProperty("primaryCompletion", not summary_ready)
+        self.open_transcript_button.style().unpolish(self.open_transcript_button)
+        self.open_transcript_button.style().polish(self.open_transcript_button)
+        self._show_completion_actions(summary_status)
 
     @staticmethod
     def _preferred_document_path(

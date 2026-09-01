@@ -1,1 +1,1 @@
-"""Scribe mixes mic and loopback into one STT upload, then summarizes via OpenRouter."""
+"""Scribe creates one mixed STT upload, then optionally summarizes via OpenRouter."""

@@ -25,6 +25,71 @@ def _assert_pdf(path: Path) -> None:
     assert len(contents) > 3_000
 
 
+def _run_summary_worker(tmp_path, monkeypatch, *, api_key, analyze):
+    import transcription
+    from meeting import summarizer
+    from meeting.app import MODE_ONLINE_GROUP, MeetingWorker
+
+    source_dir = tmp_path / "temp"
+    mic = source_dir / "mic.wav"
+    loopback = source_dir / "loopback.wav"
+    _write_wav(mic, value=1800)
+    _write_wav(loopback, value=900)
+    monkeypatch.setattr(
+        transcription,
+        "transcribe_file_segments",
+        lambda *_args, **_kwargs: [
+            {
+                "start": 0.0,
+                "end": 0.5,
+                "text": "Transcript survives.",
+                "label": "Speaker 1",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "meeting.app.identify_microphone_speaker", lambda *_args: "Speaker 1"
+    )
+    monkeypatch.setattr("meeting.app.wav_has_meaningful_audio", lambda *_args: True)
+    if api_key is None:
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OPENROUTER_API_KEY", api_key)
+    if analyze is None:
+        monkeypatch.setattr(
+            summarizer,
+            "SummarizerClient",
+            lambda *_args, **_kwargs: pytest.fail(
+                "Missing OpenRouter configuration must skip the summarizer"
+            ),
+        )
+    else:
+        monkeypatch.setattr(summarizer.SummarizerClient, "analyze", analyze)
+
+    worker = MeetingWorker(
+        mic_wav=mic,
+        loopback_wav=loopback,
+        user_name="Alex",
+        meeting_subject="Summary Contract",
+        meeting_mode=MODE_ONLINE_GROUP,
+        notes_text="",
+        output_root=tmp_path / "Meetings",
+        started_at=datetime(2026, 9, 1, 9, 0),
+        save_markdown=True,
+    )
+    completed = []
+    errors = []
+    statuses = []
+    worker.done_signal.connect(
+        lambda folder, summary, status: completed.append((folder, summary, status))
+    )
+    worker.error_signal.connect(errors.append)
+    worker.status_signal.connect(statuses.append)
+    worker.run()
+    meeting_dir = tmp_path / "Meetings" / "26_09_01_Summary_Contract"
+    return meeting_dir, source_dir, completed, errors, statuses
+
+
 def test_group_folder_component_uses_underscores():
     from meeting.app import _sanitize
 
@@ -359,7 +424,7 @@ def test_group_worker_defaults_to_pdf_only_when_loopback_stream_is_empty(
     )
     worker.error_signal.connect(errors.append)
     worker.done_signal.connect(
-        lambda folder, summary: completed.append((folder, summary))
+        lambda folder, summary, status: completed.append((folder, summary, status))
     )
 
     worker.run()
@@ -372,6 +437,86 @@ def test_group_worker_defaults_to_pdf_only_when_loopback_stream_is_empty(
     assert not (meeting_dir / "transcript.md").exists()
     assert not (meeting_dir / "summary.md").exists()
     assert not (meeting_dir / "notes.md").exists()
+    assert not source_dir.exists()
+
+
+def test_missing_openrouter_key_completes_with_transcript_only(tmp_path, monkeypatch):
+    from meeting.app import SUMMARY_NOT_CONFIGURED
+
+    meeting_dir, source_dir, completed, errors, statuses = _run_summary_worker(
+        tmp_path,
+        monkeypatch,
+        api_key=None,
+        analyze=None,
+    )
+
+    _assert_pdf(meeting_dir / "transcript.pdf")
+    assert (meeting_dir / "transcript.md").is_file()
+    assert not (meeting_dir / "summary.pdf").exists()
+    assert not (meeting_dir / "summary.md").exists()
+    assert completed == [(str(meeting_dir), "", SUMMARY_NOT_CONFIGURED)]
+    assert errors == []
+    assert "Generating summary..." not in statuses
+    assert not source_dir.exists()
+
+
+def test_openrouter_failure_completes_without_diagnostic_summary(
+    tmp_path, monkeypatch
+):
+    from meeting.app import SUMMARY_FAILED
+
+    diagnostic = "provider diagnostic must not become a meeting document"
+
+    def fail_summary(*_args, **_kwargs):
+        raise RuntimeError(diagnostic)
+
+    meeting_dir, source_dir, completed, errors, statuses = _run_summary_worker(
+        tmp_path,
+        monkeypatch,
+        api_key="test-key",
+        analyze=fail_summary,
+    )
+
+    _assert_pdf(meeting_dir / "transcript.pdf")
+    transcript_markdown = (meeting_dir / "transcript.md").read_text(encoding="utf-8")
+    assert diagnostic not in transcript_markdown
+    assert not (meeting_dir / "summary.pdf").exists()
+    assert not (meeting_dir / "summary.md").exists()
+    assert completed == [(str(meeting_dir), "", SUMMARY_FAILED)]
+    assert errors == []
+    assert "Generating summary..." in statuses
+    assert not source_dir.exists()
+
+
+def test_successful_openrouter_summary_creates_summary_documents(
+    tmp_path, monkeypatch
+):
+    from meeting import summarizer
+    from meeting.app import SUMMARY_READY
+
+    summary_markdown = "# Summary Contract\n\n## Summary\n\nDone.\n"
+
+    def make_summary(*_args, **_kwargs):
+        return summarizer.MeetingAnalysis(
+            summary=summary_markdown,
+            speaker_mapping={},
+        )
+
+    meeting_dir, source_dir, completed, errors, statuses = _run_summary_worker(
+        tmp_path,
+        monkeypatch,
+        api_key="test-key",
+        analyze=make_summary,
+    )
+
+    _assert_pdf(meeting_dir / "transcript.pdf")
+    _assert_pdf(meeting_dir / "summary.pdf")
+    assert (meeting_dir / "summary.md").read_text(encoding="utf-8") == summary_markdown
+    assert completed == [
+        (str(meeting_dir), str(meeting_dir / "summary.pdf"), SUMMARY_READY)
+    ]
+    assert errors == []
+    assert "Generating summary..." in statuses
     assert not source_dir.exists()
 
 
