@@ -76,8 +76,9 @@ For the exact meeting modes, storage paths, and failure behaviour, see the
 Koe currently targets **Windows 11** and **Python 3.13**. Create an
 [ElevenLabs API key](https://elevenlabs.io/app/api/api-keys) with only
 **Speech to Text → Access** enabled. Koe does not require User, History, or any
-administrative permission. An OpenRouter key is needed only for model-assisted
-meeting summaries and contextual speaker resolution.
+administrative permission. An
+[OpenRouter API key](https://openrouter.ai/workspaces/default/keys) is needed
+only for model-assisted meeting summaries and contextual speaker resolution.
 
 ```powershell
 python -m venv .venv
