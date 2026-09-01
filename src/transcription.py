@@ -1,12 +1,13 @@
-"""ElevenLabs Scribe v2 transcription for Koe snippets and Scribe meetings.
+"""Provider-backed transcription for Koe snippets and Scribe meetings.
 
 The module has two public entry points:
 - ``transcribe`` returns paste-ready text for a hotkey snippet.
 - ``transcribe_file_segments`` returns timestamped, diarized meeting segments.
 
-All speech-to-text requests use ElevenLabs Scribe v2 with no-verbatim mode.
-Snippets may be split into ten-minute requests. Scribe streams its full mixed
-meeting file once so diarized speaker IDs stay coherent.
+ElevenLabs Scribe v2 remains the default. Deepgram Nova-3 and Mistral Voxtral
+implement the same two public contracts. Snippets may be split into ten-minute
+requests. Scribe sends its full mixed meeting file once so diarized speaker IDs
+stay coherent.
 """
 
 import io
@@ -24,6 +25,7 @@ import requests
 from dotenv import load_dotenv
 
 from paths import default_snippets_dir, env_path, logs_dir
+from providers import deepgram, mistral
 from utils import ConfigManager
 
 _DEBUG_LOG = logs_dir() / "debug.log"
@@ -37,16 +39,22 @@ ELEVENLABS_UPLOAD_MAX_ATTEMPTS = 3
 ELEVENLABS_UPLOAD_RETRY_DELAYS = (2.0, 5.0)
 MIN_MEETING_UPLOAD_BYTES_PER_SECOND = 12_000
 MEETING_UPLOAD_TIMEOUT_MARGIN = 5 * 60
-MAX_ELEVENLABS_FILE_BYTES = 5_000_000_000
+MAX_ELEVENLABS_FILE_BYTES = 3_000_000_000
 MAX_ELEVENLABS_DURATION_SECONDS = 10 * 60 * 60
 MIN_ELEVENLABS_DURATION_SECONDS = 0.1
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 ELEVENLABS_TRANSCRIPT_URL = f"{ELEVENLABS_URL}/transcripts"
 ELEVENLABS_API_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+DEEPGRAM_API_KEY_NAMES = ("DEEPGRAM_API_KEY",)
+MISTRAL_API_KEY_NAMES = ("MISTRAL_API_KEY",)
+SUPPORTED_TRANSCRIPTION_PROVIDERS = ("elevenlabs", "deepgram", "mistral")
 ELEVENLABS_DELETE_MAX_ATTEMPTS = 3
 ELEVENLABS_DELETE_RETRY_DELAYS = (1.0, 3.0)
 ELEVENLABS_DELETE_TIMEOUT = 15.0
 MAX_CORRECTION_LENGTH = 100
+MAX_DEEPGRAM_FILE_BYTES = 2_000_000_000
+MAX_MISTRAL_FILE_BYTES = 500_000_000
+MAX_MISTRAL_DURATION_SECONDS = 60 * 60
 
 
 def _debug(message: str) -> None:
@@ -109,7 +117,7 @@ def save_transcription_debug(raw: str, final: str, duration_sec: float) -> None:
             f"# Snippet Debug\n\n"
             f"**Time:** {timestamp}\n"
             f"**Duration:** {duration_sec:.2f}s\n\n"
-            "## ElevenLabs Response\n\n"
+            "## Provider Response\n\n"
             f"{(raw or '').strip()}\n\n"
             "## Final\n\n"
             f"{(final or '').strip()}\n"
@@ -119,7 +127,7 @@ def save_transcription_debug(raw: str, final: str, duration_sec: float) -> None:
         _debug(f"save_transcription_debug error: {exc}")
 
 
-# ---------- ElevenLabs request path ----------
+# ---------- provider selection ----------
 
 
 def _load_env() -> None:
@@ -133,6 +141,34 @@ def _api_key_from_env(*names: str) -> str:
         if value:
             return value
     return ""
+
+
+def transcription_provider() -> str:
+    """Return the validated configured provider, defaulting to ElevenLabs."""
+    provider = str(
+        ConfigManager.get_config_value("transcription_options", "provider")
+        or "elevenlabs"
+    ).strip().casefold()
+    if provider not in SUPPORTED_TRANSCRIPTION_PROVIDERS:
+        raise ValueError(f"Unsupported transcription provider: {provider}")
+    return provider
+
+
+def _provider_language() -> str | None:
+    language = ConfigManager.get_config_value("model_options", "common", "language")
+    return str(language).strip() if language else None
+
+
+def _provider_api_key(provider: str) -> str:
+    names = {
+        "elevenlabs": ELEVENLABS_API_KEY_NAMES,
+        "deepgram": DEEPGRAM_API_KEY_NAMES,
+        "mistral": MISTRAL_API_KEY_NAMES,
+    }[provider]
+    return _api_key_from_env(*names)
+
+
+# ---------- ElevenLabs request path ----------
 
 
 def _chunk_max_samples(sample_rate: int) -> int:
@@ -563,10 +599,10 @@ def transcribe_file_segments(
     label_resolver: Callable[[float, float], str] | None = None,
     timeout: float = GROUP_TRANSCRIPTION_TIMEOUT,
 ) -> list[dict]:
-    """Stream one file-backed Scribe request, preserving diarized speaker identity."""
+    """Send one file-backed Scribe request and preserve speaker identity."""
     file_path = Path(file_path)
-    if file_path.stat().st_size > MAX_ELEVENLABS_FILE_BYTES:
-        raise ValueError("Meeting audio exceeds ElevenLabs' 5 GB file limit.")
+    provider = transcription_provider()
+    file_size = file_path.stat().st_size
     duration_seconds = _wav_duration_seconds(file_path)
     if duration_seconds < MIN_ELEVENLABS_DURATION_SECONDS:
         _debug(
@@ -574,24 +610,52 @@ def transcribe_file_segments(
             f"only {duration_seconds:.3f}s of audio"
         )
         return []
-    if duration_seconds > MAX_ELEVENLABS_DURATION_SECONDS:
-        raise ValueError("Meeting audio exceeds ElevenLabs' 10-hour duration limit.")
+    if provider == "elevenlabs":
+        if file_size > MAX_ELEVENLABS_FILE_BYTES:
+            raise ValueError("Meeting audio exceeds ElevenLabs' 3 GB file limit.")
+        if duration_seconds > MAX_ELEVENLABS_DURATION_SECONDS:
+            raise ValueError("Meeting audio exceeds ElevenLabs' 10-hour duration limit.")
+    elif provider == "deepgram":
+        if file_size > MAX_DEEPGRAM_FILE_BYTES:
+            raise ValueError("Meeting audio exceeds Deepgram's 2 GB file limit.")
+    elif provider == "mistral":
+        if file_size > MAX_MISTRAL_FILE_BYTES:
+            raise ValueError("Meeting audio exceeds Mistral's 500 MB file limit.")
+        if duration_seconds > MAX_MISTRAL_DURATION_SECONDS:
+            raise ValueError("Meeting audio exceeds Mistral's 60-minute limit.")
 
-    api_key = _api_key_from_env(*ELEVENLABS_API_KEY_NAMES)
+    api_key = _provider_api_key(provider)
     if not api_key:
-        raise ValueError("ELEVENLABS_API_KEY not set")
+        raise ValueError(f"{provider.upper()}_API_KEY not set")
 
-    request_data = _elevenlabs_request_data(
-        diarize=diarize,
-        use_speaker_library=use_speaker_library,
-        num_speakers=num_speakers,
-    )
-    result, error = _elevenlabs_post_file(
-        file_path,
-        request_data,
-        api_key,
-        timeout=timeout,
-    )
+    if provider == "elevenlabs":
+        request_data = _elevenlabs_request_data(
+            diarize=diarize,
+            use_speaker_library=use_speaker_library,
+            num_speakers=num_speakers,
+        )
+        result, error = _elevenlabs_post_file(
+            file_path,
+            request_data,
+            api_key,
+            timeout=timeout,
+        )
+    elif provider == "deepgram":
+        result, error = deepgram.transcribe_file(
+            file_path,
+            api_key,
+            language=_provider_language(),
+            diarize=diarize,
+            timeout=timeout,
+        )
+    else:
+        result, error = mistral.transcribe_file(
+            file_path,
+            api_key,
+            language=_provider_language(),
+            diarize=diarize,
+            timeout=timeout,
+        )
     if error:
         _debug(error)
         raise RuntimeError(error)
@@ -632,6 +696,71 @@ def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> s
     return final
 
 
+def transcribe_deepgram(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
+    """Return flat Nova-3 text for snippet-style audio."""
+    api_key = _provider_api_key("deepgram")
+    if not api_key:
+        _debug("DEEPGRAM_API_KEY not set")
+        ConfigManager.console_print("Error: DEEPGRAM_API_KEY not set in .env")
+        return ""
+    sample_rate = int(sample_rate or 16000)
+    audio_int16 = _ensure_int16(audio_data)
+    max_samples = _chunk_max_samples(sample_rate)
+    parts: list[str] = []
+    for start in range(0, len(audio_int16), max_samples):
+        buffer = _audio_to_wav_bytes(
+            _normalize_quiet_audio(audio_int16[start : start + max_samples]),
+            sample_rate=sample_rate,
+        )
+        result, error = deepgram.transcribe_stream(
+            buffer,
+            api_key,
+            language=_provider_language(),
+            diarize=False,
+            timeout=180,
+        )
+        if error:
+            _debug(error)
+            continue
+        text = _elevenlabs_result_text(result or {})
+        if text:
+            parts.append(text)
+    return " ".join(parts).strip()
+
+
+def transcribe_mistral(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
+    """Return flat Voxtral text for snippet-style audio."""
+    api_key = _provider_api_key("mistral")
+    if not api_key:
+        _debug("MISTRAL_API_KEY not set")
+        ConfigManager.console_print("Error: MISTRAL_API_KEY not set in .env")
+        return ""
+    sample_rate = int(sample_rate or 16000)
+    audio_int16 = _ensure_int16(audio_data)
+    max_samples = _chunk_max_samples(sample_rate)
+    parts: list[str] = []
+    for start in range(0, len(audio_int16), max_samples):
+        buffer = _audio_to_wav_bytes(
+            _normalize_quiet_audio(audio_int16[start : start + max_samples]),
+            sample_rate=sample_rate,
+        )
+        result, error = mistral.transcribe_stream(
+            buffer,
+            "snippet.wav",
+            api_key,
+            language=_provider_language(),
+            diarize=False,
+            timeout=180,
+        )
+        if error:
+            _debug(error)
+            continue
+        text = _elevenlabs_result_text(result or {})
+        if text:
+            parts.append(text)
+    return " ".join(parts).strip()
+
+
 def post_process_transcription(transcription: str) -> str:
     """Apply approved corrections and clipboard-friendly snippet formatting."""
     from utils import TextProcessor
@@ -649,7 +778,13 @@ def transcribe(
         return ""
     sample_rate = int(sample_rate or 16000)
     duration_sec = len(audio_data) / sample_rate
-    raw = transcribe_elevenlabs(audio_data, sample_rate=sample_rate)
+    provider = transcription_provider()
+    transcribers = {
+        "elevenlabs": transcribe_elevenlabs,
+        "deepgram": transcribe_deepgram,
+        "mistral": transcribe_mistral,
+    }
+    raw = transcribers[provider](audio_data, sample_rate=sample_rate)
     final = post_process_transcription(raw)
     save_rolling_transcription(final)
     save_transcription_debug(raw, final, duration_sec)

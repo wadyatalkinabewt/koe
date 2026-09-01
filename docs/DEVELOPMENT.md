@@ -35,8 +35,9 @@ instance, confirm that no snippet or Scribe recording is active.
 - `src/paths.py`: source and packaged runtime locations.
 - `src/main.py`: tray, hotkey, clipboard, and Scribe launch lifecycle.
 - `src/result_thread.py`: snippet capture and transcription lifecycle.
-- `src/transcription.py`: ElevenLabs requests, custom corrections, and rotating
+- `src/transcription.py`: provider dispatch, custom corrections, and rotating
   snippet storage.
+- `src/providers/`: Deepgram and Mistral request/response adapters.
 - `src/meeting/capture.py`: microphone/loopback capture and mono mixing.
 - `src/meeting/app.py`: Scribe UI and single-upload worker.
 - `src/meeting/transcript.py`: Markdown transcript rendering.
@@ -47,13 +48,17 @@ instance, confirm that no snippet or Scribe recording is active.
 
 ## Invariants
 
-- ElevenLabs Scribe v2 is the only transcription backend.
-- Every request uses `no_verbatim=true`.
+- ElevenLabs Scribe v2 is the default transcription backend. Deepgram Nova-3
+  and Mistral Voxtral adapters declare the same Snippet and Scribe contracts.
+- Every ElevenLabs request uses `no_verbatim=true`.
 - Snippet audio never persists to disk.
-- Scribe sends one aligned mono upload with `use_multi_channel=false`.
+- Scribe sends one aligned mono upload. ElevenLabs explicitly sets
+  `use_multi_channel=false`; other adapters receive that same mono file.
 - OpenRouter is confined to Scribe post-processing and requires Zero Data
   Retention.
 - Successfully decoded ElevenLabs responses are deleted by transcription ID.
+- Deepgram and Mistral return no equivalent deletable transcript ID; their
+  provider retention policies apply and are documented in the README matrix.
 - Settings autosave must not restart Koe or interrupt active audio.
 
 ## Verification

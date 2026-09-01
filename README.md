@@ -5,7 +5,7 @@
 **Catch a thought. Capture the room. Keep the useful part.**
 
 `Windows 11` &nbsp;·&nbsp; `Python 3.13` &nbsp;·&nbsp;
-`ElevenLabs Scribe v2` &nbsp;·&nbsp; `MIT`
+`ElevenLabs · Deepgram · Mistral` &nbsp;·&nbsp; `MIT`
 
 [![Windows tests](https://github.com/wadyatalkinabewt/koe/actions/workflows/tests.yml/badge.svg)](https://github.com/wadyatalkinabewt/koe/actions/workflows/tests.yml)
 
@@ -41,9 +41,9 @@ sync, duplicating speakers, or doubling the transcription work.
 ### Built in layers
 
 - **Capture, transcription, correction, speaker resolution, summarisation, and
-  document rendering are separate modules.** ElevenLabs Scribe v2 is the current
-  transcription adapter; the capture, correction, and document stages do not
-  depend on its interface.
+  document rendering are separate modules.** ElevenLabs Scribe v2 is the
+  default transcription adapter; Deepgram Nova-3 and Mistral Voxtral implement
+  the same Snippet and Scribe contracts.
 - **The summary model is easy to swap within OpenRouter.** It is selected in one
   place and sits behind a structured JSON contract. A replacement model still
   needs to honour that contract and pass the summary tests.
@@ -61,6 +61,9 @@ The source map and the invariants between those modules are documented in
   loopback tracks.
 - Successfully decoded ElevenLabs transcripts are deleted from ElevenLabs by
   transcription ID; failed deletions are retried and recorded locally.
+- Deepgram and Mistral return synchronous transcription responses without the
+  deletable transcript ID Koe uses for ElevenLabs. Their account retention
+  policies therefore apply.
 - Meeting source audio is retained only when enabled. Failed jobs preserve
   recovery audio instead of silently destroying it.
 - OpenRouter is confined to meeting post-processing and must use a Zero Data
@@ -73,7 +76,8 @@ For the exact meeting modes, storage paths, and failure behaviour, see the
 
 ## Run from source
 
-Koe currently targets **Windows 11** and **Python 3.13**. Create an
+Koe currently targets **Windows 11** and **Python 3.13**. The first-run setup
+uses ElevenLabs by default. Create an
 [ElevenLabs API key](https://elevenlabs.io/app/api/api-keys) with only
 **Speech to Text → Access** enabled. Koe does not require User, History, or any
 administrative permission. An
@@ -90,6 +94,40 @@ The first-run window creates local settings. Source runs keep private runtime
 state in the checkout; packaged runs use the current Windows profile. The
 [development guide](docs/DEVELOPMENT.md) covers contributor setup, runtime
 boundaries, architecture, and verification.
+
+### Transcription providers
+
+All three adapters support both the short in-memory Snippet path and Koe's
+single-file Scribe path. Compatibility is covered by mocked API-contract tests;
+the repository does not contain live provider credentials or claim live
+end-to-end certification.
+
+| Provider | Model | Snippet | Scribe speaker handling | Request limit enforced by Koe | ZDR | Post-response deletion |
+|---|---|---:|---|---|---|---|
+| ElevenLabs | Scribe v2 | Yes | All four modes; native diarization and one-on-one speaker cap | 3 GB / 10 hours | Enterprise option; not required | Koe deletes by transcription ID |
+| Deepgram | Nova-3 | Yes | All four modes; native batch diarization (`latest`) | 2 GB | Account/contract dependent; not required | No deletable transcript ID returned |
+| Mistral | Voxtral Mini Transcribe 2 | Yes | All four modes; native diarized segments | 500 MB / 60 minutes | Account/contract dependent; not required | No deletable transcript ID returned |
+
+To use an alternative provider, add its key to `.env` and select the adapter in
+the private `config.yaml`:
+
+```dotenv
+DEEPGRAM_API_KEY=your-key
+# or: MISTRAL_API_KEY=your-key
+```
+
+```yaml
+transcription_options:
+  provider: deepgram  # elevenlabs, deepgram, or mistral
+  corrections: {}
+```
+
+Deepgram's [API-key guide](https://developers.deepgram.com/docs/create-additional-api-keys)
+and Mistral's [audio transcription guide](https://docs.mistral.ai/studio/audio/speech_to_text/offline_transcription)
+cover account setup. OpenRouter's transcription endpoint is intentionally not a
+Koe adapter: it has no documented speaker-diarization contract and its upstream
+processing timeout is 60 seconds, so it does not satisfy Koe's full-recording,
+speaker-labelled Scribe contract.
 
 ## Teach Koe your vocabulary
 

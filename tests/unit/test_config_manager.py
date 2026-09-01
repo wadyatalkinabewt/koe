@@ -200,6 +200,9 @@ class TestConfigSchema:
         corrections = schema["transcription_options"]["corrections"]
         assert corrections["type"] == "dict"
         assert corrections["value"] == {}
+        provider = schema["transcription_options"]["provider"]
+        assert provider["value"] == "elevenlabs"
+        assert provider["options"] == ["elevenlabs", "deepgram", "mistral"]
 
 
 def test_retired_config_keys_are_ignored_while_supported_values_load(temp_dir):

@@ -17,6 +17,7 @@ model_options:
     language: null
 
 transcription_options:
+  provider: elevenlabs
   corrections:
     ack me: Acme
     north wnd: Northwind

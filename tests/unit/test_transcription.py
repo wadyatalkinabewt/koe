@@ -264,6 +264,94 @@ def test_group_file_path_streams_one_request_with_speaker_options(
     ]
 
 
+@pytest.mark.parametrize(
+    ("provider", "key_name", "adapter_name"),
+    [
+        ("deepgram", "DEEPGRAM_API_KEY", "deepgram"),
+        ("mistral", "MISTRAL_API_KEY", "mistral"),
+    ],
+)
+def test_alternative_provider_scribe_dispatch_preserves_segment_contract(
+    tmp_path, monkeypatch, provider, key_name, adapter_name
+):
+    import transcription
+
+    wav_path = tmp_path / "meeting.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(np.zeros(1600, dtype=np.int16).tobytes())
+
+    monkeypatch.setattr(
+        transcription.ConfigManager,
+        "get_config_value",
+        lambda *keys: (
+            provider
+            if keys == ("transcription_options", "provider")
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        transcription,
+        "_api_key_from_env",
+        lambda *names: "provider-key" if names == (key_name,) else "",
+    )
+    adapter = getattr(transcription, adapter_name)
+    captured = {}
+
+    def fake_transcribe_file(file_path, api_key, **kwargs):
+        captured.update(file_path=file_path, api_key=api_key, **kwargs)
+        return {
+            "text": "Hello.",
+            "words": [
+                {
+                    "type": "word",
+                    "text": "Hello.",
+                    "start": 0.0,
+                    "end": 0.5,
+                    "speaker_id": "speaker_0",
+                }
+            ],
+        }, None
+
+    monkeypatch.setattr(adapter, "transcribe_file", fake_transcribe_file)
+
+    segments = transcription.transcribe_file_segments(wav_path, diarize=True)
+
+    assert captured["file_path"] == wav_path
+    assert captured["api_key"] == "provider-key"
+    assert captured["diarize"] is True
+    assert segments == [
+        {"start": 0.0, "end": 0.5, "text": "Hello.", "label": "Speaker 1"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("provider", "function_name"),
+    [("deepgram", "transcribe_deepgram"), ("mistral", "transcribe_mistral")],
+)
+def test_snippet_dispatch_uses_configured_provider(monkeypatch, provider, function_name):
+    import transcription
+
+    monkeypatch.setattr(
+        transcription,
+        "transcription_provider",
+        lambda: provider,
+    )
+    monkeypatch.setattr(
+        transcription,
+        function_name,
+        lambda audio, sample_rate: f"{provider} result",
+    )
+    monkeypatch.setattr(transcription, "save_rolling_transcription", lambda _text: None)
+    monkeypatch.setattr(transcription, "save_transcription_debug", lambda *_args: None)
+
+    result = transcription.transcribe(np.ones(1600, dtype=np.int16), 16000)
+
+    assert result == f"{provider} result. "
+
+
 def test_group_upload_retries_wrapped_write_timeout_from_byte_zero(
     tmp_path, monkeypatch
 ):

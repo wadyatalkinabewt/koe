@@ -89,7 +89,10 @@ def write_setup_files(
         "model_options": {
             "common": {"language": None},
         },
-        "transcription_options": {"corrections": {}},
+        "transcription_options": {
+            "provider": "elevenlabs",
+            "corrections": {},
+        },
         "recording_options": {
             "activation_key": "ctrl+shift+space",
         },

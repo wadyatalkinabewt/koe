@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
 from dotenv import dotenv_values, load_dotenv
 
 # Koe is a small source-run desktop app; keep its working tree free of generated
@@ -28,6 +29,24 @@ from paths import (  # noqa: E402
 )
 
 ELEVENLABS_KEY_NAMES = ("ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "XI_API_KEY")
+PROVIDER_KEY_NAMES = {
+    "elevenlabs": ELEVENLABS_KEY_NAMES,
+    "deepgram": ("DEEPGRAM_API_KEY",),
+    "mistral": ("MISTRAL_API_KEY",),
+}
+
+
+def _configured_provider(config: Path) -> str:
+    try:
+        payload = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    options = payload.get("transcription_options") or {}
+    if not isinstance(options, dict):
+        return ""
+    return str(options.get("provider") or "elevenlabs").strip().casefold()
 
 
 def needs_setup(data_dir: Path | None = None) -> bool:
@@ -38,7 +57,11 @@ def needs_setup(data_dir: Path | None = None) -> bool:
 
     if environment.exists() and config.exists():
         values = dotenv_values(environment)
-        if any(str(values.get(name) or "").strip() for name in ELEVENLABS_KEY_NAMES):
+        provider = _configured_provider(config)
+        key_names = PROVIDER_KEY_NAMES.get(provider, ())
+        if key_names and any(
+            str(values.get(name) or "").strip() for name in key_names
+        ):
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.touch()
             return False

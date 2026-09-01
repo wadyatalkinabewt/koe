@@ -37,6 +37,7 @@ def test_first_run_defaults_have_empty_custom_corrections(monkeypatch):
     assert config["profile"]["user_name"] == "Alex"
     assert config["meeting_options"]["save_markdown"] is False
     assert config["meeting_options"]["last_meeting_mode"] == "online_one_on_one"
+    assert config["transcription_options"]["provider"] == "elevenlabs"
     assert config["transcription_options"]["corrections"] == {}
 
 

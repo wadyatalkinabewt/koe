@@ -352,7 +352,7 @@ def prepare_mono_meeting_mix(
     """Overlay mic and loopback on one timeline and write one billable mono WAV.
 
     The returned source arrays are retained only for local speaker attribution;
-    only ``mixed_path`` is sent to ElevenLabs.
+    only ``mixed_path`` is sent to the configured transcription provider.
     """
     mic_raw, mic_rate, mic_channels = load_wav_as_int16(mic_path)
     loop_raw, loop_rate, loop_channels = load_wav_as_int16(loopback_path)

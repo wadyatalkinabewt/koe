@@ -1,4 +1,4 @@
-"""Koe settings for the supported ElevenLabs-only desktop app."""
+"""Koe settings for the supported source-run desktop app."""
 
 import sys
 from pathlib import Path

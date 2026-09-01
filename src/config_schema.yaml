@@ -29,7 +29,7 @@ meeting_options:
       - in_person_group
     description: "Last Scribe meeting type selected in the meeting window."
 
-# ElevenLabs transcription
+# Transcription
 model_options:
   common:
     language:
@@ -40,6 +40,14 @@ model_options:
 # Deterministic local post-transcription corrections. This mapping remains
 # private in config.yaml and is never sent to a provider.
 transcription_options:
+  provider:
+    value: elevenlabs
+    type: str
+    options:
+      - elevenlabs
+      - deepgram
+      - mistral
+    description: "Speech-to-text adapter: ElevenLabs Scribe v2, Deepgram Nova-3, or Mistral Voxtral."
   corrections:
     value: {}
     type: dict

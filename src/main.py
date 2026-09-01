@@ -3,7 +3,7 @@ Koe — hotkey transcription app.
 
 Entry point. Boots a QApplication, registers the global hotkey, and runs
 in the system tray. Audio capture happens in ResultThread; transcription
- is delegated to transcription.transcribe(), which calls ElevenLabs Scribe v2.
+ is delegated to transcription.transcribe(), which calls the configured provider.
 """
 
 import sys

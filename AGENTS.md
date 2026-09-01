@@ -2,15 +2,18 @@
 
 Koe is a Windows-only tray application with two workflows:
 
-1. Snippets: global toggle hotkey → ElevenLabs Scribe v2 → clipboard and
-   five rotating Markdown files.
+1. Snippets: global toggle hotkey → configured transcription provider →
+   clipboard and five rotating Markdown files.
 2. Scribe: microphone plus Windows loopback → one aligned mono upload →
    diarized meeting transcript → optional OpenRouter summary.
 
 ## Invariants
 
-- ElevenLabs Scribe v2 is the only speech-to-text backend.
-- Every transcription request uses `no_verbatim=true`.
+- ElevenLabs Scribe v2 is the default speech-to-text backend.
+- Additional adapters must declare which workflows and meeting modes they
+  support. Missing diarization may be replaced by channel-based attribution
+  only where the capture topology makes speaker identity deterministic.
+- Every ElevenLabs transcription request uses `no_verbatim=true`.
 - Snippet formatting may normalize whitespace, punctuation, the paste-friendly
   trailing space, and exact-token corrections from the private `config.yaml`.
   Add corrections only for stable observed substitutions.
@@ -21,13 +24,13 @@ Koe is a Windows-only tray application with two workflows:
   post-processing. It may propose contextual names only for generic labels;
   exact transcript evidence must pass local validation before both documents
   are relabelled.
-- The snippet hotkey is press-to-toggle. ElevenLabs remains the only
-  transcription path.
+- The snippet hotkey is press-to-toggle. Provider adapters must preserve the
+  transient-audio, correction, and clipboard contracts.
 - Settings changes autosave and must not restart Koe or interrupt active audio.
 - The snippet status card keeps fixed geometry across Listening/Transcribing.
-- Scribe sends one mono meeting file with `use_multi_channel=false`. Never
-  reintroduce separate billable mic and loopback transcription requests or
-  multichannel billing.
+- Scribe sends one mono meeting file. ElevenLabs explicitly uses
+  `use_multi_channel=false`. Never reintroduce separate billable mic and
+  loopback transcription requests or multichannel billing.
 - Every Scribe mode enables diarization with speaker-library matching disabled.
   One-on-one requests cap the expected result at two speakers.
 - Online group mic audio remains local attribution evidence only. Its detected
@@ -40,7 +43,8 @@ Koe is a Windows-only tray application with two workflows:
 - In-person or speakerphone recordings preserve honest generic speaker labels
   unless contextual analysis validates a name from exact transcript evidence.
 - Every successfully decoded ElevenLabs transcription response is immediately
-  deleted from ElevenLabs using its returned `transcription_id`.
+  deleted from ElevenLabs using its returned `transcription_id`. Other adapters
+  must document their provider-specific retention and deletion behaviour.
 - OpenRouter meeting analysis must enforce per-request Zero Data Retention.
 - Failed Scribe transcription attempts preserve local temporary audio for
   recovery. Successful runs remove temporary audio after document generation
@@ -83,8 +87,10 @@ See `docs/DEVELOPMENT.md` for the source map and verification commands.
 - Read this file and live source before changing behavior.
 - Preserve unrelated user changes and private output data.
 - Prefer deleting retired paths over keeping compatibility switches.
-- Do not add a VBS/Python installed launcher, second backend, cleanup stage, or
-  second configuration source.
+- Do not claim provider compatibility without request/response contract tests,
+  explicit capability limits, and provider-specific retention behaviour.
+- Do not add a VBS/Python installed launcher, cleanup stage, or second
+  configuration source.
 - Keep the dark-slate/indigo/coral visual system consistent across all surfaces.
 - Use `apply_patch` for source edits. Verify resolved paths before bulk deletion.
 
