@@ -29,6 +29,7 @@ def test_request_is_fixed_to_scribe_v2_no_verbatim(monkeypatch):
     assert ("no_verbatim", "true") in data
     assert ("tag_audio_events", "false") in data
     assert ("use_multi_channel", "false") in data
+    assert ("timestamps_granularity", "word") in data
     assert not any(key in ("diarize", "use_speaker_library") for key, _value in data)
     assert not any(key == "language_code" for key, _value in data)
 
@@ -259,6 +260,7 @@ def test_group_file_path_streams_one_request_with_speaker_options(
 
     assert len(captured) == 1
     assert ("diarize", "true") in captured[0][1]
+    assert ("timestamps_granularity", "word") in captured[0][1]
     assert ("use_speaker_library", "true") in captured[0][1]
     assert segments == [
         {"start": 0.0, "end": 0.5, "text": "Hello.", "label": "Speaker 1"}
@@ -738,6 +740,8 @@ def test_snippet_call_path_sends_no_verbatim(monkeypatch):
 
     assert result == "Clear result. "
     assert ("no_verbatim", "true") in captured["data"]
+    assert ("timestamps_granularity", "none") in captured["data"]
+    assert ("file_format", "other") in captured["data"]
 
 
 def test_snippet_is_transcribed_without_creating_audio_storage(tmp_path, monkeypatch):

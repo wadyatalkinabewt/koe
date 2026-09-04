@@ -227,6 +227,7 @@ def _elevenlabs_request_data(
     diarize: bool = False,
     use_speaker_library: bool = False,
     num_speakers: int | None = None,
+    timestamps: bool = True,
 ) -> list[tuple[str, str]]:
     """Build the shared Scribe v2 form fields for every Koe STT request."""
     if num_speakers is not None and not 1 <= int(num_speakers) <= 32:
@@ -237,7 +238,7 @@ def _elevenlabs_request_data(
     data = [
         ("model_id", "scribe_v2"),
         ("tag_audio_events", "false"),
-        ("timestamps_granularity", "word"),
+        ("timestamps_granularity", "word" if timestamps else "none"),
         ("file_format", "other"),
         ("no_verbatim", "true"),
         # Keep Scribe billing tied to the duration of one mono timeline. This is
@@ -285,7 +286,8 @@ def _elevenlabs_post(
         return None, "ElevenLabs returned an invalid JSON response"
     _debug(
         f"ElevenLabs snippet request completed in {time.perf_counter() - started:.2f}s "
-        "(upload + recognition + response decoding; excludes deletion)"
+        "(upload + recognition + response decoding; excludes deletion; "
+        f"timestamps={dict(data).get('timestamps_granularity', 'word')})"
     )
     _delete_elevenlabs_transcript_in_background(result, api_key)
     return result, None
@@ -719,7 +721,9 @@ def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> s
 
     sample_rate = int(sample_rate or 16000)
     audio_int16 = _ensure_int16(audio_data)
-    request_data = _elevenlabs_request_data()
+    # Flat snippet text never uses word alignment. Requesting timestamps adds
+    # substantial provider latency on longer recordings; Scribe still needs them.
+    request_data = _elevenlabs_request_data(timestamps=False)
     max_samples = _chunk_max_samples(sample_rate)
     parts: list[str] = []
     for start in range(0, len(audio_int16), max_samples):

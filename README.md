@@ -16,6 +16,9 @@ snippet, or open Scribe to capture microphone and system audio as a diarized
 meeting transcript. With OpenRouter configured, Scribe can also produce a
 structured meeting summary.
 
+ElevenLabs snippets request plain text without word timestamps to avoid the
+extra alignment delay. Scribe retains word timestamps for speaker attribution.
+
 Koe stays out of the way and treats retention as part of the product: snippet
 audio is ephemeral, while meeting audio is saved only when requested.
 
