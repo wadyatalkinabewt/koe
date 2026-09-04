@@ -1,13 +1,16 @@
+import os
 import time
 import traceback
+import wave
 from datetime import datetime
+from pathlib import Path
 from queue import Empty, Queue
 
 import numpy as np
 import sounddevice as sd
 from PyQt5.QtCore import QMutex, QThread, pyqtSignal
 
-from paths import logs_dir
+from paths import logs_dir, snippet_recovery_path
 from transcription import transcribe
 from utils import ConfigManager
 
@@ -45,6 +48,52 @@ def _debug(msg: str):
             f.write(f"[{timestamp}] {msg}\n")
     except OSError:
         pass
+
+
+def _discard_previous_snippet_recovery() -> None:
+    """Remove the one recovery WAV when a new Snippet actually begins."""
+    path = snippet_recovery_path()
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        _debug(f"  Could not remove previous Snippet recovery: {exc}")
+
+
+def _save_cancelled_snippet(audio_data, sample_rate: int | None) -> Path | None:
+    """Atomically retain one valid mono WAV after a user cancellation."""
+    if audio_data is None or not sample_rate:
+        return None
+    audio = np.asarray(audio_data, dtype="<i2").reshape(-1)
+    if audio.size == 0:
+        return None
+
+    destination = snippet_recovery_path()
+    temporary = destination.with_suffix(".tmp.wav")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with wave.open(str(temporary), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(int(sample_rate))
+            wav_file.writeframes(audio.tobytes())
+        with wave.open(str(temporary), "rb") as wav_file:
+            if (
+                wav_file.getnchannels() != 1
+                or wav_file.getsampwidth() != 2
+                or wav_file.getframerate() != int(sample_rate)
+                or wav_file.getnframes() != audio.size
+            ):
+                raise OSError("cancelled Snippet WAV verification failed")
+        os.replace(temporary, destination)
+        return destination
+    except OSError as exc:
+        _debug(f"  Could not save cancelled Snippet recovery: {exc}")
+        return None
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _normalise_sound_device(device):
@@ -328,7 +377,7 @@ class ResultThread(QThread):
         # tries to emit resultSignal. Let the thread finish naturally.
 
     def cancel_recording(self):
-        """Discard the active capture and exit without archiving or transcription."""
+        """Stop without transcription; the captured audio is retained once."""
         _debug("ResultThread.cancel_recording() called")
         self.mutex.lock()
         self.cancel_requested = True
@@ -349,6 +398,7 @@ class ResultThread(QThread):
                     self.cancelledSignal.emit()
                 return
 
+            _discard_previous_snippet_recovery()
             self.mutex.lock()
             self.is_recording = True
             self.mutex.unlock()
@@ -363,7 +413,11 @@ class ResultThread(QThread):
             )
 
             if self.cancel_requested:
-                _debug("  Snippet cancelled: discarding capture before transcription")
+                recovery = _save_cancelled_snippet(audio_data, self.sample_rate)
+                if recovery:
+                    _debug(f"  Snippet cancelled: recovery saved to {recovery}")
+                else:
+                    _debug("  Snippet cancelled before recoverable audio was captured")
                 self.cancelledSignal.emit()
                 return
 

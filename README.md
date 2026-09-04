@@ -25,7 +25,7 @@ audio is ephemeral, while meeting audio is saved only when requested.
 |---|---|---|
 | **Best for** | Fleeting thoughts, prompts, and dictated text | Calls, interviews, and in-room meetings |
 | **Capture** | Press the hotkey, speak, press again | Record microphone and Windows loopback together |
-| **Result** | Formatted text on the clipboard | Diarized transcript PDF; optional summary PDF |
+| **Result** | Formatted text on the clipboard | Diarized transcript PDF and Markdown; optional summary in both formats |
 | **Audio retention** | Never written to disk | Kept only when requested; recovery audio survives failures |
 
 <p align="center">
@@ -59,7 +59,8 @@ The source map and the invariants between those modules are documented in
 
 ## Privacy is part of the pipeline
 
-- Snippet audio stays in memory and is never written to disk.
+- Snippet audio stays in memory during normal use. Cancelling a recording keeps
+  one recoverable WAV in Koe's logs folder; starting the next Snippet deletes it.
 - Scribe uploads one aligned recording rather than separate microphone and
   loopback tracks.
 - Successfully decoded ElevenLabs transcripts are deleted from ElevenLabs by

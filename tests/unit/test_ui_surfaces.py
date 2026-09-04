@@ -62,9 +62,8 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert hasattr(window, "save_meeting_audio_checkbox")
     assert window.save_meeting_audio_checkbox.text() == "Save Scribe meeting audio"
     assert isinstance(window.save_meeting_audio_checkbox, ToggleRow)
-    assert hasattr(window, "save_markdown_checkbox")
-    assert window.save_markdown_checkbox.text() == "Save Markdown copies"
-    assert isinstance(window.save_markdown_checkbox, ToggleRow)
+    assert not hasattr(window, "save_markdown_checkbox")
+    assert "pdf and markdown files are always saved" in labels
     assert window.findChildren(QCheckBox) == []
     assert "microphone.wav and meeting-audio.wav" not in labels
     window.show()
@@ -110,7 +109,6 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert "Recording" not in sections_by_title
     assert window.user_name_input.parentWidget() is profile
     assert window.save_meeting_audio_checkbox.parentWidget() is scribe_section
-    assert window.save_markdown_checkbox.parentWidget() is scribe_section
     assert window.save_meeting_audio_checkbox.parentWidget() is not storage
     assert "show the snippet status card" not in labels
     assert all(
@@ -137,7 +135,10 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
         storage_description.mapTo(storage, QPoint()).y() + storage_description.height()
     )
     assert storage_detail_gap > 0
-    assert "Transcript PDFs are always saved; summaries are added when available." in {
+    assert (
+        "Transcript PDF and Markdown files are always saved; summaries are added "
+        "in both formats when available."
+    ) in {
         label.text() for label in scribe_section.findChildren(QLabel)
     }
     assert (
@@ -200,6 +201,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
         MODE_IN_PERSON_ONE_ON_ONE,
         MODE_ONLINE_GROUP,
         MODE_ONLINE_ONE_ON_ONE,
+        MeetingTypeDialog,
         ScribeWindow,
     )
     from ui.status_window import StatusWindow
@@ -260,6 +262,54 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert not status.isVisible()
     assert "#dda1a7" in status.cancel_button.styleSheet().lower()
 
+    chooser = MeetingTypeDialog()
+    chooser.show()
+    qapp.processEvents()
+    assert chooser.selected_mode is None
+    assert chooser.minimumSize() == chooser.maximumSize() == QSize(500, 160)
+    assert chooser.pages.currentWidget() is chooser.location_page
+    assert [button.text() for button in chooser.location_buttons.values()] == [
+        "Online",
+        "In person",
+    ]
+    assert [button.text() for button in chooser.participant_buttons.values()] == [
+        "2 participants",
+        "3+ participants",
+    ]
+    chooser_copy = " ".join(label.text() for label in chooser.findChildren(QLabel))
+    assert "Choose every time" not in chooser_copy
+    assert "microphone" not in chooser_copy
+    assert all(
+        not button.autoDefault()
+        for button in (
+            *chooser.location_buttons.values(),
+            *chooser.participant_buttons.values(),
+            chooser.back_button,
+        )
+    )
+    QTest.mouseClick(chooser.location_buttons["online"], Qt.LeftButton)
+    assert chooser.pages.currentWidget() is chooser.participant_page
+    assert chooser.selected_mode is None
+    qapp.processEvents()
+    assert chooser.back_button.text() == "← Back"
+    assert chooser.back_button.mapTo(chooser, QPoint()).y() < (
+        chooser.participant_heading.mapTo(chooser, QPoint()).y()
+    )
+    assert chooser.location_heading.mapTo(chooser, QPoint()).y() == (
+        chooser.participant_heading.mapTo(chooser, QPoint()).y()
+    )
+    participant_buttons_bottom = max(
+        button.mapTo(chooser, QPoint()).y() + button.height()
+        for button in chooser.participant_buttons.values()
+    )
+    assert chooser.height() - participant_buttons_bottom <= 22
+    QTest.mouseClick(chooser.back_button, Qt.LeftButton)
+    assert chooser.pages.currentWidget() is chooser.location_page
+    QTest.mouseClick(chooser.location_buttons["online"], Qt.LeftButton)
+    QTest.mouseClick(chooser.participant_buttons["two"], Qt.LeftButton)
+    assert chooser.selected_mode == MODE_ONLINE_ONE_ON_ONE
+    assert chooser.result() == QDialog.Accepted
+
     scribe = ScribeWindow(MODE_ONLINE_ONE_ON_ONE)
     scribe.show()
     qapp.processEvents()
@@ -281,51 +331,26 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.participant_field_label.text() == "Participant name"
     assert scribe.participant_input.placeholderText() == "Full name works best"
     assert scribe.participant_input.isVisible()
-    assert scribe.meeting_type_label.text() == "Meeting type"
-    assert scribe.meeting_type_combo.accessibleName() == "Meeting type"
-    assert scribe.meeting_type_combo.maximumWidth() == 360
-    assert [
-        scribe.meeting_type_combo.itemText(index)
-        for index in range(scribe.meeting_type_combo.count())
-    ] == [
-        "Online — One-on-One",
-        "Online — Group Meeting",
-        "In Person — One-on-One",
-        "In Person — Group Meeting",
-    ]
-    assert [
-        scribe.meeting_type_combo.itemData(index)
-        for index in range(scribe.meeting_type_combo.count())
-    ] == [
-        MODE_ONLINE_ONE_ON_ONE,
-        MODE_ONLINE_GROUP,
-        MODE_IN_PERSON_ONE_ON_ONE,
-        MODE_IN_PERSON_GROUP,
-    ]
-    assert scribe.meeting_type_combo.currentData() == MODE_ONLINE_ONE_ON_ONE
+    assert scribe.meeting_mode_summary.accessibleName() == "Meeting type"
+    assert scribe.meeting_mode_summary.text() == "Online • 2 participants"
+    assert not hasattr(scribe, "meeting_type_value")
+    assert not hasattr(scribe, "change_meeting_type_button")
+    assert scribe.meeting_name_field.width() == scribe.participant_field.width()
+    assert scribe.meeting_name_field.mapTo(scribe, QPoint()).x() == (
+        scribe.notes_edit.mapTo(scribe, QPoint()).x()
+    )
+    assert (
+        scribe.participant_field.mapTo(scribe, QPoint()).x()
+        + scribe.participant_field.width()
+        == scribe.notes_edit.mapTo(scribe, QPoint()).x() + scribe.notes_edit.width()
+    )
     action_y = scribe.action_stack.mapTo(scribe, QPoint()).y()
     timer_y = scribe.timer_label.mapTo(scribe, QPoint()).y()
     divider_y = scribe.divider.mapTo(scribe, QPoint()).y()
     assert action_y + scribe.action_stack.height() // 2 == (
         timer_y + scribe.timer_label.height() // 2
     )
-    scribe.meeting_type_combo.setCurrentIndex(
-        scribe.meeting_type_combo.findData(MODE_ONLINE_GROUP)
-    )
-    qapp.processEvents()
-    assert scribe.meeting_mode == MODE_ONLINE_GROUP
-    assert not scribe.participant_input.isVisible()
-    assert scribe.action_stack.mapTo(scribe, QPoint()).y() == action_y
-    assert (
-        ConfigManager.get_config_value("meeting_options", "last_meeting_mode")
-        == MODE_ONLINE_GROUP
-    )
-    scribe.meeting_type_combo.setCurrentIndex(
-        scribe.meeting_type_combo.findData(MODE_ONLINE_ONE_ON_ONE)
-    )
-    qapp.processEvents()
-    assert scribe.participant_input.isVisible()
-    assert scribe.action_stack.mapTo(scribe, QPoint()).y() == action_y
+    assert scribe.meeting_mode == MODE_ONLINE_ONE_ON_ONE
     assert "Meeting notes" in labels
     assert "Scribe" in labels
     assert "Capture the conversation" not in labels
@@ -334,10 +359,10 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.record_button.mapTo(scribe, QPoint()).x() < (
         scribe.timer_label.mapTo(scribe, QPoint()).x()
     )
-    assert scribe.participant_input.maximumWidth() == 360
+    assert scribe.participant_input.maximumWidth() > 360
     assert "border: 1px" in scribe.styleSheet().lower()
     assert "background: transparent" in scribe.styleSheet().lower()
-    assert "qcombobox#meetingtypeselector::drop-down" in scribe.styleSheet().lower()
+    assert "qlabel#scribemodesummary" in scribe.styleSheet().lower()
     assert "border: none" in scribe.styleSheet().lower()
 
     scribe._set_record_button_state(recording=True)
@@ -525,7 +550,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
 
     monkeypatch.setattr("meeting.app.AudioCapture", FakeCapture)
     scribe._start_recording()
-    assert not scribe.meeting_type_combo.isEnabled()
+    assert scribe.meeting_mode_summary.text() == "Online • 2 participants"
     scribe.elapsed_timer.stop()
     scribe.recording_pulse_timer.stop()
     scribe.capture = None
@@ -536,7 +561,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert group_scribe.meeting_name_input.placeholderText().startswith(
         "e.g. Invoice workflow"
     )
-    assert group_scribe.meeting_type_combo.currentData() == MODE_ONLINE_GROUP
+    assert group_scribe.meeting_mode_summary.text() == "Online • 3+ participants"
     assert not group_scribe.participant_input.isVisible()
     group_scribe.close()
 
@@ -545,19 +570,42 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert in_person_scribe.meeting_name_input.placeholderText().startswith(
         "e.g. Invoice workflow"
     )
-    assert in_person_scribe.meeting_type_combo.currentData() == MODE_IN_PERSON_GROUP
+    assert in_person_scribe.meeting_mode_summary.text() == "In person • 3+ participants"
     assert not in_person_scribe.participant_input.isVisible()
     in_person_scribe.close()
 
     in_person_one_on_one = ScribeWindow(MODE_IN_PERSON_ONE_ON_ONE)
     in_person_one_on_one.show()
     qapp.processEvents()
-    assert (
-        in_person_one_on_one.meeting_type_combo.currentData()
-        == MODE_IN_PERSON_ONE_ON_ONE
+    assert in_person_one_on_one.meeting_mode_summary.text() == (
+        "In person • 2 participants"
     )
     assert in_person_one_on_one.participant_input.isVisible()
     in_person_one_on_one.close()
+
+
+@pytest.mark.parametrize(
+    ("location", "participants", "expected_mode"),
+    [
+        ("online", "two", "online_one_on_one"),
+        ("online", "group", "online_group"),
+        ("in_person", "two", "in_person_one_on_one"),
+        ("in_person", "group", "in_person_group"),
+    ],
+)
+def test_two_step_meeting_chooser_maps_all_four_modes(
+    qapp, location, participants, expected_mode
+):
+    from meeting.app import MeetingTypeDialog
+
+    chooser = MeetingTypeDialog()
+    chooser.show()
+    qapp.processEvents()
+    QTest.mouseClick(chooser.location_buttons[location], Qt.LeftButton)
+    QTest.mouseClick(chooser.participant_buttons[participants], Qt.LeftButton)
+
+    assert chooser.result() == QDialog.Accepted
+    assert chooser.selected_mode == expected_mode
 
 
 def test_initialization_card_is_compact_and_uses_the_koe_icon(qapp):

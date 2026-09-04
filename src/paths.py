@@ -86,6 +86,11 @@ def logs_dir() -> Path:
     return app_data_dir() / "logs"
 
 
+def snippet_recovery_path() -> Path:
+    """Single replaceable WAV retained only after a cancelled Snippet."""
+    return logs_dir() / "recoverable-snippet.wav"
+
+
 def scribe_temp_dir() -> Path:
     if not is_frozen() and not os.environ.get("KOE_APPDATA_DIR"):
         return source_root() / ".scribe_temp"

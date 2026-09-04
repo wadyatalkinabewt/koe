@@ -4,8 +4,11 @@
 
 The snippet hotkey is press-to-toggle. A second press stops capture, sends the
 audio to the transcription provider selected during setup, copies the formatted
-result to the clipboard, and rotates five local Markdown snippets. Snippet audio
-is transient and is not written to disk.
+result to the clipboard, and rotates five local Markdown snippets. Normal
+Snippet audio is transient. Cancelling from the Listening card atomically saves
+one `recoverable-snippet.wav` in Koe's logs folder without transcribing it. The
+next Snippet start deletes that recovery file before recording, so recover or
+copy it before starting another Snippet.
 
 ## Transcription provider setup
 
@@ -26,6 +29,12 @@ speaker resolution, not transcription.
 
 ## Scribe meeting modes
 
+Starting Scribe first opens a mandatory two-step chooser with no remembered
+default. First select Online or In person, then select 2 participants or 3+
+participants. The second step includes Back. The chosen mode appears as quiet
+read-only context beneath the Scribe title; close Scribe and reopen it to choose
+a different mode.
+
 - **Online / One-on-One:** microphone timing identifies the local participant;
   the other diarized voice is mapped to the entered participant.
 - **Online / Group:** microphone timing identifies the local participant while
@@ -43,10 +52,9 @@ or retained.
 
 ## Documents and optional audio
 
-Every successful transcription produces `transcript.pdf`. A successful
-OpenRouter post-processing request also produces `summary.pdf`. Optional
-settings can retain Markdown copies of the documents that were created and the
-original meeting audio:
+Every successful transcription produces `transcript.pdf` and `transcript.md`.
+A successful OpenRouter post-processing request also produces `summary.pdf` and
+`summary.md`. The original meeting audio remains optional:
 
 ```text
 transcript.pdf

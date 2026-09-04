@@ -20,10 +20,8 @@ from PyQt5.QtCore import QPoint, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -59,12 +57,12 @@ MEETING_MODES = {
     MODE_IN_PERSON_ONE_ON_ONE,
     MODE_IN_PERSON_GROUP,
 }
-MEETING_MODE_OPTIONS = (
-    ("Online — One-on-One", MODE_ONLINE_ONE_ON_ONE),
-    ("Online — Group Meeting", MODE_ONLINE_GROUP),
-    ("In Person — One-on-One", MODE_IN_PERSON_ONE_ON_ONE),
-    ("In Person — Group Meeting", MODE_IN_PERSON_GROUP),
-)
+MEETING_MODE_LABELS = {
+    MODE_ONLINE_ONE_ON_ONE: "Online • 2 participants",
+    MODE_ONLINE_GROUP: "Online • 3+ participants",
+    MODE_IN_PERSON_ONE_ON_ONE: "In person • 2 participants",
+    MODE_IN_PERSON_GROUP: "In person • 3+ participants",
+}
 SCRIBE_APP_ID = "Koe.Scribe.App"
 SCRIBE_ICON = resource_path("assets", "koe-icon.ico")
 SUMMARY_READY = "ready"
@@ -84,6 +82,13 @@ def _is_in_person(meeting_mode: str) -> bool:
         MODE_IN_PERSON_ONE_ON_ONE,
         MODE_IN_PERSON_GROUP,
     }
+
+
+def _meeting_mode_label(meeting_mode: str) -> str:
+    try:
+        return MEETING_MODE_LABELS[meeting_mode]
+    except KeyError as exc:
+        raise ValueError(f"Unknown meeting mode: {meeting_mode}") from exc
 
 
 # ---------- single-instance lock ----------
@@ -282,7 +287,6 @@ class MeetingWorker(QThread):
         output_root: Path,
         started_at: datetime,
         save_audio: bool = False,
-        save_markdown: bool = False,
         meeting_dir: Path | None = None,
         participant_name: str = "",
     ):
@@ -297,7 +301,6 @@ class MeetingWorker(QThread):
         self.output_root = output_root
         self.started_at = started_at
         self.save_audio = save_audio
-        self.save_markdown = save_markdown
         self.meeting_dir = Path(meeting_dir) if meeting_dir is not None else None
 
     def run(self):
@@ -467,14 +470,10 @@ class MeetingWorker(QThread):
 
             transcript_markdown_path = meeting_dir / "transcript.md"
             summary_markdown_path = meeting_dir / "summary.md"
-            if self.save_markdown:
-                transcript_markdown_path.write_text(transcript_md, encoding="utf-8")
-                if summary_text is not None:
-                    summary_markdown_path.write_text(summary_text, encoding="utf-8")
-                else:
-                    summary_markdown_path.unlink(missing_ok=True)
+            transcript_markdown_path.write_text(transcript_md, encoding="utf-8")
+            if summary_text is not None:
+                summary_markdown_path.write_text(summary_text, encoding="utf-8")
             else:
-                transcript_markdown_path.unlink(missing_ok=True)
                 summary_markdown_path.unlink(missing_ok=True)
 
             # ----- optional durable audio, then temp cleanup -----
@@ -541,30 +540,218 @@ def _meeting_directory(
     return output_root / folder_name
 
 
+# ---------- meeting type chooser ----------
+
+
+class MeetingTypeDialog(QDialog):
+    """Collect location and participant count in two explicit steps."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected_mode: str | None = None
+        self.selected_location: str | None = None
+        self.setWindowTitle("Choose meeting type")
+        self.setWindowFlags(
+            (self.windowFlags() | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+            & ~Qt.WindowContextHelpButtonHint
+        )
+        self.setFixedSize(500, 160)
+        self.setStyleSheet(self._stylesheet())
+        apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 12, 28, 12)
+        outer.setSpacing(0)
+
+        self.pages = QStackedWidget()
+        self.location_page = self._choice_page(
+            "How is this meeting happening?",
+            (("Online", "online"), ("In person", "in_person")),
+            self._select_location,
+        )
+        self.participant_page = self._participant_page()
+        self.pages.addWidget(self.location_page)
+        self.pages.addWidget(self.participant_page)
+        outer.addWidget(self.pages)
+
+    @staticmethod
+    def _stylesheet() -> str:
+        return (
+            theme.application_stylesheet()
+            + f"""
+            QLabel#modeChooserHeading {{
+                color: {theme.TEXT_COLOR};
+                font-size: 17pt;
+                font-weight: 700;
+            }}
+            QPushButton#meetingModeChoice {{
+                min-height: 52px;
+                padding: 0 14px;
+                background: {theme.SURFACE_COLOR};
+                border: 1px solid {theme.BORDER_COLOR};
+                border-radius: 8px;
+                color: {theme.TEXT_COLOR};
+                font-size: 10.5pt;
+                font-weight: 600;
+            }}
+            QPushButton#meetingModeChoice:hover,
+            QPushButton#meetingModeChoice:focus {{
+                background: {theme.SURFACE_HOVER};
+                border-color: {theme.INPUT_FOCUS_BORDER};
+            }}
+            QPushButton#meetingModeBack {{
+                min-height: 22px;
+                padding: 0;
+                background: transparent;
+                border: none;
+                color: {theme.SECONDARY_TEXT};
+                font-size: 9.5pt;
+                text-align: left;
+            }}
+            QPushButton#meetingModeBack:hover,
+            QPushButton#meetingModeBack:focus {{
+                color: {theme.TEXT_COLOR};
+            }}
+            """
+        )
+
+    def _choice_page(self, heading_text, choices, callback) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        navigation_space = QWidget()
+        navigation_space.setFixedHeight(22)
+        layout.addWidget(navigation_space)
+        layout.addSpacing(12)
+
+        heading = QLabel(heading_text)
+        heading.setObjectName("modeChooserHeading")
+        self.location_heading = heading
+        layout.addWidget(heading)
+        layout.addSpacing(14)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        buttons = {}
+        for label, value in choices:
+            button = QPushButton(label)
+            button.setObjectName("meetingModeChoice")
+            button.setAccessibleName(label)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setDefault(False)
+            button.setAutoDefault(False)
+            button.clicked.connect(
+                lambda _checked=False, selected=value: callback(selected)
+            )
+            buttons[value] = button
+            row.addWidget(button, 1)
+        layout.addLayout(row)
+        layout.addStretch()
+
+        if heading_text.startswith("How is"):
+            self.location_buttons = buttons
+        return page
+
+    def _participant_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.back_button = QPushButton("← Back")
+        self.back_button.setObjectName("meetingModeBack")
+        self.back_button.setAccessibleName("Back to meeting location")
+        self.back_button.setCursor(Qt.PointingHandCursor)
+        self.back_button.setFixedSize(68, 24)
+        self.back_button.setDefault(False)
+        self.back_button.setAutoDefault(False)
+        self.back_button.clicked.connect(self._go_back)
+        layout.addWidget(self.back_button, 0, Qt.AlignLeft)
+        layout.addSpacing(12)
+
+        heading = QLabel("How many participants are there?")
+        heading.setObjectName("modeChooserHeading")
+        self.participant_heading = heading
+        layout.addWidget(heading)
+        layout.addSpacing(14)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        self.participant_buttons = {}
+        for label, value in (("2 participants", "two"), ("3+ participants", "group")):
+            button = QPushButton(label)
+            button.setObjectName("meetingModeChoice")
+            button.setAccessibleName(label)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setDefault(False)
+            button.setAutoDefault(False)
+            button.clicked.connect(
+                lambda _checked=False, selected=value: self._select_participants(
+                    selected
+                )
+            )
+            self.participant_buttons[value] = button
+            row.addWidget(button, 1)
+        layout.addLayout(row)
+        layout.addStretch()
+        return page
+
+    def _select_location(self, location: str) -> None:
+        if location not in {"online", "in_person"}:
+            return
+        self.selected_location = location
+        self.pages.setCurrentWidget(self.participant_page)
+        self.participant_buttons["two"].setFocus(Qt.OtherFocusReason)
+
+    def _select_participants(self, participants: str) -> None:
+        modes = {
+            ("online", "two"): MODE_ONLINE_ONE_ON_ONE,
+            ("online", "group"): MODE_ONLINE_GROUP,
+            ("in_person", "two"): MODE_IN_PERSON_ONE_ON_ONE,
+            ("in_person", "group"): MODE_IN_PERSON_GROUP,
+        }
+        mode = modes.get((self.selected_location, participants))
+        if mode:
+            self._select_mode(mode)
+
+    def _go_back(self) -> None:
+        self.selected_location = None
+        self.pages.setCurrentWidget(self.location_page)
+        self.location_buttons["online"].setFocus(Qt.OtherFocusReason)
+
+    def _select_mode(self, meeting_mode: str) -> None:
+        if meeting_mode not in MEETING_MODES:
+            return
+        self.selected_mode = meeting_mode
+        self.accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        enable_dark_titlebar(self)
+        apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
+
+
 # ---------- main window ----------
 
 
 class ScribeWindow(QMainWindow):
-    def __init__(self, meeting_mode: str | None = None):
+    def __init__(self, meeting_mode: str):
         super().__init__()
         if ConfigManager._instance is None:
             ConfigManager.initialize()
 
+        if meeting_mode not in MEETING_MODES:
+            raise ValueError("Scribe requires an explicitly selected meeting mode")
+
         self.user_name = ConfigManager.get_config_value("profile", "user_name") or "You"
         self.output_root = self._resolve_output_root()
-        saved_mode = ConfigManager.get_config_value(
-            "meeting_options", "last_meeting_mode"
-        )
-        self.meeting_mode = (
-            meeting_mode
-            if meeting_mode in MEETING_MODES
-            else (saved_mode if saved_mode in MEETING_MODES else MODE_ONLINE_ONE_ON_ONE)
-        )
+        self.meeting_mode = meeting_mode
         self.save_audio = bool(
             ConfigManager.get_config_value("meeting_options", "save_audio")
-        )
-        self.save_markdown = bool(
-            ConfigManager.get_config_value("meeting_options", "save_markdown")
         )
 
         self.setWindowTitle("Scribe")
@@ -623,6 +810,11 @@ class ScribeWindow(QMainWindow):
                 font-size: 17pt;
                 font-weight: 700;
             }}
+            QLabel#scribeModeSummary {{
+                color: {theme.SECONDARY_TEXT};
+                font-size: 9.5pt;
+                font-weight: 500;
+            }}
             QFrame#scribeDivider {{
                 background: {theme.DIVIDER_COLOR};
                 border: none;
@@ -633,33 +825,6 @@ class ScribeWindow(QMainWindow):
                 color: {theme.SECONDARY_TEXT};
                 font-size: 9pt;
                 font-weight: 650;
-            }}
-            QComboBox#meetingTypeSelector {{
-                min-height: 18px;
-                padding: 9px 34px 9px 11px;
-            }}
-            QComboBox#meetingTypeSelector::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 30px;
-                background: transparent;
-                border: none;
-            }}
-            QComboBox#meetingTypeSelector:hover {{
-                border-color: {theme.INPUT_FOCUS_BORDER};
-            }}
-            QComboBox#meetingTypeSelector:disabled {{
-                color: {theme.DIM_TEXT};
-                border-color: {theme.DIVIDER_COLOR};
-            }}
-            QComboBox#meetingTypeSelector QAbstractItemView {{
-                background: {theme.SURFACE_ELEVATED};
-                color: {theme.TEXT_COLOR};
-                border: 1px solid {theme.BORDER_COLOR};
-                selection-background-color: {theme.ACCENT_SOFT};
-                selection-color: {theme.TEXT_COLOR};
-                padding: 4px;
-                outline: none;
             }}
             QLabel#scribeTimer {{
                 background: transparent;
@@ -760,49 +925,36 @@ class ScribeWindow(QMainWindow):
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(14)
 
-        meeting_layout = QGridLayout()
+        meeting_layout = QHBoxLayout()
         meeting_layout.setContentsMargins(0, 0, 0, 0)
-        meeting_layout.setHorizontalSpacing(18)
-        meeting_layout.setVerticalSpacing(7)
-        meeting_layout.setColumnStretch(0, 1)
-        meeting_layout.setColumnStretch(1, 1)
+        meeting_layout.setSpacing(18)
 
-        self.meeting_type_label = QLabel("Meeting type")
-        self.meeting_type_label.setObjectName("meetingFieldTitle")
-        self.meeting_type_combo = QComboBox()
-        self.meeting_type_combo.setObjectName("meetingTypeSelector")
-        self.meeting_type_combo.setAccessibleName("Meeting type")
-        self.meeting_type_combo.setToolTip(
-            "Choose how people are joining. This locks when recording starts."
-        )
-        self.meeting_type_combo.setMaximumWidth(360)
-        for label, mode in MEETING_MODE_OPTIONS:
-            self.meeting_type_combo.addItem(label, mode)
-        selected_index = self.meeting_type_combo.findData(self.meeting_mode)
-        self.meeting_type_combo.setCurrentIndex(max(0, selected_index))
-        self.meeting_type_combo.currentIndexChanged.connect(
-            self._on_meeting_type_changed
-        )
-
+        self.meeting_name_field = QWidget()
+        meeting_name_layout = QVBoxLayout(self.meeting_name_field)
+        meeting_name_layout.setContentsMargins(0, 0, 0, 0)
+        meeting_name_layout.setSpacing(7)
         self.meeting_field_label = QLabel("Meeting name")
         self.meeting_field_label.setObjectName("meetingFieldTitle")
         self.meeting_name_input = QLineEdit()
         self.meeting_name_input.setPlaceholderText(
             "e.g. Invoice workflow or Weekly sync"
         )
-        self.meeting_name_input.setMaximumWidth(360)
+        meeting_name_layout.addWidget(self.meeting_field_label)
+        meeting_name_layout.addWidget(self.meeting_name_input)
 
+        self.participant_field = QWidget()
+        participant_layout = QVBoxLayout(self.participant_field)
+        participant_layout.setContentsMargins(0, 0, 0, 0)
+        participant_layout.setSpacing(7)
         self.participant_field_label = QLabel("Participant name")
         self.participant_field_label.setObjectName("meetingFieldTitle")
         self.participant_input = QLineEdit()
         self.participant_input.setPlaceholderText("Full name works best")
-        self.participant_input.setMaximumWidth(360)
-        meeting_layout.addWidget(self.meeting_type_label, 0, 0)
-        meeting_layout.addWidget(self.meeting_type_combo, 1, 0)
-        meeting_layout.addWidget(self.meeting_field_label, 0, 1)
-        meeting_layout.addWidget(self.meeting_name_input, 1, 1)
-        meeting_layout.addWidget(self.participant_field_label, 2, 0)
-        meeting_layout.addWidget(self.participant_input, 3, 0)
+        participant_layout.addWidget(self.participant_field_label)
+        participant_layout.addWidget(self.participant_input)
+
+        meeting_layout.addWidget(self.meeting_name_field, 1)
+        meeting_layout.addWidget(self.participant_field, 1)
         self._update_mode_fields()
 
         self.action_stack = QStackedWidget()
@@ -879,9 +1031,18 @@ class ScribeWindow(QMainWindow):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(14)
+        title_block = QWidget()
+        title_layout = QVBoxLayout(title_block)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(2)
         heading = QLabel("Scribe")
         heading.setObjectName("scribeHeading")
-        header_layout.addWidget(heading)
+        self.meeting_mode_summary = QLabel(_meeting_mode_label(self.meeting_mode))
+        self.meeting_mode_summary.setObjectName("scribeModeSummary")
+        self.meeting_mode_summary.setAccessibleName("Meeting type")
+        title_layout.addWidget(heading)
+        title_layout.addWidget(self.meeting_mode_summary)
+        header_layout.addWidget(title_block)
         header_layout.addStretch()
         header_layout.addWidget(self.action_stack, 0, Qt.AlignVCenter)
         header_layout.addWidget(self.timer_label, 0, Qt.AlignVCenter)
@@ -931,23 +1092,8 @@ class ScribeWindow(QMainWindow):
 
     def _update_mode_fields(self) -> None:
         one_on_one = _is_one_on_one(self.meeting_mode)
-        self.participant_field_label.setVisible(one_on_one)
-        self.participant_input.setVisible(one_on_one)
+        self.participant_field.setVisible(one_on_one)
         self.centralWidget().updateGeometry()
-
-    def _on_meeting_type_changed(self, index: int) -> None:
-        selected_mode = self.meeting_type_combo.itemData(index)
-        if selected_mode not in MEETING_MODES or selected_mode == self.meeting_mode:
-            return
-        self.meeting_mode = selected_mode
-        self._update_mode_fields()
-        ConfigManager.set_config_value(
-            selected_mode, "meeting_options", "last_meeting_mode"
-        )
-        try:
-            ConfigManager.save_config()
-        except OSError:
-            pass
 
     def _on_record_clicked(self):
         if self.capture and self.capture.is_recording():
@@ -1091,10 +1237,12 @@ class ScribeWindow(QMainWindow):
         self.recording_started_at = datetime.now()
         if self.meeting_started_at is None:
             self.meeting_started_at = self.recording_started_at
+        ConfigManager.console_print(
+            f"Scribe recording started with meeting mode: {self.meeting_mode}"
+        )
         self.tick_seconds = 0
         self.timer_label.setText("00:00")
         self._set_timer_recording(True)
-        self.meeting_type_combo.setEnabled(False)
         self.elapsed_timer.start(1000)
         self._set_record_button_state(recording=True)
 
@@ -1140,7 +1288,6 @@ class ScribeWindow(QMainWindow):
             or self.recording_started_at
             or datetime.now(),
             save_audio=self.save_audio,
-            save_markdown=self.save_markdown,
             meeting_dir=meeting_dir,
             participant_name=participant_name,
         )
@@ -1190,7 +1337,6 @@ class ScribeWindow(QMainWindow):
     def _show_processing(self):
         self._set_record_button_state(recording=False)
         self._set_timer_recording(False)
-        self.meeting_type_combo.setEnabled(False)
         self.meeting_name_input.setEnabled(False)
         self.participant_input.setEnabled(False)
         self.notes_edit.setEnabled(False)
@@ -1223,7 +1369,6 @@ class ScribeWindow(QMainWindow):
     def _on_worker_error(self, msg: str):
         self._set_record_button_state(recording=False)
         if "no speech detected" in msg.lower():
-            self.meeting_type_combo.setEnabled(True)
             self.meeting_name_input.setEnabled(True)
             self.participant_input.setEnabled(True)
             self.notes_edit.setEnabled(True)
@@ -1355,11 +1500,17 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     if SCRIBE_ICON.exists():
         app.setWindowIcon(QIcon(str(SCRIBE_ICON)))
 
-    window = ScribeWindow()
+    chooser = MeetingTypeDialog()
+    if chooser.exec_() != QDialog.Accepted or chooser.selected_mode is None:
+        return
+
+    window = ScribeWindow(chooser.selected_mode)
     window.show()
+    app.setQuitOnLastWindowClosed(True)
     sys.exit(app.exec_())
 
 

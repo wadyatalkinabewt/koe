@@ -56,7 +56,8 @@ instance, confirm that no snippet or Scribe recording is active.
   `DEEPGRAM_API_KEY`, and `MISTRAL_API_KEY`. `OPENROUTER_API_KEY` is optional
   post-processing configuration and is never used as a transcription key.
 - Every ElevenLabs request uses `no_verbatim=true`.
-- Snippet audio never persists to disk.
+- Normal Snippet audio never persists to disk. Cancelling may retain one
+  verified `logs/recoverable-snippet.wav`, which the next Snippet start deletes.
 - Scribe sends one aligned mono upload. ElevenLabs explicitly sets
   `use_multi_channel=false`; other adapters receive that same mono file.
 - OpenRouter is confined to Scribe post-processing and requires Zero Data

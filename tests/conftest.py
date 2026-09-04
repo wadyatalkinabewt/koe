@@ -49,8 +49,6 @@ def mock_config():
         "meeting_options": {
             "root_folder": None,
             "save_audio": False,
-            "save_markdown": False,
-            "last_meeting_mode": "online_one_on_one",
         },
         "misc": {
             "noise_on_completion": True,

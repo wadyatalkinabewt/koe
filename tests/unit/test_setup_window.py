@@ -68,8 +68,8 @@ def test_first_run_defaults_have_empty_custom_corrections(monkeypatch):
     config = yaml.safe_load(config_path().read_text(encoding="utf-8"))
 
     assert config["profile"]["user_name"] == "Alex"
-    assert config["meeting_options"]["save_markdown"] is False
-    assert config["meeting_options"]["last_meeting_mode"] == "online_one_on_one"
+    assert "save_markdown" not in config["meeting_options"]
+    assert "last_meeting_mode" not in config["meeting_options"]
     assert config["transcription_options"]["provider"] == "elevenlabs"
     assert config["transcription_options"]["corrections"] == {}
 

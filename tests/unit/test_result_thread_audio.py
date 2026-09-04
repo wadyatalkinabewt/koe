@@ -1,4 +1,5 @@
 import sys
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -395,7 +396,9 @@ def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
     assert len(audio) == 4 * 960
 
 
-def test_cancel_discards_audio_before_transcription(monkeypatch):
+def test_cancel_saves_one_recoverable_wav_without_transcription(
+    tmp_path, monkeypatch
+):
     import result_thread
     from result_thread import ResultThread
 
@@ -411,6 +414,8 @@ def test_cancel_discards_audio_before_transcription(monkeypatch):
         return np.ones(1600, dtype=np.int16)
 
     monkeypatch.setattr(thread, "_record_audio", record_then_cancel)
+    recovery_path = tmp_path / "recoverable-snippet.wav"
+    monkeypatch.setattr(result_thread, "snippet_recovery_path", lambda: recovery_path)
     monkeypatch.setattr(
         result_thread,
         "transcribe",
@@ -423,6 +428,36 @@ def test_cancel_discards_audio_before_transcription(monkeypatch):
 
     assert cancelled == [True]
     assert results == []
+    assert recovery_path.exists()
+    with wave.open(str(recovery_path), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 16000
+        assert wav_file.getnframes() == 1600
+
+
+def test_next_snippet_start_deletes_previous_recovery(tmp_path, monkeypatch):
+    import result_thread
+    from result_thread import ResultThread
+
+    recovery_path = tmp_path / "recoverable-snippet.wav"
+    recovery_path.write_bytes(b"previous cancelled audio")
+    observed = []
+    thread = ResultThread()
+
+    def record_audio():
+        observed.append(recovery_path.exists())
+        thread.sample_rate = 16000
+        return np.ones(1600, dtype=np.int16)
+
+    monkeypatch.setattr(result_thread, "snippet_recovery_path", lambda: recovery_path)
+    monkeypatch.setattr(thread, "_record_audio", record_audio)
+    monkeypatch.setattr(result_thread, "transcribe", lambda *_args, **_kwargs: "done")
+
+    thread.run()
+
+    assert observed == [False]
+    assert not recovery_path.exists()
 
 
 def test_result_thread_transcribes_without_audio_retention_argument(monkeypatch):

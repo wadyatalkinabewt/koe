@@ -230,10 +230,9 @@ class SettingsWindow(BaseWindow):
 
         scribe = self._section(
             "Scribe",
-            "Transcript PDFs are always saved; summaries are added when available.",
+            "Transcript PDF and Markdown files are always saved; summaries are added "
+            "in both formats when available.",
         )
-        self.save_markdown_checkbox = ToggleRow("Save Markdown copies")
-        scribe.layout().addWidget(self.save_markdown_checkbox)
         self.save_meeting_audio_checkbox = ToggleRow("Save Scribe meeting audio")
         scribe.layout().addWidget(self.save_meeting_audio_checkbox)
         self.content_layout.addWidget(scribe)
@@ -316,9 +315,6 @@ class SettingsWindow(BaseWindow):
         self.save_meeting_audio_checkbox.setChecked(
             bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
         )
-        self.save_markdown_checkbox.setChecked(
-            bool(ConfigManager.get_config_value("meeting_options", "save_markdown"))
-        )
         self.hotkey_input.setText(
             ConfigManager.get_config_value("recording_options", "activation_key")
             or "ctrl+shift+space"
@@ -338,7 +334,6 @@ class SettingsWindow(BaseWindow):
             field.textChanged.connect(self._schedule_save)
         for toggle in (
             self.save_meeting_audio_checkbox,
-            self.save_markdown_checkbox,
             self.beep_checkbox,
         ):
             toggle.toggled.connect(self._schedule_save)
@@ -382,11 +377,6 @@ class SettingsWindow(BaseWindow):
             self.save_meeting_audio_checkbox.isChecked(),
             "meeting_options",
             "save_audio",
-        )
-        ConfigManager.set_config_value(
-            self.save_markdown_checkbox.isChecked(),
-            "meeting_options",
-            "save_markdown",
         )
         ConfigManager.set_config_value(
             self.hotkey_input.text().strip() or "ctrl+shift+space",

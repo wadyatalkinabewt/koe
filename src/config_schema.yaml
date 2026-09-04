@@ -15,19 +15,6 @@ meeting_options:
     value: false
     type: bool
     description: "Keep microphone.wav and meeting-audio.wav with completed Scribe output."
-  save_markdown:
-    value: false
-    type: bool
-    description: "Also keep Markdown copies of each PDF document Scribe creates."
-  last_meeting_mode:
-    value: online_one_on_one
-    type: str
-    options:
-      - online_one_on_one
-      - online_group
-      - in_person_one_on_one
-      - in_person_group
-    description: "Last Scribe meeting type selected in the meeting window."
 
 # Transcription
 model_options:

@@ -75,7 +75,6 @@ def _run_summary_worker(tmp_path, monkeypatch, *, api_key, analyze):
         notes_text="",
         output_root=tmp_path / "Meetings",
         started_at=datetime(2026, 9, 1, 9, 0),
-        save_markdown=True,
     )
     completed = []
     errors = []
@@ -185,7 +184,6 @@ def test_group_worker_sends_one_mixed_request_and_saves_original_sources(
         output_root=tmp_path / "Meetings",
         started_at=datetime(2026, 7, 13, 9, 0),
         save_audio=True,
-        save_markdown=True,
     )
     worker.run()
 
@@ -265,7 +263,6 @@ def test_group_worker_applies_contextual_names_to_transcript_and_summary(
         notes_text="",
         output_root=tmp_path / "Meetings",
         started_at=datetime(2026, 8, 20, 9, 0),
-        save_markdown=True,
     )
     worker.run()
 
@@ -354,7 +351,6 @@ def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(
         notes_text="",
         output_root=tmp_path / "Meetings",
         started_at=datetime(2026, 7, 15, 9, 0),
-        save_markdown=True,
     )
 
     worker.run()
@@ -377,7 +373,7 @@ def test_group_worker_http_boundary_is_one_mono_non_multichannel_upload(
     )
 
 
-def test_group_worker_defaults_to_pdf_only_when_loopback_stream_is_empty(
+def test_group_worker_always_writes_markdown_when_loopback_stream_is_empty(
     tmp_path, monkeypatch
 ):
     import transcription
@@ -434,8 +430,8 @@ def test_group_worker_defaults_to_pdf_only_when_loopback_stream_is_empty(
     assert len(completed) == 1
     _assert_pdf(meeting_dir / "transcript.pdf")
     _assert_pdf(meeting_dir / "summary.pdf")
-    assert not (meeting_dir / "transcript.md").exists()
-    assert not (meeting_dir / "summary.md").exists()
+    assert (meeting_dir / "transcript.md").is_file()
+    assert (meeting_dir / "summary.md").is_file()
     assert not (meeting_dir / "notes.md").exists()
     assert not source_dir.exists()
 
@@ -577,7 +573,6 @@ def test_in_person_worker_uses_shared_mic_and_omits_silent_loopback(
         output_root=tmp_path / "Meetings",
         started_at=datetime(2026, 7, 27, 9, 0),
         save_audio=True,
-        save_markdown=True,
     )
     worker.run()
 
@@ -689,7 +684,6 @@ def test_in_person_one_on_one_uses_known_owner_label_to_name_other_speaker(
         notes_text="",
         output_root=tmp_path / "Meetings",
         started_at=datetime(2026, 7, 27, 11, 0),
-        save_markdown=True,
         participant_name="Virginia",
     )
     worker.run()
@@ -755,7 +749,6 @@ def test_online_one_on_one_worker_diarizes_and_does_not_save_audio(
         output_root=tmp_path / "Meetings",
         started_at=datetime(2026, 7, 13, 9, 0),
         save_audio=False,
-        save_markdown=True,
         participant_name="Jordan",
     )
     worker.run()

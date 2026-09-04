@@ -184,18 +184,8 @@ class TestConfigSchema:
         save_audio = schema["meeting_options"]["save_audio"]
         assert save_audio["type"] == "bool"
         assert save_audio["value"] is False
-        save_markdown = schema["meeting_options"]["save_markdown"]
-        assert save_markdown["type"] == "bool"
-        assert save_markdown["value"] is False
-        last_mode = schema["meeting_options"]["last_meeting_mode"]
-        assert last_mode["type"] == "str"
-        assert last_mode["value"] == "online_one_on_one"
-        assert last_mode["options"] == [
-            "online_one_on_one",
-            "online_group",
-            "in_person_one_on_one",
-            "in_person_group",
-        ]
+        assert "save_markdown" not in schema["meeting_options"]
+        assert "last_meeting_mode" not in schema["meeting_options"]
 
         corrections = schema["transcription_options"]["corrections"]
         assert corrections["type"] == "dict"
