@@ -1,5 +1,6 @@
 import io
 import sys
+import threading
 import wave
 from pathlib import Path
 
@@ -401,11 +402,18 @@ def test_group_upload_retries_wrapped_write_timeout_from_byte_zero(
     assert delays == [2.0, 5.0]
 
 
-def test_snippet_response_is_deleted_after_successful_receipt(monkeypatch):
+@pytest.mark.parametrize("delete_status", [200, 503])
+def test_snippet_returns_while_background_deletion_is_blocked(monkeypatch, delete_status):
     import transcription
 
     events = []
     deleted = {}
+    delete_started = threading.Event()
+    release_delete = threading.Event()
+    delete_finished = threading.Event()
+    messages = []
+    monkeypatch.setattr(transcription, "_debug", messages.append)
+    monkeypatch.setattr(transcription.time, "sleep", lambda _delay: None)
 
     class PostResponse:
         status_code = 200
@@ -420,7 +428,7 @@ def test_snippet_response_is_deleted_after_successful_receipt(monkeypatch):
             }
 
     class DeleteResponse:
-        status_code = 200
+        status_code = delete_status
 
     monkeypatch.setattr(
         transcription.requests,
@@ -429,25 +437,43 @@ def test_snippet_response_is_deleted_after_successful_receipt(monkeypatch):
     )
 
     def fake_delete(url, *, headers, timeout):
+        deleted["worker"] = threading.current_thread()
+        delete_started.set()
+        release_delete.wait(timeout=5)
         events.append("deleted")
         deleted.update(url=url, headers=headers, timeout=timeout)
+        delete_finished.set()
         return DeleteResponse()
 
     monkeypatch.setattr(transcription.requests, "delete", fake_delete)
 
-    result, error = transcription._elevenlabs_post(
-        io.BytesIO(b"RIFF"),
-        [("model_id", "scribe_v2")],
-        "test-key",
-        timeout=180,
-    )
+    try:
+        result, error = transcription._elevenlabs_post(
+            io.BytesIO(b"RIFF"),
+            [("model_id", "scribe_v2")],
+            "test-key",
+            timeout=180,
+        )
 
-    assert error is None
-    assert result["text"] == "Received safely."
-    assert events == ["decoded", "deleted"]
+        assert error is None
+        assert result["text"] == "Received safely."
+        assert delete_started.wait(timeout=2)
+        assert not delete_finished.is_set(), "text delivery waited for deletion"
+        assert events == ["decoded"]
+        assert not deleted["worker"].daemon
+    finally:
+        release_delete.set()
+        if "worker" in deleted:
+            deleted["worker"].join(timeout=2)
+            assert not deleted["worker"].is_alive()
+
+    attempts = 1 if delete_status == 200 else transcription.ELEVENLABS_DELETE_MAX_ATTEMPTS
+    assert events == ["decoded"] + ["deleted"] * attempts
     assert deleted["url"].endswith("/snippet%2Ftranscript%20id")
     assert deleted["headers"] == {"xi-api-key": "test-key"}
     assert deleted["timeout"] == transcription.ELEVENLABS_DELETE_TIMEOUT
+    assert any("snippet request completed in" in message for message in messages)
+    assert any("background deletion finished in" in message for message in messages)
 
 
 def test_meeting_response_is_deleted_after_successful_receipt(tmp_path, monkeypatch):

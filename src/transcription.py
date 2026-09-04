@@ -13,6 +13,7 @@ stay coherent.
 import io
 import os
 import re
+import threading
 import time
 import wave
 from collections.abc import Callable
@@ -262,6 +263,7 @@ def _elevenlabs_post(
     timeout: float,
 ) -> tuple[dict | None, str | None]:
     """Submit one synchronous ElevenLabs speech-to-text request."""
+    started = time.perf_counter()
     try:
         response = requests.post(
             ELEVENLABS_URL,
@@ -281,8 +283,48 @@ def _elevenlabs_post(
         result = response.json()
     except ValueError:
         return None, "ElevenLabs returned an invalid JSON response"
-    _delete_elevenlabs_transcript(result, api_key)
+    _debug(
+        f"ElevenLabs snippet request completed in {time.perf_counter() - started:.2f}s "
+        "(upload + recognition + response decoding; excludes deletion)"
+    )
+    _delete_elevenlabs_transcript_in_background(result, api_key)
     return result, None
+
+
+def _delete_elevenlabs_transcript_in_background(result: object, api_key: str) -> None:
+    """Start cleanup without holding up snippet delivery or retaining its text."""
+    transcription_id = (
+        str(result.get("transcription_id") or "").strip()
+        if isinstance(result, dict)
+        else ""
+    )
+    if not transcription_id:
+        _debug("ElevenLabs response had no deletable transcription_id")
+        return
+
+    def cleanup() -> None:
+        started = time.perf_counter()
+        deleted = False
+        try:
+            deleted = _delete_elevenlabs_transcript(
+                {"transcription_id": transcription_id}, api_key
+            )
+        except Exception as exc:
+            _debug(f"ElevenLabs background deletion failed: {type(exc).__name__}")
+        finally:
+            _debug(
+                f"ElevenLabs background deletion finished in "
+                f"{time.perf_counter() - started:.2f}s (success={deleted})"
+            )
+
+    try:
+        # Let bounded cleanup/retries finish on normal exit instead of abandoning
+        # remote data. This thread never blocks text delivery or the next snippet.
+        threading.Thread(
+            target=cleanup, name="koe-transcript-cleanup", daemon=False
+        ).start()
+    except RuntimeError:
+        _debug("ElevenLabs background deletion could not start; transcript retained remotely")
 
 
 def _delete_elevenlabs_transcript(result: object, api_key: str) -> bool:

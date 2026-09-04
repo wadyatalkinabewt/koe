@@ -64,7 +64,9 @@ The source map and the invariants between those modules are documented in
 - Scribe uploads one aligned recording rather than separate microphone and
   loopback tracks.
 - Successfully decoded ElevenLabs transcripts are deleted from ElevenLabs by
-  transcription ID; failed deletions are retried and recorded locally.
+  transcription ID; failed deletions are retried and recorded locally. Snippets
+  deliver text without waiting for background deletion. Request and cleanup
+  durations are logged separately; pending cleanup can finish during normal exit.
 - Deepgram and Mistral return synchronous transcription responses without the
   deletable transcript ID Koe uses for ElevenLabs. Their account retention
   policies therefore apply.
