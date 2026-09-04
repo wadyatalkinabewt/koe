@@ -266,7 +266,7 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     chooser.show()
     qapp.processEvents()
     assert chooser.selected_mode is None
-    assert chooser.minimumSize() == chooser.maximumSize() == QSize(500, 160)
+    assert chooser.minimumSize() == chooser.maximumSize() == QSize(500, 180)
     assert chooser.pages.currentWidget() is chooser.location_page
     assert [button.text() for button in chooser.location_buttons.values()] == [
         "Online",
@@ -302,7 +302,8 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
         button.mapTo(chooser, QPoint()).y() + button.height()
         for button in chooser.participant_buttons.values()
     )
-    assert chooser.height() - participant_buttons_bottom <= 22
+    bottom_breathing_room = chooser.height() - participant_buttons_bottom
+    assert 30 <= bottom_breathing_room <= 45
     QTest.mouseClick(chooser.back_button, Qt.LeftButton)
     assert chooser.pages.currentWidget() is chooser.location_page
     QTest.mouseClick(chooser.location_buttons["online"], Qt.LeftButton)

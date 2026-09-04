@@ -555,12 +555,12 @@ class MeetingTypeDialog(QDialog):
             (self.windowFlags() | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
             & ~Qt.WindowContextHelpButtonHint
         )
-        self.setFixedSize(500, 160)
+        self.setFixedSize(500, 180)
         self.setStyleSheet(self._stylesheet())
         apply_window_icon(self, SCRIBE_ICON, app_id=SCRIBE_APP_ID)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 12, 28, 12)
+        outer.setContentsMargins(28, 12, 28, 20)
         outer.setSpacing(0)
 
         self.pages = QStackedWidget()
