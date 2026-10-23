@@ -696,6 +696,65 @@ def test_only_tray_exit_is_wired_to_process_shutdown():
     assert "exit_action.triggered.connect(self.exit_app)" in tray_source
 
 
+@pytest.mark.parametrize("outcome", ["complete", "error", "dismiss"])
+def test_slow_transcription_keeps_recording_duration_and_stops_timers(qapp, monkeypatch, outcome):
+    from ui import status_window
+
+    clock = [100.0]
+    monkeypatch.setattr(status_window.time, "monotonic", lambda: clock[0])
+    status = status_window.StatusWindow()
+    try:
+        status.updateStatus("recording")
+        original_size = status.size()
+        status.timer_label.setText("00:38")
+        status.updateStatus("transcribing")
+        assert status.timer.isActive()
+        assert status.timer_label.text() == "00:38"
+        assert status.timer_label.toolTip() == "Recording duration"
+        transcribing_text_width = status.status_label.fontMetrics().horizontalAdvance(
+            status.status_label.text()
+        )
+        clock[0] = 114.0
+        status.update_timer()
+        assert status.timer_label.text() == "00:38"
+        assert status.status_label.text() == "Transcribing"
+        clock[0] = 115.0
+        status.update_timer()
+        assert status.timer_label.text() == "00:38"
+        assert status.status_label.text() == "Waiting"
+        clock[0] = 163.6
+        status.update_timer()
+        assert status.timer_label.text() == "00:38"
+        assert status.size() == original_size
+        assert status.status_label.fontMetrics().horizontalAdvance(
+            status.status_label.text()
+        ) <= transcribing_text_width
+        assert "Snippets" in status.cancel_button.toolTip()
+        assert status.cancel_button.isEnabled()
+
+        dismissed = []
+        status.dismissSignal.connect(lambda: dismissed.append(True))
+        if outcome == "dismiss":
+            status._handle_close()
+            assert dismissed == [True]
+        elif outcome == "error":
+            status.showError("Request failed")
+        else:
+            status.updateStatus("complete")
+        assert not status.timer.isActive()
+        assert not status.pulse_timer.isActive()
+        assert status.transcription_start_time is None
+
+        status.updateStatus("recording")
+        assert status.status_label.text() == "Listening"
+        assert status.status_label.toolTip() == ""
+        assert status.timer_label.text() == "00:00"
+    finally:
+        status.timer.stop()
+        status.pulse_timer.stop()
+        status.close()
+
+
 def test_dismissed_transcription_never_reaches_clipboard_or_beep(monkeypatch):
     import main
     from utils import ConfigManager
@@ -738,6 +797,37 @@ def test_dismissed_transcription_never_reaches_clipboard_or_beep(monkeypatch):
     assert fake.copied == []
     assert fake.key_listener.starts == 1
     assert fake.suppress_current_result is False
+
+
+def test_failed_snippet_keeps_error_card_without_completion_sound(monkeypatch):
+    import main
+
+    class Status:
+        current_status = "error"
+
+        def isVisible(self):
+            return True
+
+        def updateStatus(self, _status):
+            pytest.fail("an error card must not be changed to complete")
+
+    class Listener:
+        def start(self):
+            pass
+
+    class FakeApp:
+        recording_start_time = 1.0
+        processing_result = False
+        suppress_current_result = False
+        status_window = Status()
+        key_listener = Listener()
+
+    monkeypatch.setattr(main, "play_sound_file", lambda *_args: pytest.fail("failure played completion sound"))
+    monkeypatch.setattr(main.ConfigManager, "get_config_value", lambda *_keys: True)
+    app = FakeApp()
+    main.KoeApp.on_transcription_complete(app, "")
+    assert app.processing_result is False
+    assert app.recording_start_time is None
 
 
 def test_completion_sound_is_short_and_bounded():

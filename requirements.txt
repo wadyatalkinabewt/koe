@@ -7,6 +7,7 @@ pyperclip==1.11.0
 python-dotenv==1.2.3
 pywin32==311
 requests==2.34.2
+certifi==2026.10.19
 reportlab==4.4.9
 scipy==1.17.1
 sounddevice==0.5.5

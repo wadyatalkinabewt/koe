@@ -433,7 +433,7 @@ def test_snippet_returns_while_background_deletion_is_blocked(monkeypatch, delet
         status_code = delete_status
 
     monkeypatch.setattr(
-        transcription.requests,
+        transcription.snippet_http,
         "post",
         lambda *_args, **_kwargs: PostResponse(),
     )
@@ -537,7 +537,7 @@ def test_invalid_transcription_response_is_not_deleted(monkeypatch):
             raise ValueError("invalid JSON")
 
     monkeypatch.setattr(
-        transcription.requests,
+        transcription.snippet_http,
         "post",
         lambda *_args, **_kwargs: PostResponse(),
     )

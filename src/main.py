@@ -365,15 +365,21 @@ class KoeApp(QObject):
                 else:
                     ConfigManager.console_print("WARNING: clipboard copy failed")
 
-            if not suppressed and ConfigManager.get_config_value(
-                "misc", "noise_on_completion"
+            if (
+                not suppressed
+                and result
+                and result.strip()
+                and ConfigManager.get_config_value("misc", "noise_on_completion")
             ):
                 try:
                     play_sound_file(resource_path("assets", "beep.wav"))
                 except Exception as e:
                     ConfigManager.console_print(f"Beep failed: {e}")
 
-            if self.status_window.isVisible():
+            if (
+                self.status_window.isVisible()
+                and getattr(self.status_window, "current_status", None) != "error"
+            ):
                 self.status_window.updateStatus("complete")
 
             self.key_listener.start()

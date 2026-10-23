@@ -19,6 +19,7 @@ import wave
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, Queue
 from urllib.parse import quote
 
 import numpy as np
@@ -26,7 +27,7 @@ import requests
 from dotenv import load_dotenv
 
 from paths import default_snippets_dir, env_path, logs_dir
-from providers import deepgram, mistral
+from providers import deepgram, mistral, snippet_http
 from utils import ConfigManager
 
 _DEBUG_LOG = logs_dir() / "debug.log"
@@ -52,6 +53,10 @@ SUPPORTED_TRANSCRIPTION_PROVIDERS = ("elevenlabs", "deepgram", "mistral")
 ELEVENLABS_DELETE_MAX_ATTEMPTS = 3
 ELEVENLABS_DELETE_RETRY_DELAYS = (1.0, 3.0)
 ELEVENLABS_DELETE_TIMEOUT = 15.0
+ELEVENLABS_SNIPPET_CONNECT_TIMEOUT = 10.0
+ELEVENLABS_SNIPPET_HEDGE_DELAY = 15.0
+# A pending loser must finish before another snippet can launch a second request.
+_SNIPPET_HEDGE_SLOT = threading.BoundedSemaphore(1)
 MAX_CORRECTION_LENGTH = 100
 MAX_DEEPGRAM_FILE_BYTES = 2_000_000_000
 MAX_MISTRAL_FILE_BYTES = 500_000_000
@@ -263,16 +268,116 @@ def _elevenlabs_post(
     api_key: str,
     timeout: float,
 ) -> tuple[dict | None, str | None]:
-    """Submit one synchronous ElevenLabs speech-to-text request."""
+    """Recover from a stalled snippet with at most one additional request.
+
+    Both requests use identical in-memory audio and the configured provider.
+    Only the chosen response reaches formatting/storage/clipboard. The losing
+    request still completes deletion, without blocking delivery of the winner.
+    Meetings never use this path. Slow requests can incur a second STT charge.
+    """
+    audio = buffer.getvalue()
+    replies = Queue()
+    lock = threading.Lock()
+    state = {"pending": 1, "reserved": False}
+
+    def attempt(number):
+        try:
+            result, error = _elevenlabs_post_once(
+                io.BytesIO(audio), data, api_key, timeout, attempt=number
+            )
+            replies.put((result, error))
+        except Exception as exc:
+            _debug(f"ElevenLabs snippet attempt {number} failed: {type(exc).__name__}")
+            replies.put((None, "ElevenLabs snippet request failed"))
+        finally:
+            with lock:
+                state["pending"] -= 1
+                if state["pending"] == 0 and state["reserved"]:
+                    state["reserved"] = False
+                    _SNIPPET_HEDGE_SLOT.release()
+
+    primary = threading.Thread(
+        target=attempt, args=(1,), name="koe-snippet-request", daemon=False
+    )
+    primary.start()
+    try:
+        reply = replies.get(timeout=ELEVENLABS_SNIPPET_HEDGE_DELAY)
+        if reply[1] == "ElevenLabs connection timeout":
+            # requests documents ConnectTimeout as safe to retry: the upload
+            # has not been submitted. Reuse the single recovery allowance.
+            _debug("ElevenLabs connection timed out before upload; retrying once")
+            return _elevenlabs_post_once(
+                io.BytesIO(audio), data, api_key, timeout, attempt=2
+            )
+        return reply
+    except Empty:
+        pass
+
+    # The primary may have completed just as the delay expired.
+    try:
+        return replies.get_nowait()
+    except Empty:
+        pass
+
+    if not _SNIPPET_HEDGE_SLOT.acquire(blocking=False):
+        _debug("ElevenLabs snippet still pending; earlier recovery request is finishing")
+        return replies.get()
+
+    with lock:
+        state["reserved"] = True
+        state["pending"] += 1
+    _debug(
+        f"ElevenLabs snippet pending after {ELEVENLABS_SNIPPET_HEDGE_DELAY:.0f}s; "
+        "starting one recovery request (may incur a second transcription charge)"
+    )
+    secondary = threading.Thread(
+        target=attempt, args=(2,), name="koe-snippet-recovery", daemon=False
+    )
+    try:
+        secondary.start()
+    except RuntimeError:
+        with lock:
+            state["pending"] -= 1
+            if state["pending"] == 0:
+                state["reserved"] = False
+                _SNIPPET_HEDGE_SLOT.release()
+        _debug("ElevenLabs snippet recovery worker could not start")
+        return replies.get()
+
+    responses = []
+    for _ in range(2):
+        result, error = replies.get()
+        if result is not None and not error and _elevenlabs_result_text(result):
+            return result, None
+        responses.append((result, error))
+    # A genuine empty response is preferable to turning silence into an error.
+    return next(
+        ((result, error) for result, error in responses if result is not None and not error),
+        responses[0],
+    )
+
+
+def _elevenlabs_post_once(
+    buffer: io.BytesIO,
+    data: list[tuple[str, str]],
+    api_key: str,
+    timeout: float,
+    *,
+    attempt: int = 1,
+) -> tuple[dict | None, str | None]:
+    """Submit one measured attempt and clean up every decoded response."""
     started = time.perf_counter()
     try:
-        response = requests.post(
+        response = snippet_http.post(
             ELEVENLABS_URL,
+            log=lambda message: _debug(f"ElevenLabs snippet attempt {attempt}: {message}"),
             headers={"xi-api-key": api_key},
             files={"file": ("audio.wav", buffer, "audio/wav")},
             data=data,
-            timeout=timeout,
+            timeout=(ELEVENLABS_SNIPPET_CONNECT_TIMEOUT, float(timeout)),
         )
+    except requests.ConnectTimeout:
+        return None, "ElevenLabs connection timeout"
     except requests.Timeout:
         return None, "ElevenLabs timeout"
     except requests.RequestException as exc:
@@ -475,7 +580,7 @@ def _transcribe_elevenlabs_audio(
     result, error = _elevenlabs_post(buffer, data, api_key, timeout=timeout)
     if error:
         _debug(error)
-        return {}
+        raise RuntimeError(error)
     return result if isinstance(result, dict) else {}
 
 

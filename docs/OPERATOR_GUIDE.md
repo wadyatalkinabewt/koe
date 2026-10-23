@@ -17,6 +17,28 @@ identify or unmute that endpoint, it reports an error instead of recording.
 A headset's independent physical mute button can still block audio even when
 Windows reports the microphone as unmuted. Scribe does not change mute settings.
 
+During transcription, the card keeps the recorded duration visible without
+counting transcription time. After 15 seconds its label changes to **Waiting**.
+This indicates a slow request, not confirmed provider progress. Dismissing this
+card hides it and suppresses clipboard copying and the completion sound; a
+successful response still saves the text to the rotating Snippets files. The
+request continues in the background.
+
+ElevenLabs snippets recover from a request that remains pending for 15 seconds
+by starting at most one additional request to ElevenLabs. The first nonempty
+successful result is used once; the late response is also deleted from the
+provider. If the recovery fails, Koe can still use the original response. This
+can incur a second transcription charge for a slow snippet, and both requests
+can still be slow. Another recovery cannot start until the previous pair has
+finished. Scribe meetings keep their single-upload behaviour.
+
+Connection establishment has a 10-second timeout and one retry when it times
+out before upload. An eventual request failure is reported as a failure rather
+than a successful empty snippet. Timing diagnostics separate connection,
+upload, and waiting for response headers; the last stage still combines network
+delay with provider processing. Normal process exit lets pending requests and
+remote cleanup finish.
+
 ## Transcription provider setup
 
 First-run setup offers ElevenLabs Scribe v2, Deepgram Nova-3, and Mistral

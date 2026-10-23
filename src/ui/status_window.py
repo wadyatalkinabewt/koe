@@ -68,6 +68,7 @@ class StatusWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.recording_start_time = None
+        self.transcription_start_time = None
         self._drag_pos = None
         self._pulse_on = True
         self.current_status = "idle"
@@ -141,6 +142,9 @@ class StatusWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.dismissSignal.emit()
         self.current_status = "dismissed"
+        self.timer.stop()
+        self.pulse_timer.stop()
+        self.transcription_start_time = None
         self.close()
 
     def paintEvent(self, event) -> None:
@@ -175,9 +179,21 @@ class StatusWindow(QMainWindow):
         self.indicator.set_color(color)
 
     def update_timer(self) -> None:
-        if self.recording_start_time is None:
+        if self.current_status == "transcribing":
+            if self.transcription_start_time is None:
+                return
+            elapsed = time.monotonic() - self.transcription_start_time
+            if elapsed >= 15:
+                self.status_label.setText("Waiting")
+                self.status_label.setToolTip(
+                    "Transcription is taking longer than usual. "
+                    "A successful result will still be saved to Snippets if you dismiss this card."
+                )
             return
-        elapsed = time.time() - self.recording_start_time
+        elif self.current_status == "recording" and self.recording_start_time is not None:
+            elapsed = time.time() - self.recording_start_time
+        else:
+            return
         minutes, seconds = divmod(int(elapsed), 60)
         self.timer_label.setText(f"{minutes:02d}:{seconds:02d}")
 
@@ -206,6 +222,9 @@ class StatusWindow(QMainWindow):
         self.current_status = status
 
         if status == "recording":
+            self.transcription_start_time = None
+            self.status_label.setToolTip("")
+            self.timer_label.setToolTip("Recording duration")
             self._set_state("Listening", theme.RECORDING_COLOR, cancellable=True)
             self.cancel_button.setAccessibleName("Cancel snippet")
             self.cancel_button.setToolTip("Cancel without transcribing")
@@ -215,21 +234,28 @@ class StatusWindow(QMainWindow):
             self.pulse_timer.start(700)
             self.show()
         elif status == "transcribing":
-            self.timer.stop()
+            self.recording_start_time = None
+            self.transcription_start_time = time.monotonic()
+            self.timer_label.setToolTip("Recording duration")
             self._set_state("Transcribing", theme.ACCENT_COLOR, cancellable=True)
             self.cancel_button.setAccessibleName("Dismiss transcription")
-            self.cancel_button.setToolTip("Dismiss without copying to the clipboard")
+            self.cancel_button.setToolTip(
+                "Hide without copying to the clipboard; a successful result is still saved to Snippets"
+            )
+            self.timer.start(1000)
             self.pulse_timer.start(700)
         elif status in ("complete", "cancelled"):
             self.timer.stop()
             self.pulse_timer.stop()
             self.recording_start_time = None
+            self.transcription_start_time = None
             self.cancel_button.hide()
             self.close()
         elif status == "error":
             self.timer.stop()
             self.pulse_timer.stop()
             self.recording_start_time = None
+            self.transcription_start_time = None
             self._set_state("Failed", theme.ERROR_COLOR, cancellable=False)
             QTimer.singleShot(3500, self.close)
 
@@ -238,6 +264,8 @@ class StatusWindow(QMainWindow):
         self.timer.stop()
         self.pulse_timer.stop()
         self.current_status = "error"
+        self.recording_start_time = None
+        self.transcription_start_time = None
         self._set_state("Failed", theme.ERROR_COLOR, cancellable=False)
         self.timer_label.setText("—")
         QTimer.singleShot(3500, self.close)
