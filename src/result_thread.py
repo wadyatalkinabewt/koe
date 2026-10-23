@@ -10,6 +10,7 @@ import numpy as np
 import sounddevice as sd
 from PyQt5.QtCore import QMutex, QThread, pyqtSignal
 
+from microphone_mute import ensure_microphone_unmuted
 from paths import logs_dir, snippet_recovery_path
 from transcription import transcribe
 from utils import ConfigManager
@@ -298,6 +299,34 @@ def _preferred_capture_device(wasapi_default):
     return wasapi_default
 
 
+def _unmute_input_device(device):
+    """Unmute only this capture endpoint, resolving legacy APIs conservatively."""
+    if device is None:
+        raise RuntimeError("The selected microphone has no device index")
+    info = sd.query_devices(device)
+    if int(info.get("max_input_channels") or 0) <= 0:
+        raise RuntimeError("The selected device is not a microphone")
+    if _device_host_api(device) == "Windows WASAPI":
+        wasapi_device = device
+    else:
+        name = " ".join(str(info.get("name") or "").casefold().split())
+        matches = [
+            index for index, candidate in enumerate(sd.query_devices())
+            if name
+            and int(candidate.get("max_input_channels") or 0) > 0
+            and " ".join(str(candidate.get("name") or "").casefold().split()) == name
+            and _device_host_api(index) == "Windows WASAPI"
+        ]
+        if len(matches) != 1:
+            raise RuntimeError("Cannot uniquely identify this microphone's Windows mute control")
+        wasapi_device = matches[0]
+    changed = ensure_microphone_unmuted(sd._libname, wasapi_device)
+    _debug(
+        f"  Windows microphone mute: {'cleared' if changed else 'already unmuted'} "
+        f"({_device_label(wasapi_device)})"
+    )
+
+
 def _open_input_stream(sound_device, callback, fallback_rate: int = 48000):
     """Open an input stream at the selected endpoint's native sample rate."""
     last_error = None
@@ -314,7 +343,7 @@ def _open_input_stream(sound_device, callback, fallback_rate: int = 48000):
                 callback=callback,
             )
             _debug(f"  Audio stream selected: {_device_label(device)}")
-            return stream, device, sample_rate, frame_size
+            return stream, getattr(stream, "device", device), sample_rate, frame_size
         except Exception as e:
             last_error = e
             _debug(f"  Audio stream failed for {_device_label(device)}: {e}")
@@ -523,6 +552,14 @@ class ResultThread(QThread):
                 preferred_device,
                 audio_callback,
             )
+            try:
+                _unmute_input_device(selected_device)
+            except Exception as exc:
+                stream.close()
+                raise RuntimeError(
+                    "Could not confirm the microphone is unmuted in Windows. "
+                    "Check its mute setting and try again. " + str(exc)
+                ) from exc
             _debug(
                 "  Capture configured: "
                 f"device={_device_label(selected_device)}, "

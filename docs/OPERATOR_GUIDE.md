@@ -10,6 +10,13 @@ one `recoverable-snippet.wav` in Koe's logs folder without transcribing it. The
 next Snippet start deletes that recovery file before recording, so recover or
 copy it before starting another Snippet.
 
+Starting a Snippet clears Windows mute on the microphone Koe actually opens,
+before audio capture starts. It leaves that microphone unmuted afterwards,
+including for other apps using it; input volume is unchanged. If Koe cannot
+identify or unmute that endpoint, it reports an error instead of recording.
+A headset's independent physical mute button can still block audio even when
+Windows reports the microphone as unmuted. Scribe does not change mute settings.
+
 ## Transcription provider setup
 
 First-run setup offers ElevenLabs Scribe v2, Deepgram Nova-3, and Mistral

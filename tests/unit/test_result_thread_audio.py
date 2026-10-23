@@ -8,6 +8,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 
+@pytest.fixture(autouse=True)
+def no_real_microphone_mute_changes(monkeypatch):
+    import result_thread
+
+    monkeypatch.setattr(result_thread, "_unmute_input_device", lambda _device: None)
+
+
 def test_record_audio_flushes_callback_frames_after_stop(monkeypatch):
     import result_thread
     from result_thread import ResultThread
@@ -532,3 +539,46 @@ def test_stop_recording_logs_the_explicit_caller_reason(monkeypatch):
         "hotkey toggle" in message and "was_recording=True" in message
         for message in messages
     )
+
+
+@pytest.mark.parametrize("mute_error", [False, True])
+def test_selected_microphone_is_unmuted_before_capture(monkeypatch, mute_error):
+    import result_thread
+
+    events = []
+    thread = result_thread.ResultThread()
+    thread.is_recording = True
+
+    class Stream:
+        def close(self):
+            events.append("close")
+
+        def __enter__(self):
+            events.append("capture")
+            thread.stop_recording()
+            return self
+
+        def __exit__(self, *_args):
+            events.append("close")
+
+    def unmute(device):
+        events.append(("unmute", device))
+        if mute_error:
+            raise OSError("denied")
+
+    monkeypatch.setattr(result_thread, "_refresh_input_devices", lambda: True)
+    monkeypatch.setattr(result_thread, "_wasapi_default_input_device", lambda: 1)
+    monkeypatch.setattr(result_thread, "_preferred_capture_device", lambda _device: 1)
+    monkeypatch.setattr(result_thread, "_device_label", str)
+    monkeypatch.setattr(result_thread, "_device_host_api", lambda _device: "Windows WASAPI")
+    # The fallback actually opened is device 25, not the preferred device 1.
+    monkeypatch.setattr(result_thread, "_open_input_stream",
+                        lambda *_args: (Stream(), 25, 48000, 1440))
+    monkeypatch.setattr(result_thread, "_unmute_input_device", unmute)
+    if mute_error:
+        with pytest.raises(RuntimeError, match="Could not confirm.*unmuted"):
+            thread._record_audio()
+        assert events == [("unmute", 25), "close"]
+    else:
+        thread._record_audio()
+        assert events == [("unmute", 25), "capture", "close"]

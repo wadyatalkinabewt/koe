@@ -35,6 +35,7 @@ instance, confirm that no snippet or Scribe recording is active.
 - `src/paths.py`: source and packaged runtime locations.
 - `src/main.py`: tray, hotkey, clipboard, and Scribe launch lifecycle.
 - `src/result_thread.py`: snippet capture and transcription lifecycle.
+- `src/microphone_mute.py`: Windows mute control for the selected snippet input.
 - `src/transcription.py`: provider dispatch, custom corrections, and rotating
   snippet storage.
 - `src/providers/`: Deepgram and Mistral request/response adapters.
