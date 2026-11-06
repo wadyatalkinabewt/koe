@@ -139,7 +139,7 @@ def test_mono_mix_averages_without_clipping():
     assert np.all(mixed == 32767)
 
 
-def test_output_folder_uses_the_recording_date_direction_and_name():
+def test_output_folder_uses_the_recording_time_direction_and_name():
     import recording_transcript as rt
 
     parsed = rt.parse_recording_filename(NEW_NAME)
@@ -147,7 +147,33 @@ def test_output_folder_uses_the_recording_date_direction_and_name():
         pathlib.Path("root"), parsed, pathlib.Path(NEW_NAME)
     )
 
-    assert folder.name == "2026-11-06_out_Amy"
+    assert folder.name == "2026-11-06_141027_out_Amy"
+
+
+def test_two_calls_with_the_same_person_on_one_day_do_not_collide():
+    import recording_transcript as rt
+
+    first = rt.parse_recording_filename(NEW_NAME)
+    later = rt.parse_recording_filename(
+        "20261106_172000.100+1300_out_Amy_+64210385860.ogg"
+    )
+
+    first_dir = rt._output_dir(pathlib.Path("root"), first, pathlib.Path(NEW_NAME))
+    later_dir = rt._output_dir(
+        pathlib.Path("root"), later, pathlib.Path("20261106_172000.100+1300_out_Amy_+64210385860.ogg")
+    )
+
+    assert first_dir != later_dir
+
+
+def test_repeat_runs_of_one_recording_stay_deterministic():
+    import recording_transcript as rt
+
+    parsed = rt.parse_recording_filename(NEW_NAME)
+
+    assert rt._output_dir(pathlib.Path("root"), parsed, pathlib.Path(NEW_NAME)) == (
+        rt._output_dir(pathlib.Path("root"), parsed, pathlib.Path(NEW_NAME))
+    )
 
 
 def _stub(monkeypatch, captured, labels=("Bryce", "Amy")):
@@ -192,7 +218,7 @@ def test_channel_split_uses_a_resolver_instead_of_diarization(
     assert captured == {"diarize": False, "has_resolver": True}
     assert result.attribution == "channel"
     assert result.participants == ["Bryce", "Amy"]
-    assert result.output_dir.name == "2026-11-06_out_Amy"
+    assert result.output_dir.name == "2026-11-06_141027_out_Amy"
     assert result.transcript_md.exists()
     assert result.reused is False
 

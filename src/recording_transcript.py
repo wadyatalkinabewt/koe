@@ -312,7 +312,12 @@ def _slug(text: str, fallback: str = "recording") -> str:
 def _output_dir(root: Path, name: RecordingName, source: Path) -> Path:
     when = name.recorded_at or datetime.fromtimestamp(source.stat().st_mtime)
     descriptor = name.other_name or name.phone_number or source.stem
-    prefix = when.strftime("%Y-%m-%d")
+    # The time is part of the identity, not decoration: several calls with the
+    # same person on one day must not share a folder, or the idempotency check
+    # would reuse the first transcript and silently drop the rest. Seconds are
+    # used because the recorder already resolves them, making a collision
+    # impossible rather than merely unlikely.
+    prefix = when.strftime("%Y-%m-%d_%H%M%S")
     if name.direction:
         prefix = f"{prefix}_{name.direction}"
     return root / f"{prefix}_{_slug(descriptor)}"

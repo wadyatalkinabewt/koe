@@ -142,9 +142,12 @@ Two parties sharing one channel cannot be separated this way; use Scribe's
 diarized modes for those recordings.
 
 Output is written to `Documents\Koe\Transcripts\<folder>`, where the folder
-combines the recording date, direction, and contact name when the filename
-follows the recorder's convention. Transcribing the same file again reuses the
-existing document instead of calling the provider again.
+combines the recording's date and time, direction, and contact name when the
+filename follows the recorder's convention, for example
+`2026-11-06_141027_out_Amy`. The time is part of the folder's identity so that
+several calls with the same person on one day stay separate. Transcribing the
+same file again reuses the existing document instead of calling the provider
+again.
 
 The same work is available headlessly, without Qt:
 
