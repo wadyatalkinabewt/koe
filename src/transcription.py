@@ -620,7 +620,13 @@ def apply_transcript_corrections(
     text: str,
     corrections: dict[str, str] | None = None,
 ) -> str:
-    """Apply configured whole-token substitutions while preserving case."""
+    """Apply configured whole-token substitutions exactly as configured.
+
+    Matching ignores case, but the replacement is always the configured target
+    verbatim. Targets are proper nouns (names, products, shorthand), so mirroring
+    the source's casing would otherwise emit a lowercase ``koe`` or ``grok``
+    mid-sentence.
+    """
     if not text:
         return text
     active_corrections = (
@@ -637,13 +643,7 @@ def apply_transcript_corrections(
     )
 
     def replace(match: re.Match) -> str:
-        original = match.group(0)
-        corrected = active_corrections[original.casefold()]
-        if original.isupper():
-            return corrected.upper()
-        if original.islower():
-            return corrected.lower()
-        return corrected
+        return active_corrections[match.group(0).casefold()]
 
     return pattern.sub(replace, text)
 

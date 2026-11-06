@@ -159,7 +159,8 @@ transcription_options:
     ack me: Acme
 ```
 
-Matching ignores case while preserving lower-, upper-, or title-style casing.
+Matching ignores case, and the replacement is always the configured target
+exactly as written, so proper nouns stay capitalised mid-sentence.
 Corrections run locally after transcription. The real configuration is private
 and must never be committed.
 

@@ -164,13 +164,26 @@ def test_configured_transcript_substitutions_are_corrected_as_whole_tokens():
     assert transcription.apply_transcript_corrections(
         "Ack me, ack me, and ACK ME met North Wnd, north wnd, and NORTH WND.",
         corrections,
-    ) == ("Acme, acme, and ACME met Northwind, northwind, and NORTHWIND.")
+    ) == ("Acme, Acme, and Acme met Northwind, Northwind, and Northwind.")
     assert (
         transcription.apply_transcript_corrections(
             "Ack myself and North Wnds are different tokens.",
             corrections,
         )
         == "Ack myself and North Wnds are different tokens."
+    )
+
+
+def test_configured_corrections_always_use_the_configured_target_case():
+    import transcription
+
+    corrections = {"covey": "Koe", "coy": "Koe", "groq": "Grok"}
+    assert (
+        transcription.apply_transcript_corrections(
+            "open covey for me, and be coy about GROQ",
+            corrections,
+        )
+        == "open Koe for me, and be Koe about Grok"
     )
 
 
