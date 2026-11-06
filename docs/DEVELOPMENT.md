@@ -80,3 +80,8 @@ $files = @('run.py') + (Get-ChildItem src -Recurse -Filter *.py | ForEach-Object
 .\.venv\Scripts\python.exe -m py_compile $files
 git diff --check
 ```
+
+`pytest.ini` pins collection to `tests`, so a bare `pytest -q` measures only
+Koe's suite regardless of what sits in ignored scratch folders. The expected
+result is `173 passed`. Add `testpaths` coverage rather than relying on
+root-directory collection.
