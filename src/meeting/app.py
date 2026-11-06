@@ -398,7 +398,10 @@ class MeetingWorker(QThread):
             summary_text = None
             summary_path = meeting_dir / "summary.pdf"
             summary_status = SUMMARY_NOT_CONFIGURED
-            if os.getenv("OPENROUTER_API_KEY", "").strip():
+            wants_summary = bool(
+                ConfigManager.get_config_value("meeting_options", "generate_summary")
+            )
+            if wants_summary and os.getenv("OPENROUTER_API_KEY", "").strip():
                 self.status_signal.emit("Generating summary...")
                 try:
                     analysis = SummarizerClient().analyze(

@@ -16,6 +16,7 @@ from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -79,11 +80,12 @@ class TranscribeWorker(QThread):
     done_signal = pyqtSignal(object)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, source: Path, other: str, summary: bool):
+    def __init__(self, source: Path, other: str, summary: bool, speakers: str):
         super().__init__()
         self.source = source
         self.other = other
         self.summary = summary
+        self.speakers = speakers
 
     def run(self) -> None:
         from recording_transcript import transcribe_recording
@@ -93,6 +95,7 @@ class TranscribeWorker(QThread):
                 self.source,
                 other_name=self.other or None,
                 generate_summary=self.summary,
+                speakers=self.speakers,
                 status_callback=self.status_signal.emit,
             )
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
@@ -154,9 +157,16 @@ class TranscribeWindow(BaseWindow):
         layout.addWidget(recording)
         layout.addWidget(self._divider())
 
-        speakers = self._section("Other party")
+        speakers = self._section("Speakers")
+        self.speaker_choice = QComboBox()
+        self.speaker_choice.addItem("One person", "single")
+        self.speaker_choice.addItem("Two or more people", "multi")
+        self.speaker_choice.currentIndexChanged.connect(self._on_speaker_change)
+        speakers.layout().addWidget(self.speaker_choice)
+        self.other_label = _label("Other party", "fieldLabel")
         self.other_input = QLineEdit()
-        self.other_input.setPlaceholderText("Contact name or number")
+        self.other_input.setPlaceholderText("Contact name or number (optional)")
+        speakers.layout().addWidget(self.other_label)
         speakers.layout().addWidget(self.other_input)
         layout.addWidget(speakers)
         layout.addWidget(self._divider())
@@ -208,6 +218,7 @@ class TranscribeWindow(BaseWindow):
 
         self.main_layout.addWidget(footer)
         self._set_state(self.IDLE)
+        self._on_speaker_change()
 
     # ---------- styling ----------
 
@@ -246,6 +257,15 @@ class TranscribeWindow(BaseWindow):
         divider.setFixedHeight(1)
         divider.setStyleSheet(f"color: {theme.DIVIDER_COLOR};")
         return divider
+
+    def _speaker_mode(self) -> str:
+        return str(self.speaker_choice.currentData() or "single")
+
+    def _on_speaker_change(self, *_args) -> None:
+        multiple = self._speaker_mode() == "multi"
+        self.other_label.setVisible(multiple)
+        self.other_input.setVisible(multiple)
+        self._fit_window_to_content()
 
     @staticmethod
     def _summary_enabled() -> bool:
@@ -347,9 +367,14 @@ class TranscribeWindow(BaseWindow):
 
         self.duration_label.setText(format_timestamp(details["duration"]))
         self.duration_label.show()
+        # One channel is almost certainly one voice, and skipping diarization
+        # there avoids paying for a label nobody needs. Two channels is left as
+        # "two or more" so a stereo call keeps its channel attribution.
+        self.speaker_choice.setCurrentIndex(0 if details["channels"] <= 1 else 1)
         parsed = parse_recording_filename(path)
         if parsed.other_name or parsed.phone_number:
             self.other_input.setText(parsed.other_name or parsed.phone_number)
+        self._on_speaker_change()
 
         self._set_state(self.READY)
         self._fit_window_to_content()
@@ -358,12 +383,14 @@ class TranscribeWindow(BaseWindow):
         if self.source_path is None or self.worker is not None:
             return
         self._set_state(self.BUSY)
-        self._show_status("working", "Transcribing…", "This can take a moment.")
+        self._show_status("working", "Reading the recording…")
 
+        multiple = self._speaker_mode() == "multi"
         self.worker = TranscribeWorker(
             self.source_path,
-            self.other_input.text().strip(),
+            self.other_input.text().strip() if multiple else "",
             self._summary_enabled(),
+            self._speaker_mode(),
         )
         self.worker.status_signal.connect(self._on_progress)
         self.worker.done_signal.connect(self.finished)
@@ -372,7 +399,9 @@ class TranscribeWindow(BaseWindow):
         self.worker.start()
 
     def _on_progress(self, message: str) -> None:
-        self._show_status("working", "Transcribing…", message)
+        # The stage is the headline: showing "Transcribing…" above
+        # "Summarising…" read as if both were happening at once.
+        self._show_status("working", message)
 
     def _clear_worker(self) -> None:
         self.worker = None
@@ -380,17 +409,16 @@ class TranscribeWindow(BaseWindow):
     def finished(self, result) -> None:
         self.result = result
         self._set_state(self.DONE)
-        summary = {
-            "channel": "Speakers taken from the channel split.",
-            "diarization": "Speakers estimated, because the channels matched.",
-            "existing": "That recording was already transcribed.",
+        detail = {
+            "single": "One speaker throughout.",
+            "channel": "Two speakers, taken from the channel split.",
+            "diarization": "Speakers estimated from the audio.",
+            "existing": "",
         }.get(result.attribution, "")
-        if result.reused:
-            title = "Already transcribed"
-        else:
-            title = "Transcript ready"
-        detail = " ".join(filter(None, [summary, *result.warnings]))
-        self._show_status("done", title, detail)
+        title = "Already transcribed" if result.reused else "Transcript ready"
+        self._show_status(
+            "done", title, " ".join(filter(None, [detail, *result.warnings]))
+        )
 
     def failed(self, message: str) -> None:
         self._set_state(self.READY if self.source_path else self.IDLE)

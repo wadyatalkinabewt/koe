@@ -329,3 +329,48 @@ def test_repeating_a_transcription_reuses_the_existing_document(
     assert second.reused is True
     assert calls == []
     assert second.output_dir == first.output_dir
+
+
+def test_single_speaker_mode_never_asks_for_diarization(tmp_path, monkeypatch):
+    import recording_transcript as rt
+
+    captured: dict = {}
+
+    def fake_segments(path, label="Speaker", *, diarize=False, label_resolver=None, **kw):
+        captured["diarize"] = diarize
+        captured["resolver"] = label_resolver is not None
+        return [{"start": 0.0, "end": 1.0, "text": "Hi.", "label": label}]
+
+    monkeypatch.setattr(rt, "transcribe_file_segments", fake_segments)
+    monkeypatch.setattr(rt, "_decode_stereo", lambda source, dest: dest.write_bytes(b""))
+    monkeypatch.setattr(
+        rt,
+        "_read_stereo",
+        lambda path: (
+            np.random.default_rng(7).normal(0, 500, 16000).astype(np.float32),
+            np.random.default_rng(8).normal(0, 400, 16000).astype(np.float32),
+        ),
+    )
+    monkeypatch.setattr(rt, "probe_audio", lambda path: {"duration": 5.0})
+    monkeypatch.setattr(rt, "write_mono_wav", lambda path, audio, rate: path)
+    source = tmp_path / NEW_NAME
+    source.write_bytes(b"x")
+
+    result = rt.transcribe_recording(
+        source, user_name="Bryce", speakers="single", output_root=tmp_path / "out"
+    )
+
+    # Stereo channels differ, but one speaker was declared: no diarization, and
+    # no channel work either.
+    assert captured == {"diarize": False, "resolver": False}
+    assert result.attribution == "single"
+
+
+def test_speaker_mode_rejects_unknown_values(tmp_path):
+    import recording_transcript as rt
+
+    source = tmp_path / NEW_NAME
+    source.write_bytes(b"x")
+
+    with pytest.raises(ValueError, match="speakers must be"):
+        rt.transcribe_recording(source, speakers="everyone")

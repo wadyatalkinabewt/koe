@@ -99,6 +99,10 @@ Failed transcription attempts preserve temporary audio for recovery. Successful
 runs remove temporary audio after document generation and any requested durable
 copies have been verified.
 
+Summaries are produced only when **Generate a summary based on the
+transcript** is on in Settings. It is on by default. Turn it off to keep
+transcripts without a summary.
+
 If `OPENROUTER_API_KEY` is absent, Scribe deliberately completes in
 transcript-only mode: it does not call OpenRouter or create summary files. If
 OpenRouter returns an error, Scribe records the diagnostic locally, keeps the
@@ -128,11 +132,18 @@ never turn diagnostic text into a summary deliverable.
 
 ## Transcribing an existing recording
 
-Choose **Transcribe recording…** in the tray menu. Pick a file and name the
-other party. Your own name comes from Settings, so it is never asked for twice,
-and whether a summary is produced is the **Generate a summary by default**
-switch in Settings rather than a per-run choice in this window. Any container
-ffmpeg can decode works; the extension is never trusted for format detection.
+Choose **Transcribe recording…** in the tray menu, pick a file, and say how
+many people speak in it. **One person** labels everything with your name and
+skips diarization entirely, so no provider work is spent on a label that cannot
+change. **Two or more people** uses the stereo channel split when the recording
+has one, and otherwise asks the provider to separate speakers; the other party's
+name is optional.
+
+The choice is preselected from the file: one channel means one person, two
+channels means more than one. Your own name comes from Settings, and whether a
+summary is produced is also a Settings switch, so neither is asked for twice.
+Any container ffmpeg can decode works; the extension is never trusted for format
+detection.
 
 When the recording keeps each party on its own stereo channel, speakers are
 attributed from channel energy rather than guessed by diarization. That is
@@ -140,8 +151,9 @@ deterministic, costs no diarization work, and holds for the whole file instead
 of being decided per segment. If the channels turn out to carry the same
 signal, Koe says so and falls back to diarization.
 
-Two parties sharing one channel cannot be separated this way; use Scribe's
-diarized modes for those recordings.
+Two parties sharing one channel cannot be separated by the split; those
+recordings fall back to the provider's diarization, with the speaker count left
+open so a room recording is not capped at two.
 
 Output is written to `Documents\Koe\Transcripts\<folder>`, named the same way
 Scribe names meetings: the recording date and the other party, for example

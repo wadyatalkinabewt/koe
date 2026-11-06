@@ -15,6 +15,10 @@ meeting_options:
     value: false
     type: bool
     description: "Keep microphone.wav and meeting-audio.wav with completed Scribe output."
+  generate_summary:
+    value: true
+    type: bool
+    description: "Generate a summary based on the transcript. Requires OPENROUTER_API_KEY."
 
 # Transcribing existing audio files
 

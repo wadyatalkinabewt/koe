@@ -57,14 +57,18 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert "elevenlabs" not in labels
     assert "keep koe focused" not in labels
     assert "profile" not in labels
-    assert "choose where snippets, meeting documents, and transcripts are saved" in labels
+    # Sections carry titles only; explanatory prose was deliberately removed.
+    assert not any("choose where" in label for label in labels)
     assert "no-verbatim mode is always on" not in labels
     assert "koe uses one speech-to-text path" not in labels
     assert hasattr(window, "save_meeting_audio_checkbox")
     assert window.save_meeting_audio_checkbox.text() == "Save Scribe meeting audio"
     assert isinstance(window.save_meeting_audio_checkbox, ToggleRow)
     assert not hasattr(window, "save_markdown_checkbox")
-    assert "pdf and markdown files are always saved" in labels
+    # Scribe and Transcripts share one summary toggle wording.
+    assert [t.text() for t in window.findChildren(ToggleRow)].count(
+        "Generate a summary based on the transcript"
+    ) == 2
     assert window.findChildren(QCheckBox) == []
     assert "microphone.wav and meeting-audio.wav" not in labels
     window.show()
@@ -123,26 +127,17 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     # Profile, Storage, Scribe, Transcripts and Snippet are separated by dividers.
     assert len(window.findChildren(QFrame, "settingsDivider")) == 4
     assert "changes save automatically" in labels
-    storage_description = next(
-        label
-        for label in storage.findChildren(QLabel)
-        if label.text().startswith("Choose where snippets, meeting documents,")
-    )
-    snippets_title = next(
-        label
-        for label in storage.findChildren(QLabel)
-        if label.text() == "Snippets folder"
-    )
-    storage_detail_gap = snippets_title.mapTo(storage, QPoint()).y() - (
-        storage_description.mapTo(storage, QPoint()).y() + storage_description.height()
-    )
-    assert storage_detail_gap > 0
     assert (
-        "Transcript PDF and Markdown files are always saved; summaries are added "
-        "in both formats when available."
-    ) in {
-        label.text() for label in scribe_section.findChildren(QLabel)
-    }
+        label.text() for label in storage.findChildren(QLabel)
+    )
+    storage_titles = [label.text() for label in storage.findChildren(QLabel)]
+    assert "Storage" in storage_titles
+    assert "Snippets folder" in storage_titles
+    assert not any(text.startswith("Choose where") for text in storage_titles)
+    assert not any(
+        text.startswith("Transcript PDF and Markdown files are always saved")
+        for text in (label.text() for label in scribe_section.findChildren(QLabel))
+    )
     assert (
         window.snippets_input.mapTo(window, QPoint()).y()
         < window.meetings_input.mapTo(window, QPoint()).y()
@@ -862,9 +857,20 @@ def test_transcribe_window_has_no_duplicate_name_field(qapp):
 
     window = TranscribeWindow()
     fields = {field.placeholderText() for field in window.findChildren(QLineEdit)}
-    assert "Contact name or number" in fields
+    assert "Contact name or number (optional)" in fields
     assert "Your name" not in fields
     assert not hasattr(window, "owner_input")
+    window.close()
+
+
+def test_other_party_field_only_shows_for_multiple_speakers(qapp):
+    from ui.transcribe_window import TranscribeWindow
+
+    window = TranscribeWindow()
+    window.speaker_choice.setCurrentIndex(0)          # one person
+    assert window.other_input.isHidden() is True
+    window.speaker_choice.setCurrentIndex(1)          # two or more
+    assert window.other_input.isHidden() is False
     window.close()
 
 

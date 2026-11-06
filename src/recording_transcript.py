@@ -388,6 +388,7 @@ def transcribe_recording(
     other_name: str | None = None,
     output_root: Path | str | None = None,
     generate_summary: bool = False,
+    speakers: str = "auto",
     channel_attribution: bool = True,
     min_margin_db: float = _DEFAULT_MIN_MARGIN_DB,
     force: bool = False,
@@ -396,13 +397,19 @@ def transcribe_recording(
     """Transcribe one recording into `<root>/<folder>/transcript.md` and `.pdf`.
 
     ``output_root`` overrides the configured root. ``generate_summary`` adds
-    `summary.md`/`summary.pdf` through OpenRouter. Running again is idempotent
-    unless ``force`` is set, so a pipeline can safely retry.
+    `summary.md`/`summary.pdf` through OpenRouter. ``speakers`` is ``"single"``
+    for one voice (no diarization is requested or billed), ``"multi"`` for
+    several voices, or ``"auto"`` to decide from the channel split. Running
+    again is idempotent unless ``force`` is set, so a pipeline can safely retry.
     """
 
     def report(message: str) -> None:
         if status_callback is not None:
             status_callback(message)
+
+    mode = str(speakers or "auto").strip().casefold()
+    if mode not in {"auto", "single", "multi"}:
+        raise ValueError("speakers must be 'auto', 'single' or 'multi'")
 
     source = Path(source).expanduser()
     if not source.is_file():
@@ -458,15 +465,22 @@ def transcribe_recording(
         mono_path = Path(temp_dir) / "mono.wav"
         write_mono_wav(mono_path, _mix_to_mono(left, right), _TARGET_RATE)
 
-        split = channel_attribution and channels_are_split(left, right)
-        if channel_attribution and not split:
+        split = (
+            channel_attribution and mode != "single" and channels_are_split(left, right)
+        )
+        if mode == "auto" and channel_attribution and not split:
             warnings.append(
                 "Channels carry the same signal, so speakers came from "
                 "diarization rather than the channel split."
             )
 
         report("Transcribing...")
-        if split:
+        if mode == "single":
+            # One voice throughout: asking the provider to diarize would be
+            # billed extra work for a label nobody needs.
+            segments = transcribe_file_segments(mono_path, label=owner, diarize=False)
+            attribution = "single"
+        elif split:
             segments = transcribe_file_segments(
                 mono_path,
                 label=owner,
@@ -482,11 +496,13 @@ def transcribe_recording(
             )
             attribution = "channel"
         else:
+            # Speaker count is unknown here, so let the provider decide rather
+            # than capping a room recording at two.
             segments = transcribe_file_segments(
                 mono_path,
                 label=owner,
                 diarize=True,
-                num_speakers=2,
+                num_speakers=None,
             )
             attribution = "diarization"
 
