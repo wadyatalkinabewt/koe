@@ -139,41 +139,93 @@ def test_mono_mix_averages_without_clipping():
     assert np.all(mixed == 32767)
 
 
-def test_output_folder_uses_the_recording_time_direction_and_name():
+def _make_source(tmp_path, stem, size=32):
+    source = tmp_path / stem
+    source.write_bytes(b"x" * size)
+    return source
+
+
+def test_output_folder_matches_the_scribe_naming_shape(tmp_path):
     import recording_transcript as rt
 
-    parsed = rt.parse_recording_filename(NEW_NAME)
+    root = tmp_path / "Transcripts"
     folder = rt._output_dir(
-        pathlib.Path("root"), parsed, pathlib.Path(NEW_NAME)
+        root, rt.parse_recording_filename(NEW_NAME), _make_source(tmp_path, NEW_NAME)
     )
 
-    assert folder.name == "2026-11-06_141027_out_Amy"
+    assert folder.name == "26_11_06_Amy"
 
 
-def test_two_calls_with_the_same_person_on_one_day_do_not_collide():
+def test_output_folder_uses_the_number_when_the_name_is_missing(tmp_path):
     import recording_transcript as rt
 
-    first = rt.parse_recording_filename(NEW_NAME)
-    later = rt.parse_recording_filename(
-        "20261106_172000.100+1300_out_Amy_+64210385860.ogg"
+    stem = "20261106_141027.552+1300_out__+64210385860.ogg"
+    folder = rt._output_dir(
+        tmp_path / "Transcripts",
+        rt.parse_recording_filename(stem),
+        _make_source(tmp_path, stem),
     )
 
-    first_dir = rt._output_dir(pathlib.Path("root"), first, pathlib.Path(NEW_NAME))
-    later_dir = rt._output_dir(
-        pathlib.Path("root"), later, pathlib.Path("20261106_172000.100+1300_out_Amy_+64210385860.ogg")
-    )
-
-    assert first_dir != later_dir
+    assert folder.name == "26_11_06_+64210385860"
 
 
-def test_repeat_runs_of_one_recording_stay_deterministic():
+def test_output_folder_falls_back_to_the_source_stem(tmp_path):
     import recording_transcript as rt
 
+    stem = "holiday clip.m4a"
+    folder = rt._output_dir(
+        tmp_path / "Transcripts",
+        rt.parse_recording_filename(stem),
+        _make_source(tmp_path, stem),
+    )
+
+    # No recorder timestamp, so the date comes from the file and the stem is
+    # the descriptor: <yy_mm_dd>_<stem>.
+    assert folder.name.endswith("_holiday_clip")
+    assert folder.name.split("_")[:3][0].isdigit()
+
+
+def test_two_calls_with_the_same_person_on_one_day_do_not_collide(tmp_path):
+    import recording_transcript as rt
+
+    root = tmp_path / "Transcripts"
+    first_stem = NEW_NAME
+    later_stem = "20261106_172000.100+1300_out_Amy_+64210385860.ogg"
+    first_source = _make_source(tmp_path, first_stem)
+    later_source = _make_source(tmp_path, later_stem)
+
+    first_dir = rt._output_dir(root, rt.parse_recording_filename(first_stem), first_source)
+    first_dir.mkdir(parents=True)
+    rt._record_source_identity(first_dir, rt._source_identity(first_source))
+
+    later_dir = rt._output_dir(root, rt.parse_recording_filename(later_stem), later_source)
+
+    assert first_dir.name == "26_11_06_Amy"
+    assert later_dir.name == "26_11_06_Amy_2"
+
+
+def test_the_same_recording_reuses_its_folder_even_if_bytes_differ_in_length(tmp_path):
+    import recording_transcript as rt
+
+    root = tmp_path / "Transcripts"
+    source = _make_source(tmp_path, NEW_NAME)
+    first = rt._output_dir(root, rt.parse_recording_filename(NEW_NAME), source)
+    first.mkdir(parents=True)
+    rt._record_source_identity(first, rt._source_identity(source))
+
+    again = rt._output_dir(root, rt.parse_recording_filename(NEW_NAME), source)
+
+    assert again == first
+
+
+def test_repeat_runs_of_one_recording_stay_deterministic(tmp_path):
+    import recording_transcript as rt
+
+    root = tmp_path / "Transcripts"
+    source = _make_source(tmp_path, NEW_NAME)
     parsed = rt.parse_recording_filename(NEW_NAME)
 
-    assert rt._output_dir(pathlib.Path("root"), parsed, pathlib.Path(NEW_NAME)) == (
-        rt._output_dir(pathlib.Path("root"), parsed, pathlib.Path(NEW_NAME))
-    )
+    assert rt._output_dir(root, parsed, source) == rt._output_dir(root, parsed, source)
 
 
 def _stub(monkeypatch, captured, labels=("Bryce", "Amy")):
@@ -218,7 +270,7 @@ def test_channel_split_uses_a_resolver_instead_of_diarization(
     assert captured == {"diarize": False, "has_resolver": True}
     assert result.attribution == "channel"
     assert result.participants == ["Bryce", "Amy"]
-    assert result.output_dir.name == "2026-11-06_141027_out_Amy"
+    assert result.output_dir.name == "26_11_06_Amy"
     assert result.transcript_md.exists()
     assert result.reused is False
 

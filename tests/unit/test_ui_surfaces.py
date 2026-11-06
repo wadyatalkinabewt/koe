@@ -56,7 +56,7 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert "elevenlabs" not in labels
     assert "keep koe focused" not in labels
     assert "profile" not in labels
-    assert "choose where snippets and meeting documents are saved" in labels
+    assert "choose where snippets, meeting documents, and transcripts are saved" in labels
     assert "no-verbatim mode is always on" not in labels
     assert "koe uses one speech-to-text path" not in labels
     assert hasattr(window, "save_meeting_audio_checkbox")
@@ -124,7 +124,7 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     storage_description = next(
         label
         for label in storage.findChildren(QLabel)
-        if label.text() == "Choose where snippets and meeting documents are saved."
+        if label.text().startswith("Choose where snippets, meeting documents,")
     )
     snippets_title = next(
         label
@@ -144,11 +144,26 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
     assert (
         window.snippets_input.mapTo(window, QPoint()).y()
         < window.meetings_input.mapTo(window, QPoint()).y()
+        < window.transcripts_input.mapTo(window, QPoint()).y()
     )
-    assert window.snippets_input.placeholderText() == r"Default: Documents\Koe\Snippets"
-    assert window.meetings_input.placeholderText() == r"Default: Documents\Koe\Meetings"
-    assert "Documents/Koe" not in window.snippets_input.placeholderText()
-    assert "Documents/Koe" not in window.meetings_input.placeholderText()
+
+    # Placeholders show the real resolved folders, not a hardcoded guess: a
+    # source run keeps snippets beside the checkout.
+    from paths import (
+        default_meetings_dir,
+        default_snippets_dir,
+        default_transcripts_dir,
+    )
+
+    assert window.snippets_input.placeholderText() == (
+        f"Default: {default_snippets_dir()}"
+    )
+    assert window.meetings_input.placeholderText() == (
+        f"Default: {default_meetings_dir()}"
+    )
+    assert window.transcripts_input.placeholderText() == (
+        f"Default: {default_transcripts_dir()}"
+    )
     assert "esc to close" not in labels
     assert not hasattr(window, "provider_combo")
 

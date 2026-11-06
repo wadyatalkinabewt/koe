@@ -309,18 +309,54 @@ def _slug(text: str, fallback: str = "recording") -> str:
     return cleaned.strip("._") or fallback
 
 
+# Identity of the audio a folder was built from. Folder names stay readable
+# (`26_11_06_Amy`, matching Scribe) so the name cannot carry that identity: the
+# marker does, which keeps re-runs idempotent without making names unreadable.
+_SOURCE_MARKER = ".source.json"
+
+
+def _source_identity(source: Path) -> dict[str, object]:
+    status = source.stat()
+    return {"name": source.name, "bytes": status.st_size}
+
+
+def _read_source_identity(folder: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads((folder / _SOURCE_MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _record_source_identity(folder: Path, identity: dict[str, object]) -> None:
+    # If this cannot be written the transcript cannot be written either, so let
+    # the failure surface rather than degrading idempotency silently.
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / _SOURCE_MARKER).write_text(
+        json.dumps(identity, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def _output_dir(root: Path, name: RecordingName, source: Path) -> Path:
+    """Return this recording's folder, creating no directories.
+
+    Names follow Scribe (`yy_mm_dd_Contact`). Two calls with the same person on
+    one day therefore share a base name, so the marker decides whether an
+    existing folder is this recording (reuse) or another one (suffix `_2`).
+    """
+    identity = _source_identity(source)
     when = name.recorded_at or datetime.fromtimestamp(source.stat().st_mtime)
     descriptor = name.other_name or name.phone_number or source.stem
-    # The time is part of the identity, not decoration: several calls with the
-    # same person on one day must not share a folder, or the idempotency check
-    # would reuse the first transcript and silently drop the rest. Seconds are
-    # used because the recorder already resolves them, making a collision
-    # impossible rather than merely unlikely.
-    prefix = when.strftime("%Y-%m-%d_%H%M%S")
-    if name.direction:
-        prefix = f"{prefix}_{name.direction}"
-    return root / f"{prefix}_{_slug(descriptor)}"
+    base = f"{when.strftime('%y_%m_%d')}_{_slug(descriptor)}"
+
+    suffix = 1
+    while True:
+        candidate = root / (base if suffix == 1 else f"{base}_{suffix}")
+        if not candidate.is_dir():
+            return candidate
+        if _read_source_identity(candidate) == identity:
+            return candidate
+        suffix += 1
 
 
 def _resolve_root(output_root: Path | str | None) -> Path:
@@ -456,7 +492,7 @@ def transcribe_recording(
         duration_seconds=duration,
     )
 
-    destination.mkdir(parents=True, exist_ok=True)
+    _record_source_identity(destination, _source_identity(source))
     transcript_md_path.write_text(markdown, encoding="utf-8")
 
     report("Writing transcript...")

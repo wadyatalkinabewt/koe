@@ -22,7 +22,12 @@ from PyQt5.QtWidgets import (
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from paths import resource_path
+from paths import (
+    default_meetings_dir,
+    default_snippets_dir,
+    default_transcripts_dir,
+    resource_path,
+)
 from ui import theme
 from ui.base_window import BaseWindow
 from utils import ConfigManager
@@ -213,17 +218,24 @@ class SettingsWindow(BaseWindow):
         self.content_layout.addWidget(self._divider())
 
         storage = self._section(
-            "Storage", "Choose where snippets and meeting documents are saved."
+            "Storage",
+            "Choose where snippets, meeting documents, and transcripts are saved."
+            " Empty fields use the folder shown in grey.",
         )
         self.snippets_input = self._folder_picker(
             "Snippets folder",
             storage.layout(),
-            r"Default: Documents\Koe\Snippets",
+            f"Default: {default_snippets_dir()}",
         )
         self.meetings_input = self._folder_picker(
-            "Meetings folder",
+            "Scribe folder",
             storage.layout(),
-            r"Default: Documents\Koe\Meetings",
+            f"Default: {default_meetings_dir()}",
+        )
+        self.transcripts_input = self._folder_picker(
+            "Transcripts folder",
+            storage.layout(),
+            f"Default: {default_transcripts_dir()}",
         )
         self.content_layout.addWidget(storage)
         self.content_layout.addWidget(self._divider())
@@ -312,6 +324,9 @@ class SettingsWindow(BaseWindow):
         self.snippets_input.setText(
             ConfigManager.get_config_value("misc", "snippets_folder") or ""
         )
+        self.transcripts_input.setText(
+            ConfigManager.get_config_value("transcript_options", "root_folder") or ""
+        )
         self.save_meeting_audio_checkbox.setChecked(
             bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
         )
@@ -329,6 +344,7 @@ class SettingsWindow(BaseWindow):
             self.user_name_input,
             self.meetings_input,
             self.snippets_input,
+            self.transcripts_input,
             self.hotkey_input,
         ):
             field.textChanged.connect(self._schedule_save)
@@ -372,6 +388,11 @@ class SettingsWindow(BaseWindow):
         )
         ConfigManager.set_config_value(
             self.snippets_input.text().strip() or None, "misc", "snippets_folder"
+        )
+        ConfigManager.set_config_value(
+            self.transcripts_input.text().strip() or None,
+            "transcript_options",
+            "root_folder",
         )
         ConfigManager.set_config_value(
             self.save_meeting_audio_checkbox.isChecked(),

@@ -141,13 +141,13 @@ signal, Koe says so and falls back to diarization.
 Two parties sharing one channel cannot be separated this way; use Scribe's
 diarized modes for those recordings.
 
-Output is written to `Documents\Koe\Transcripts\<folder>`, where the folder
-combines the recording's date and time, direction, and contact name when the
-filename follows the recorder's convention, for example
-`2026-11-06_141027_out_Amy`. The time is part of the folder's identity so that
-several calls with the same person on one day stay separate. Transcribing the
-same file again reuses the existing document instead of calling the provider
-again.
+Output is written to `Documents\Koe\Transcripts\<folder>`, named the same way
+Scribe names meetings: the recording date and the other party, for example
+`26_11_06_Amy`, or `26_11_06_+64210385860` when the caller was unresolved. A
+second call with the same person on the same day gets `_2` appended.
+
+Each folder records which audio file produced it, so transcribing the same file
+again reuses that folder instead of calling the provider again.
 
 The same work is available headlessly, without Qt:
 
