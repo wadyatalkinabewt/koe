@@ -425,6 +425,9 @@ def transcribe_recording(
     )
     participants = [owner, other] if identified else [owner]
     started_at = _started_at(parsed, source)
+    direction = {"out": "Outgoing call", "in": "Incoming call"}.get(
+        parsed.direction or "", ""
+    )
 
     root = _resolve_root(output_root)
     destination = _output_dir(root, parsed, source)
@@ -500,6 +503,7 @@ def transcribe_recording(
         participants=participants,
         started_at=started_at,
         duration_seconds=duration,
+        direction=direction,
     )
 
     _record_source_identity(destination, _source_identity(source))
@@ -514,6 +518,7 @@ def transcribe_recording(
         duration_seconds=duration,
         recorder_name=owner,
         output_path=destination / "transcript.pdf",
+        direction=direction,
     )
 
     summary_md_path: Path | None = None

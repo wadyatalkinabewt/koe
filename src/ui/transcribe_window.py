@@ -1,8 +1,8 @@
 """Desktop window for transcribing an existing audio file.
 
 Thin shell over ``recording_transcript.transcribe_recording``: pick a file,
-confirm the names, optionally ask for a summary, then watch the worker. All the
-real work stays in the headless module so a pipeline can skip this window.
+name the other party, optionally ask for a summary, then watch the worker. All
+the real work stays in the headless module so a pipeline can skip this window.
 """
 
 import os
@@ -29,9 +29,9 @@ from PyQt5.QtWidgets import (
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from compat import apply_window_icon, set_app_user_model_id  # noqa: E402
+from meeting.transcript import format_timestamp  # noqa: E402
 from paths import resource_path  # noqa: E402
 from ui import theme  # noqa: E402
-from meeting.transcript import format_timestamp  # noqa: E402
 from ui.base_window import BaseWindow  # noqa: E402
 from ui.settings_window import ToggleRow  # noqa: E402
 from utils import ConfigManager  # noqa: E402
@@ -39,11 +39,19 @@ from utils import ConfigManager  # noqa: E402
 TRANSCRIBE_APP_ID = "Koe.Transcribe.App"
 TRANSCRIBE_ICON = resource_path("assets", "koe-icon.ico")
 _INSTANCE_PORT = 9879
-_WINDOW_WIDTH = 640
+_WINDOW_WIDTH = 620
 AUDIO_FILTER = (
     "Audio and video (*.ogg *.opus *.m4a *.mp3 *.wav *.flac *.aac *.amr "
     "*.wma *.mp4 *.webm *.3gp *.caf *.aiff *.mkv);;All files (*)"
 )
+
+
+def _short_detail(message: str, limit: int = 220) -> str:
+    """Keep operator-facing detail to a readable line or two."""
+    text = " ".join(str(message).split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def _label(text: str, object_name: str | None = None) -> QLabel:
@@ -71,10 +79,9 @@ class TranscribeWorker(QThread):
     done_signal = pyqtSignal(object)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, source: Path, owner: str, other: str, summary: bool):
+    def __init__(self, source: Path, other: str, summary: bool):
         super().__init__()
         self.source = source
-        self.owner = owner
         self.other = other
         self.summary = summary
 
@@ -84,7 +91,6 @@ class TranscribeWorker(QThread):
         try:
             result = transcribe_recording(
                 self.source,
-                user_name=self.owner or None,
                 other_name=self.other or None,
                 generate_summary=self.summary,
                 status_callback=self.status_signal.emit,
@@ -98,22 +104,26 @@ class TranscribeWorker(QThread):
 class TranscribeWindow(BaseWindow):
     """Pick a recording, transcribe it, and open the result."""
 
+    IDLE = "idle"
+    READY = "ready"
+    BUSY = "busy"
+    DONE = "done"
+
     def __init__(self):
-        super().__init__("Transcribe recording", _WINDOW_WIDTH, 620)
+        super().__init__("Transcribe recording", _WINDOW_WIDTH, 470)
         set_app_user_model_id(TRANSCRIBE_APP_ID)
         apply_window_icon(self, TRANSCRIBE_ICON, app_id=TRANSCRIBE_APP_ID)
+        self.setStyleSheet(theme.application_stylesheet() + self._stylesheet())
 
         self.source_path: Path | None = None
         self.worker: TranscribeWorker | None = None
         self.result = None
         self._instance_lock = None
 
-        self.setStyleSheet(theme.application_stylesheet())
-
         header = QWidget()
         header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(32, 26, 32, 14)
-        header_layout.setSpacing(2)
+        header_layout.setContentsMargins(32, 26, 32, 12)
+        header_layout.setSpacing(0)
         header_layout.addWidget(_label("Transcribe recording", "windowTitle"))
         self.main_layout.addWidget(header)
 
@@ -122,10 +132,9 @@ class TranscribeWindow(BaseWindow):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.content = QWidget()
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(32, 0, 32, 24)
+        self.content_layout.setContentsMargins(32, 0, 32, 18)
         self.content_layout.setSpacing(0)
         self.content_layout.setAlignment(Qt.AlignTop)
-
         layout = self.content_layout
 
         recording = self._section("Recording")
@@ -139,17 +148,13 @@ class TranscribeWindow(BaseWindow):
         self.browse_button.clicked.connect(self.choose_file)
         row.addWidget(self.browse_button)
         recording.layout().addLayout(row)
-        self.detail_label = _label("", "fieldLabel")
-        recording.layout().addWidget(self.detail_label)
+        self.duration_label = _label("", "fieldLabel")
+        self.duration_label.hide()
+        recording.layout().addWidget(self.duration_label)
         layout.addWidget(recording)
         layout.addWidget(self._divider())
 
-        speakers = self._section("Speakers")
-        speakers.layout().addWidget(_label("My name", "fieldLabel"))
-        self.owner_input = QLineEdit(self._default_owner())
-        self.owner_input.setPlaceholderText("Your name")
-        speakers.layout().addWidget(self.owner_input)
-        speakers.layout().addWidget(_label("Other party", "fieldLabel"))
+        speakers = self._section("Other party")
         self.other_input = QLineEdit()
         self.other_input.setPlaceholderText("Contact name or number")
         speakers.layout().addWidget(self.other_input)
@@ -161,57 +166,73 @@ class TranscribeWindow(BaseWindow):
         self.summary_checkbox.setChecked(self._default_summary())
         summary.layout().addWidget(self.summary_checkbox)
         layout.addWidget(summary)
-        layout.addWidget(self._divider())
 
-        status = self._section("Result")
-        self.status_label = _label("Choose a recording to begin.", "fieldLabel")
-        self.status_label.setWordWrap(True)
-        status.layout().addWidget(self.status_label)
-        self.warning_label = _label("", "warningText")
-        self.warning_label.setWordWrap(True)
-        self.warning_label.hide()
-        status.layout().addWidget(self.warning_label)
-        layout.addWidget(status)
+        self.status_card = QFrame()
+        self.status_card.setObjectName("statusCard")
+        self.status_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        card_layout = QVBoxLayout(self.status_card)
+        card_layout.setContentsMargins(14, 11, 14, 12)
+        card_layout.setSpacing(3)
+        self.status_title = _label("", "statusTitle")
+        self.status_title.setWordWrap(True)
+        card_layout.addWidget(self.status_title)
+        self.status_detail = _label("", "statusDetail")
+        self.status_detail.setWordWrap(True)
+        card_layout.addWidget(self.status_detail)
+        self.status_card.hide()
+        wrapper = QWidget()
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 16, 0, 0)
+        wrapper_layout.addWidget(self.status_card)
+        layout.addWidget(wrapper)
 
         self.scroll.setWidget(self.content)
         self.main_layout.addWidget(self.scroll, 1)
 
         footer = QFrame()
-        footer.setObjectName("transcribeFooter")
+        footer.setObjectName("windowFooter")
         actions = QHBoxLayout(footer)
-        actions.setContentsMargins(32, 12, 32, 18)
+        actions.setContentsMargins(32, 14, 32, 18)
         actions.setSpacing(8)
+
+        self.transcribe_button = QPushButton("Transcribe")
+        self.transcribe_button.setObjectName("primaryButton")
+        self.transcribe_button.setDefault(True)
+        self.transcribe_button.clicked.connect(self.start)
+        actions.addWidget(self.transcribe_button)
+
+        actions.addStretch(1)
+
         self.folder_button = QPushButton("Open folder")
         self.folder_button.clicked.connect(self.open_folder)
-        self.folder_button.setEnabled(False)
         actions.addWidget(self.folder_button)
+
         self.transcript_button = QPushButton("Open transcript")
+        self.transcript_button.setObjectName("primaryButton")
         self.transcript_button.clicked.connect(self.open_transcript)
-        self.transcript_button.setEnabled(False)
         actions.addWidget(self.transcript_button)
-        actions.addStretch(1)
-        self.start_button = QPushButton("Transcribe")
-        self.start_button.setObjectName("primaryButton")
-        self.start_button.setDefault(True)
-        self.start_button.setEnabled(False)
-        self.start_button.clicked.connect(self.start)
-        actions.addWidget(self.start_button)
+
         self.main_layout.addWidget(footer)
+        self._set_state(self.IDLE)
 
-        self.setStyleSheet(
-            theme.application_stylesheet()
-            + f"""
-            QLabel#warningText {{
-                color: {theme.RECORDING_COLOR};
-                font-size: 9pt;
-            }}
-            QFrame#transcribeFooter {{
-                border-top: 1px solid {theme.DIVIDER_COLOR};
-            }}
-            """
-        )
+    # ---------- styling ----------
 
-    # ---------- construction helpers ----------
+    def _stylesheet(self) -> str:
+        return f"""
+        QLabel#fieldLabel {{ color: {theme.DIM_TEXT}; font-size: 9pt; }}
+        QFrame#windowFooter {{ border-top: 1px solid {theme.DIVIDER_COLOR}; }}
+        QFrame#statusCard {{ border-radius: 8px; }}
+        QLabel#statusTitle {{ font-size: 9.5pt; font-weight: 650; }}
+        QLabel#statusDetail {{ font-size: 9pt; }}
+        QPushButton#primaryButton:disabled {{
+            background-color: {theme.SURFACE_ELEVATED};
+            color: {theme.DIM_TEXT};
+            border-color: {theme.DIVIDER_COLOR};
+        }}
+        QPushButton#primaryButton:disabled:hover {{
+            background-color: {theme.SURFACE_ELEVATED};
+        }}
+        """
 
     @staticmethod
     def _section(title: str) -> QFrame:
@@ -219,7 +240,7 @@ class TranscribeWindow(BaseWindow):
         section.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         layout = QVBoxLayout(section)
         layout.setContentsMargins(0, 18, 0, 17)
-        layout.setSpacing(6)
+        layout.setSpacing(10)
         layout.setAlignment(Qt.AlignTop)
         layout.addWidget(_label(title, "sectionTitle"))
         return section
@@ -233,14 +254,68 @@ class TranscribeWindow(BaseWindow):
         return divider
 
     @staticmethod
-    def _default_owner() -> str:
-        return str(ConfigManager.get_config_value("profile", "user_name") or "")
-
-    @staticmethod
     def _default_summary() -> bool:
         return bool(
             ConfigManager.get_config_value("transcript_options", "default_summary")
         )
+
+    # ---------- state ----------
+
+    def _set_state(self, state: str) -> None:
+        """One eager, honest footer: the next useful action, nothing else."""
+        self.state = state
+        self.transcribe_button.show()
+        self.folder_button.hide()
+        self.transcript_button.hide()
+        self.browse_button.setEnabled(state != self.BUSY)
+
+        if state == self.IDLE:
+            self.transcribe_button.setText("Transcribe")
+            self.transcribe_button.setEnabled(False)
+        elif state == self.READY:
+            self.transcribe_button.setText("Transcribe")
+            self.transcribe_button.setEnabled(True)
+        elif state == self.BUSY:
+            self.transcribe_button.setText("Transcribing…")
+            self.transcribe_button.setEnabled(False)
+        else:  # DONE
+            self.transcribe_button.hide()
+            self.folder_button.show()
+            self.transcript_button.show()
+
+    def _show_status(self, kind: str, title: str, detail: str = "") -> None:
+        palette = {
+            "working": (theme.SURFACE_ELEVATED, theme.BORDER_COLOR,
+                        theme.TEXT_COLOR, theme.SECONDARY_TEXT),
+            "clear": (theme.SURFACE_ELEVATED, theme.BORDER_COLOR,
+                      theme.TEXT_COLOR, theme.SECONDARY_TEXT),
+            "error": (theme.ERROR_SOFT, theme.ERROR_COLOR,
+                      theme.ERROR_COLOR, theme.SECONDARY_TEXT),
+            "done": (theme.SUCCESS_SOFT, theme.SUCCESS_COLOR,
+                     theme.SUCCESS_COLOR, theme.SECONDARY_TEXT),
+        }
+        background, border, title_colour, detail_colour = palette[kind]
+        self.status_card.setStyleSheet(
+            f"QFrame#statusCard {{"
+            f" background-color: {background};"
+            f" border: 1px solid {border};"
+            f" border-radius: 8px; }}"
+        )
+        self.status_title.setStyleSheet(f"color: {title_colour};")
+        self.status_detail.setStyleSheet(f"color: {detail_colour};")
+        self.status_title.setText(title)
+        self.status_detail.setText(detail)
+        self.status_detail.setVisible(bool(detail))
+        was_visible = self.status_card.isVisible()
+        self.status_card.show()
+        if not was_visible:
+            self._fit_window_to_content()
+
+    def _clear_status(self) -> None:
+        was_visible = self.status_card.isVisible()
+        self.status_card.hide()
+        if was_visible:
+            self._fit_window_to_content()
 
     # ---------- actions ----------
 
@@ -258,82 +333,69 @@ class TranscribeWindow(BaseWindow):
         self.source_path = path
         self.file_input.setText(path.name)
         self.file_input.setToolTip(str(path))
-        self.warning_label.hide()
-        self.warning_label.setText("")
         self.result = None
-        self.folder_button.setEnabled(False)
-        self.transcript_button.setEnabled(False)
+        self._clear_status()
+        self.duration_label.hide()
 
         try:
             details = probe_audio(path)
         except Exception as exc:  # noqa: BLE001 - shown to the operator
-            self.detail_label.setText("")
-            self.status_label.setText("This file could not be read.")
-            self.warning_label.setText(str(exc))
-            self.warning_label.show()
-            self.start_button.setEnabled(False)
+            self._set_state(self.IDLE)
+            self._show_status(
+                "error", "This file can't be read", _short_detail(exc)
+            )
             return
 
-        self.detail_label.setText(format_timestamp(details["duration"]))
+        self.duration_label.setText(format_timestamp(details["duration"]))
+        self.duration_label.show()
         parsed = parse_recording_filename(path)
         if parsed.other_name or parsed.phone_number:
             self.other_input.setText(parsed.other_name or parsed.phone_number)
 
-        self.status_label.setText("Ready to transcribe.")
-        self.start_button.setEnabled(True)
+        self._set_state(self.READY)
         self._fit_window_to_content()
 
     def start(self) -> None:
         if self.source_path is None or self.worker is not None:
             return
-        self.start_button.setEnabled(False)
-        self.browse_button.setEnabled(False)
-        self.warning_label.hide()
-        self.warning_label.setText("")
-        self.status_label.setText("Starting…")
+        self._set_state(self.BUSY)
+        self._show_status("working", "Transcribing…", "This can take a moment.")
 
         self.worker = TranscribeWorker(
             self.source_path,
-            self.owner_input.text().strip(),
             self.other_input.text().strip(),
             self.summary_checkbox.isChecked(),
         )
-        self.worker.status_signal.connect(self.status_label.setText)
+        self.worker.status_signal.connect(self._on_progress)
         self.worker.done_signal.connect(self.finished)
         self.worker.error_signal.connect(self.failed)
         self.worker.finished.connect(self._clear_worker)
         self.worker.start()
 
+    def _on_progress(self, message: str) -> None:
+        self._show_status("working", "Transcribing…", message)
+
     def _clear_worker(self) -> None:
         self.worker = None
-        self.browse_button.setEnabled(True)
 
     def finished(self, result) -> None:
         self.result = result
-        attribution = {
+        self._set_state(self.DONE)
+        summary = {
             "channel": "Speakers taken from the channel split.",
             "diarization": "Speakers estimated, because the channels matched.",
-            "existing": "Existing transcript reused.",
-        }.get(result.attribution, "Done.")
-        self.status_label.setText(attribution)
-        if result.warnings:
-            self.warning_label.setText(" ".join(result.warnings))
-            self.warning_label.show()
-        self.start_button.setText("Transcribe again")
-        self.start_button.setEnabled(True)
-        self.folder_button.setEnabled(True)
-        self.transcript_button.setEnabled(
-            bool(result.transcript_pdf or result.transcript_md)
-        )
-        self._fit_window_to_content()
+            "existing": "That recording was already transcribed.",
+        }.get(result.attribution, "")
+        if result.reused:
+            title = "Already transcribed"
+        else:
+            title = "Transcript ready"
+        detail = " ".join(filter(None, [summary, *result.warnings]))
+        self._show_status("done", title, detail)
 
     def failed(self, message: str) -> None:
-        self.status_label.setText("Transcription failed.")
-        self.warning_label.setText(message)
-        self.warning_label.show()
-        self.start_button.setText("Transcribe")
-        self.start_button.setEnabled(True)
-        self._fit_window_to_content()
+        self._set_state(self.READY if self.source_path else self.IDLE)
+        self._show_status("error", "Transcription failed", _short_detail(message))
 
     def open_folder(self) -> None:
         if self.result is not None:
@@ -346,20 +408,22 @@ class TranscribeWindow(BaseWindow):
         if target is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
+    # ---------- window ----------
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._fit_window_to_content()
 
     def _fit_window_to_content(self) -> None:
-        """Size to the content so the status line is never scrolled away."""
+        """Size to the content so nothing is ever scrolled out of sight."""
         self.content.adjustSize()
-        desired = self.content.sizeHint().height() + 150
+        desired = self.content.sizeHint().height() + 168
         screen = (
             QApplication.screenAt(self.frameGeometry().center())
             or QApplication.primaryScreen()
         )
         ceiling = screen.availableGeometry().height() - 48 if screen else 900
-        self.setFixedHeight(max(560, min(desired, ceiling)))
+        self.setFixedHeight(max(430, min(desired, ceiling)))
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape and self.worker is None:
@@ -370,7 +434,9 @@ class TranscribeWindow(BaseWindow):
 
     def closeEvent(self, event) -> None:
         if self.worker is not None:
-            self.status_label.setText("Finishing the current transcription first…")
+            self._show_status(
+                "working", "Finishing…", "The window closes when this is done."
+            )
             event.ignore()
             return
         lock = self._instance_lock

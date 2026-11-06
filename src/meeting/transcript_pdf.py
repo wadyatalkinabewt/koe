@@ -156,6 +156,7 @@ def render_transcript_pdf(
     recorder_name: str,
     output_path: Path | str,
     notes_text: str = "",
+    direction: str = "",
 ) -> Path:
     """Write the approved coloured-card transcript PDF."""
     destination = Path(output_path)
@@ -210,6 +211,7 @@ def render_transcript_pdf(
         display_labels,
         speaker_colors,
         document.width,
+        subtitle=direction,
     )
     for utterance in utterances:
         raw_label = utterance["label"]

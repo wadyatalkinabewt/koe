@@ -333,6 +333,7 @@ def build_header_story(
     document_width: float,
     *,
     space_after: float = 4 * mm,
+    subtitle: str = "",
 ) -> list:
     styles = header_styles()
     participant_list = _participant_rows(
@@ -367,9 +368,14 @@ def build_header_story(
             ]
         ),
     )
-    return [
+    heading = [
         Paragraph(html.escape(meeting_name), styles["title"]),
         Paragraph(display_date(started_at), styles["date"]),
+    ]
+    if subtitle:
+        heading.append(Paragraph(html.escape(subtitle), styles["date"]))
+    return [
+        *heading,
         Spacer(1, 3.2 * mm),
         HRFlowable(
             width="100%",

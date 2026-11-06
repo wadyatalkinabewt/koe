@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMenu,
     QPushButton,
     QSizePolicy,
@@ -853,3 +854,62 @@ def test_completion_sound_is_short_and_bounded():
 
     assert 0.2 <= duration <= 0.8
     assert max(abs(sample) for sample in samples) / 32768 < 0.75
+
+
+def test_transcribe_window_has_no_duplicate_name_field(qapp):
+    from ui.transcribe_window import TranscribeWindow
+
+    window = TranscribeWindow()
+    fields = {field.placeholderText() for field in window.findChildren(QLineEdit)}
+    assert "Contact name or number" in fields
+    assert "Your name" not in fields
+    assert not hasattr(window, "owner_input")
+    window.close()
+
+
+def test_transcribe_button_stays_disabled_until_a_file_is_chosen(qapp, tmp_path):
+    from ui.transcribe_window import TranscribeWindow
+
+    window = TranscribeWindow()
+    assert window.state == window.IDLE
+    assert window.transcribe_button.isEnabled() is False
+    assert window.folder_button.isHidden() is True
+    assert window.transcript_button.isHidden() is True
+    window.close()
+
+
+def test_footer_shows_open_actions_only_after_success(qapp):
+    from ui.transcribe_window import TranscribeWindow
+
+    window = TranscribeWindow()
+
+    class FakeResult:
+        output_dir = Path(".")
+        transcript_pdf = Path("transcript.pdf")
+        transcript_md = Path("transcript.md")
+        attribution = "channel"
+        reused = False
+        warnings: list = []
+
+    window.finished(FakeResult)
+
+    assert window.state == window.DONE
+    assert window.transcribe_button.isHidden() is True
+    assert window.folder_button.isHidden() is False
+    assert window.transcript_button.isHidden() is False
+    window.close()
+
+
+def test_failure_keeps_transcribe_available_and_shows_a_readable_card(qapp):
+    from ui.transcribe_window import TranscribeWindow
+
+    window = TranscribeWindow()
+    window.failed(
+        "Could not read x.mp4: Invalid data found when processing input. " * 20
+    )
+
+    assert window.status_card.isHidden() is False
+    assert window.status_title.text() == "Transcription failed"
+    assert len(window.status_detail.text()) <= 220
+    assert window.status_detail.text().endswith("…")
+    window.close()

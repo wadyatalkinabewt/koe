@@ -51,6 +51,7 @@ def render_transcript(
     started_at: datetime,
     duration_seconds: float,
     notes_text: str = "",
+    direction: str = "",
 ) -> str:
     """Build the final transcript markdown.
 
@@ -66,6 +67,8 @@ def render_transcript(
     )
     if participants:
         lines.append(f"**Participants**: {', '.join(participants)}")
+    if direction:
+        lines.append(f"**Direction**: {direction}")
     lines.append("")
     lines.append("---")
     lines.append("")
