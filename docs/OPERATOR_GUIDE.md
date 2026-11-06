@@ -128,10 +128,11 @@ never turn diagnostic text into a summary deliverable.
 
 ## Transcribing an existing recording
 
-Choose **Transcribe recording…** in the tray menu. Pick a file, name the other
-party, and optionally ask for a summary. Your own name comes from Settings, so
-it is never asked for twice. Any container ffmpeg can decode works; the
-extension is never trusted for format detection.
+Choose **Transcribe recording…** in the tray menu. Pick a file and name the
+other party. Your own name comes from Settings, so it is never asked for twice,
+and whether a summary is produced is the **Generate a summary by default**
+switch in Settings rather than a per-run choice in this window. Any container
+ffmpeg can decode works; the extension is never trusted for format detection.
 
 When the recording keeps each party on its own stereo channel, speakers are
 attributed from channel energy rather than guessed by diarization. That is
@@ -158,6 +159,10 @@ from recording_transcript import transcribe_recording
 result = transcribe_recording("C:/path/recording.ogg", generate_summary=False)
 print(result.output_dir)
 ```
+
+Scripted runs pass `generate_summary` themselves and default to `False`; the
+Settings switch governs the desktop window, never a script, so a pipeline's cost
+cannot change because of a UI preference.
 
 The transcript header records the call direction (`Outgoing call` or
 `Incoming call`) when the filename carries it. Direction is deliberately not

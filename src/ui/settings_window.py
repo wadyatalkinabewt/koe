@@ -252,8 +252,8 @@ class SettingsWindow(BaseWindow):
 
         transcripts = self._section(
             "Transcripts",
-            "Applies to recordings transcribed from a file, not to Scribe "
-            "meetings or snippets.",
+            "Applies to the Transcribe recording window. Scribe meetings and "
+            "snippets are unaffected, and scripted runs pass their own option.",
         )
         self.default_summary_checkbox = ToggleRow(
             "Generate a summary by default"

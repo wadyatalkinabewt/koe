@@ -1,8 +1,9 @@
 """Desktop window for transcribing an existing audio file.
 
 Thin shell over ``recording_transcript.transcribe_recording``: pick a file,
-name the other party, optionally ask for a summary, then watch the worker. All
-the real work stays in the headless module so a pipeline can skip this window.
+name the other party, then watch the worker. Summaries are a Settings decision,
+so this window does not ask again. All the real work stays in the headless
+module so a pipeline can skip this window.
 """
 
 import os
@@ -33,7 +34,6 @@ from meeting.transcript import format_timestamp  # noqa: E402
 from paths import resource_path  # noqa: E402
 from ui import theme  # noqa: E402
 from ui.base_window import BaseWindow  # noqa: E402
-from ui.settings_window import ToggleRow  # noqa: E402
 from utils import ConfigManager  # noqa: E402
 
 TRANSCRIBE_APP_ID = "Koe.Transcribe.App"
@@ -161,12 +161,6 @@ class TranscribeWindow(BaseWindow):
         layout.addWidget(speakers)
         layout.addWidget(self._divider())
 
-        summary = self._section("Summary")
-        self.summary_checkbox = ToggleRow("Also generate a summary")
-        self.summary_checkbox.setChecked(self._default_summary())
-        summary.layout().addWidget(self.summary_checkbox)
-        layout.addWidget(summary)
-
         self.status_card = QFrame()
         self.status_card.setObjectName("statusCard")
         self.status_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
@@ -254,7 +248,12 @@ class TranscribeWindow(BaseWindow):
         return divider
 
     @staticmethod
-    def _default_summary() -> bool:
+    def _summary_enabled() -> bool:
+        """Summary is a Settings decision, not a per-run one.
+
+        Read at run time so toggling it in Settings takes effect on the next
+        transcription without reopening this window.
+        """
         return bool(
             ConfigManager.get_config_value("transcript_options", "default_summary")
         )
@@ -364,7 +363,7 @@ class TranscribeWindow(BaseWindow):
         self.worker = TranscribeWorker(
             self.source_path,
             self.other_input.text().strip(),
-            self.summary_checkbox.isChecked(),
+            self._summary_enabled(),
         )
         self.worker.status_signal.connect(self._on_progress)
         self.worker.done_signal.connect(self.finished)

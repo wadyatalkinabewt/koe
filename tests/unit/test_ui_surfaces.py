@@ -931,3 +931,32 @@ def test_settings_exposes_the_transcript_summary_default(qapp, monkeypatch):
 
     assert ConfigManager.get_config_value("transcript_options", "default_summary") is True
     window.close()
+
+
+def test_transcribe_window_has_no_summary_toggle(qapp):
+    from ui.transcribe_window import TranscribeWindow
+
+    window = TranscribeWindow()
+    assert not hasattr(window, "summary_checkbox")
+    window.close()
+
+
+def test_transcribe_window_follows_the_settings_summary_default(qapp, monkeypatch):
+    from utils import ConfigManager
+    from ui.transcribe_window import TranscribeWindow
+
+    window = TranscribeWindow()
+    monkeypatch.setitem(
+        ConfigManager.get_instance().config["transcript_options"],
+        "default_summary",
+        True,
+    )
+    assert window._summary_enabled() is True
+
+    monkeypatch.setitem(
+        ConfigManager.get_instance().config["transcript_options"],
+        "default_summary",
+        False,
+    )
+    assert window._summary_enabled() is False
+    window.close()
