@@ -902,6 +902,7 @@ class ScribeWindow(QMainWindow):
                 border-color: {theme.ACCENT_HOVER};
             }}
             QPushButton#transcriptButton,
+            QPushButton#folderButton,
             QPushButton#recoveryButton {{
                 min-height: 0;
                 min-width: 0;
@@ -914,6 +915,7 @@ class ScribeWindow(QMainWindow):
                 font-weight: 600;
             }}
             QPushButton#transcriptButton:hover,
+            QPushButton#folderButton:hover,
             QPushButton#recoveryButton:hover {{
                 background: {theme.SURFACE_HOVER};
                 color: {theme.TEXT_COLOR};
@@ -1018,7 +1020,7 @@ class ScribeWindow(QMainWindow):
         self.open_summary_button.setAccessibleName("Open summary")
         self.open_summary_button.setCursor(Qt.PointingHandCursor)
         self.open_summary_button.setToolTip("Open summary")
-        self.open_summary_button.setFixedHeight(34)
+        self.open_summary_button.setFixedHeight(30)
         self.open_summary_button.clicked.connect(self._open_summary)
         completion_layout.addWidget(self.open_summary_button)
         self.open_transcript_button = QPushButton("Transcript")
@@ -1026,7 +1028,7 @@ class ScribeWindow(QMainWindow):
         self.open_transcript_button.setAccessibleName("Open transcript")
         self.open_transcript_button.setCursor(Qt.PointingHandCursor)
         self.open_transcript_button.setToolTip("Open transcript")
-        self.open_transcript_button.setFixedHeight(34)
+        self.open_transcript_button.setFixedHeight(30)
         self.open_transcript_button.clicked.connect(self._open_transcript)
         completion_layout.addWidget(self.open_transcript_button)
         self.completion_options.hide()
@@ -1049,18 +1051,32 @@ class ScribeWindow(QMainWindow):
         header_layout.addStretch()
         header_layout.addWidget(self.action_stack, 0, Qt.AlignVCenter)
         header_layout.addWidget(self.timer_label, 0, Qt.AlignVCenter)
-        header_layout.addWidget(self.completion_options, 0, Qt.AlignVCenter)
+        header_layout.addWidget(self.completion_options, 0, Qt.AlignBottom)
 
         self.header_state_row = QWidget()
-        self.header_state_row.setFixedHeight(28)
+        self.header_state_row.setFixedHeight(32)
         header_state_layout = QHBoxLayout(self.header_state_row)
         header_state_layout.setContentsMargins(0, 8, 0, 1)
+        header_state_layout.setSpacing(10)
         header_state_layout.addStretch()
         self.header_state_label = QLabel("")
         self.header_state_label.setObjectName("headerStateMessage")
         self.header_state_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.header_state_label.setFixedWidth(334)
         header_state_layout.addWidget(self.header_state_label)
+        self.folder_button = QPushButton("Open folder")
+        self.folder_button.setObjectName("folderButton")
+        self.folder_button.setAccessibleName("Open meeting folder")
+        self.folder_button.setCursor(Qt.PointingHandCursor)
+        self.folder_button.setToolTip(
+            "Open the folder holding the transcript, summary, and Markdown files"
+        )
+        self.folder_button.setFixedHeight(24)
+        self.folder_button.setDefault(False)
+        self.folder_button.setAutoDefault(False)
+        self.folder_button.clicked.connect(self._open_folder)
+        self.folder_button.hide()
+        header_state_layout.addWidget(self.folder_button, 0, Qt.AlignVCenter)
         self.header_state_label.hide()
 
         self.divider = QFrame()
@@ -1136,9 +1152,35 @@ class ScribeWindow(QMainWindow):
         ]
         visible_width = sum(button.width() for button in visible_buttons)
         visible_width += max(0, len(visible_buttons) - 1) * 7
-        self.completion_options.setFixedSize(visible_width, 38)
+        self.folder_button.ensurePolished()
+        folder_text = self.folder_button.fontMetrics().horizontalAdvance(
+            self.folder_button.text()
+        )
+        # A lone document button grows to the folder label so the two share edges.
+        group_width = max(visible_width, folder_text + 24)
+        if len(visible_buttons) == 1 and group_width > visible_buttons[0].width():
+            visible_buttons[0].setFixedWidth(group_width)
+        self.completion_options.setFixedSize(group_width, 30)
+        self.folder_button.setFixedSize(group_width, 24)
+
+    def _reset_header_state_label(self) -> None:
+        self.header_state_label.setFixedWidth(334)
+        self.header_state_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.header_state_label.setContentsMargins(0, 0, 0, 0)
+
+    def _hide_folder_button(self) -> None:
+        self.folder_button.hide()
+        self.header_state_row.layout().setContentsMargins(0, 8, 0, 1)
+
+    def _show_folder_button(self) -> None:
+        # Equal space under the document buttons and above the divider.
+        self.header_state_row.layout().setContentsMargins(0, 4, 0, 4)
+        self.folder_button.setFixedHeight(24)
+        self.folder_button.show()
 
     def _clear_retry_status(self) -> None:
+        self._hide_folder_button()
+        self._reset_header_state_label()
         self.header_state_label.clear()
         self.header_state_label.hide()
         self.completion_options.hide()
@@ -1149,6 +1191,8 @@ class ScribeWindow(QMainWindow):
     def _show_header_message(
         self, text: str, action_widget: QWidget, anchor_button: QPushButton
     ) -> None:
+        self._hide_folder_button()
+        self._reset_header_state_label()
         self.completion_options.hide()
         self.action_stack.setCurrentWidget(action_widget)
         self.action_stack.show()
@@ -1164,8 +1208,21 @@ class ScribeWindow(QMainWindow):
         self.header_state_label.setContentsMargins(max(0, anchor_offset), 0, 0, 0)
 
     def _show_completion_actions(self, summary_status: str) -> None:
+        self.action_stack.hide()
+        self.timer_label.hide()
+        self._fit_header_actions()
+        self.completion_options.show()
+        self._show_folder_button()
         if summary_status == SUMMARY_FAILED:
+            self.header_state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.header_state_label.setContentsMargins(0, 0, 0, 0)
             self.header_state_label.setText("Summary unavailable")
+            self.header_state_label.setFixedWidth(
+                self.header_state_label.fontMetrics().horizontalAdvance(
+                    self.header_state_label.text()
+                )
+                + 2
+            )
             self.header_state_label.setToolTip(
                 "The transcript was saved successfully; summary generation failed."
             )
@@ -1174,10 +1231,6 @@ class ScribeWindow(QMainWindow):
             self.header_state_label.clear()
             self.header_state_label.setToolTip("")
             self.header_state_label.hide()
-        self.action_stack.hide()
-        self.timer_label.hide()
-        self._fit_header_actions()
-        self.completion_options.show()
 
     @staticmethod
     def _recording_dot_icon(*, active: bool) -> QIcon:
@@ -1197,6 +1250,8 @@ class ScribeWindow(QMainWindow):
         self.record_button.setIcon(self._recording_dot_icon(active=self._pulse_on))
 
     def _show_working_status(self, text: str) -> None:
+        self._hide_folder_button()
+        self._reset_header_state_label()
         self.header_state_label.clear()
         self.header_state_label.hide()
         self.completion_options.hide()
@@ -1436,6 +1491,10 @@ class ScribeWindow(QMainWindow):
     def _open_transcript(self):
         if self._done_transcript_path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._done_transcript_path))
+
+    def _open_folder(self):
+        if self._done_folder_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._done_folder_path))
 
     def _open_recovery_folder(self):
         recovery_path = None

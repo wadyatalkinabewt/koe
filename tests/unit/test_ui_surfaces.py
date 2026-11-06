@@ -487,9 +487,17 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.open_transcript_button.accessibleName() == "Open transcript"
     assert scribe.open_summary_button.objectName() == "summaryButton"
     assert scribe.open_transcript_button.objectName() == "transcriptButton"
-    assert scribe.open_summary_button.height() == 34
-    assert scribe.open_transcript_button.height() == 34
+    assert scribe.open_summary_button.height() == 30
+    assert scribe.open_transcript_button.height() == 30
     assert scribe.completion_options.objectName() == "completionOptions"
+    assert scribe.folder_button.text() == "Open folder"
+    assert scribe.folder_button.objectName() == "folderButton"
+    assert scribe.folder_button.accessibleName() == "Open meeting folder"
+    assert scribe.folder_button.height() == 24
+    assert scribe.folder_button.isVisible()
+    assert not hasattr(scribe, "completion_buttons")
+    assert scribe.completion_options.height() == 30
+    assert scribe.completion_options.width() == scribe.folder_button.width()
     button_gap = scribe.open_transcript_button.mapTo(
         scribe.completion_options, QPoint()
     ).x() - (
@@ -502,6 +510,21 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
         + scribe.completion_options.width()
     )
     assert scribe.centralWidget().width() - completion_right == 28
+    assert scribe.open_transcript_button.mapTo(scribe.centralWidget(), QPoint()).x() + (
+        scribe.open_transcript_button.width()
+    ) == completion_right
+    assert scribe.folder_button.mapTo(scribe.centralWidget(), QPoint()).x() == (
+        scribe.open_summary_button.mapTo(scribe.centralWidget(), QPoint()).x()
+    )
+    assert (
+        scribe.folder_button.mapTo(scribe, QPoint()).y()
+        == scribe.open_summary_button.mapTo(scribe, QPoint()).y()
+        + scribe.open_summary_button.height()
+        + 4
+    )
+    assert scribe.divider.mapTo(scribe, QPoint()).y() - (
+        scribe.folder_button.mapTo(scribe, QPoint()).y() + scribe.folder_button.height()
+    ) == 4
     assert scribe.open_summary_button.width() >= (
         scribe.open_summary_button.fontMetrics().horizontalAdvance("Summary") + 24
     )
@@ -511,6 +534,9 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     )
     assert scribe.open_summary_button.width() < 120
     assert scribe.open_transcript_button.width() < 180
+    assert scribe.folder_button.width() >= (
+        scribe.folder_button.fontMetrics().horizontalAdvance("Open folder") + 24
+    )
     assert scribe._done_summary_path == str(summary_pdf)
     assert scribe._done_transcript_path == str(transcript_pdf)
 
@@ -524,7 +550,12 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     )
     QTest.mouseClick(scribe.open_summary_button, Qt.LeftButton)
     QTest.mouseClick(scribe.open_transcript_button, Qt.LeftButton)
-    assert [Path(path) for path in opened_paths] == [summary_pdf, transcript_pdf]
+    QTest.mouseClick(scribe.folder_button, Qt.LeftButton)
+    assert [Path(path) for path in opened_paths] == [
+        summary_pdf,
+        transcript_pdf,
+        meeting_dir,
+    ]
 
     from meeting.app import SUMMARY_FAILED, SUMMARY_NOT_CONFIGURED
 
@@ -535,14 +566,26 @@ def test_status_and_scribe_construct_with_new_copy(qapp, monkeypatch, tmp_path):
     assert scribe.open_transcript_button.isVisible()
     assert scribe.open_transcript_button.property("primaryCompletion") is True
     assert not scribe.header_state_label.isVisible()
+    assert scribe.folder_button.isVisible()
     assert scribe.completion_options.width() == scribe.open_transcript_button.width()
+    assert scribe.folder_button.width() == scribe.open_transcript_button.width()
+    assert scribe.folder_button.mapTo(scribe.centralWidget(), QPoint()).x() == (
+        scribe.open_transcript_button.mapTo(scribe.centralWidget(), QPoint()).x()
+    )
 
     scribe._on_worker_done(str(meeting_dir), "", SUMMARY_FAILED)
     qapp.processEvents()
     assert scribe.open_summary_button.isHidden()
     assert scribe.header_state_label.text() == "Summary unavailable"
     assert scribe.header_state_label.isVisible()
+    assert scribe.header_state_label.alignment() & Qt.AlignRight
     assert "saved successfully" in scribe.header_state_label.toolTip()
+    assert scribe.folder_button.isVisible()
+    assert scribe.header_state_label.mapTo(scribe, QPoint()).x() + (
+        scribe.header_state_label.width()
+    ) <= scribe.folder_button.mapTo(scribe, QPoint()).x()
+    QTest.mouseClick(scribe.folder_button, Qt.LeftButton)
+    assert Path(opened_paths[-1]) == meeting_dir
 
     transcript_pdf.unlink()
     transcript_markdown = meeting_dir / "transcript.md"

@@ -88,10 +88,10 @@ A successful OpenRouter post-processing request also produces `summary.pdf` and
 ```text
 transcript.pdf
 summary.pdf          # only after successful OpenRouter post-processing
-transcript.md       # optional
-summary.md          # optional; only when summary.pdf exists
-microphone.wav      # optional
-meeting-audio.wav   # optional
+transcript.md
+summary.md           # only when summary.pdf exists
+microphone.wav       # optional
+meeting-audio.wav    # optional
 ```
 
 Notes are appended to the transcript rather than written to a separate file.
@@ -112,10 +112,12 @@ still applies.
 
 On completion, **Summary** appears only when `summary.pdf` was created and
 **Transcript** opens `transcript.pdf`. For transcript-only completion,
-**Transcript** is the sole primary action. A provider failure is shown as
-**Summary unavailable** without putting the raw provider diagnostic in a
-meeting document. If an available PDF is missing and its optional Markdown copy
-exists, the corresponding action opens the Markdown document instead.
+**Transcript** is the sole primary action. **Open folder** is a matching button
+beneath them and opens the meeting folder, where the Markdown copies are kept
+for reuse in another tool. A provider failure is shown as **Summary unavailable**
+without putting the raw provider diagnostic in a meeting document. If an
+available PDF is missing and its Markdown copy exists, the corresponding action
+opens the Markdown document instead.
 
 ## Speaker labels and summaries
 
