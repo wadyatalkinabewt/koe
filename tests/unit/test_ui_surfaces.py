@@ -852,25 +852,30 @@ def test_completion_sound_is_short_and_bounded():
     assert max(abs(sample) for sample in samples) / 32768 < 0.75
 
 
-def test_transcribe_window_has_no_duplicate_name_field(qapp):
+def test_transcribe_window_asks_for_no_names_at_all(qapp):
     from ui.transcribe_window import TranscribeWindow
 
     window = TranscribeWindow()
-    fields = {field.placeholderText() for field in window.findChildren(QLineEdit)}
-    assert "Contact name or number (optional)" in fields
-    assert "Your name" not in fields
+    # Your name comes from Settings; the other party comes from the recording's
+    # filename. A name field here cannot describe a room of three speakers, so
+    # there is deliberately none.
+    # The only line edit is the read-only file display.
+    edits = window.findChildren(QLineEdit)
+    assert len(edits) == 1 and edits[0].isReadOnly()
     assert not hasattr(window, "owner_input")
+    assert not hasattr(window, "other_input")
     window.close()
 
 
-def test_other_party_field_only_shows_for_multiple_speakers(qapp):
+def test_speaker_choice_is_a_toggle_not_a_dropdown(qapp):
+    from PyQt5.QtWidgets import QComboBox
     from ui.transcribe_window import TranscribeWindow
 
     window = TranscribeWindow()
-    window.speaker_choice.setCurrentIndex(0)          # one person
-    assert window.other_input.isHidden() is True
-    window.speaker_choice.setCurrentIndex(1)          # two or more
-    assert window.other_input.isHidden() is False
+    assert window.findChildren(QComboBox) == []
+    assert window._speaker_mode() == "single"
+    window.multi_speaker_toggle.setChecked(True)
+    assert window._speaker_mode() == "multi"
     window.close()
 
 

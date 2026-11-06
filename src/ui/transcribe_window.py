@@ -16,7 +16,6 @@ from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
-    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,6 +34,7 @@ from meeting.transcript import format_timestamp  # noqa: E402
 from paths import resource_path  # noqa: E402
 from ui import theme  # noqa: E402
 from ui.base_window import BaseWindow  # noqa: E402
+from ui.settings_window import ToggleRow  # noqa: E402
 from utils import ConfigManager  # noqa: E402
 
 TRANSCRIBE_APP_ID = "Koe.Transcribe.App"
@@ -80,10 +80,9 @@ class TranscribeWorker(QThread):
     done_signal = pyqtSignal(object)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, source: Path, other: str, summary: bool, speakers: str):
+    def __init__(self, source: Path, summary: bool, speakers: str):
         super().__init__()
         self.source = source
-        self.other = other
         self.summary = summary
         self.speakers = speakers
 
@@ -93,7 +92,6 @@ class TranscribeWorker(QThread):
         try:
             result = transcribe_recording(
                 self.source,
-                other_name=self.other or None,
                 generate_summary=self.summary,
                 speakers=self.speakers,
                 status_callback=self.status_signal.emit,
@@ -158,16 +156,9 @@ class TranscribeWindow(BaseWindow):
         layout.addWidget(self._divider())
 
         speakers = self._section("Speakers")
-        self.speaker_choice = QComboBox()
-        self.speaker_choice.addItem("One person", "single")
-        self.speaker_choice.addItem("Two or more people", "multi")
-        self.speaker_choice.currentIndexChanged.connect(self._on_speaker_change)
-        speakers.layout().addWidget(self.speaker_choice)
-        self.other_label = _label("Other party", "fieldLabel")
-        self.other_input = QLineEdit()
-        self.other_input.setPlaceholderText("Contact name or number (optional)")
-        speakers.layout().addWidget(self.other_label)
-        speakers.layout().addWidget(self.other_input)
+        self.multi_speaker_toggle = ToggleRow("Two or more speakers")
+        self.multi_speaker_toggle.toggled.connect(self._on_speaker_change)
+        speakers.layout().addWidget(self.multi_speaker_toggle)
         layout.addWidget(speakers)
         layout.addWidget(self._divider())
 
@@ -259,12 +250,9 @@ class TranscribeWindow(BaseWindow):
         return divider
 
     def _speaker_mode(self) -> str:
-        return str(self.speaker_choice.currentData() or "single")
+        return "multi" if self.multi_speaker_toggle.isChecked() else "single"
 
     def _on_speaker_change(self, *_args) -> None:
-        multiple = self._speaker_mode() == "multi"
-        self.other_label.setVisible(multiple)
-        self.other_input.setVisible(multiple)
         self._fit_window_to_content()
 
     @staticmethod
@@ -347,7 +335,7 @@ class TranscribeWindow(BaseWindow):
             self.select_file(Path(chosen))
 
     def select_file(self, path: Path) -> None:
-        from recording_transcript import parse_recording_filename, probe_audio
+        from recording_transcript import probe_audio
 
         self.source_path = path
         self.file_input.setText(path.name)
@@ -370,10 +358,7 @@ class TranscribeWindow(BaseWindow):
         # One channel is almost certainly one voice, and skipping diarization
         # there avoids paying for a label nobody needs. Two channels is left as
         # "two or more" so a stereo call keeps its channel attribution.
-        self.speaker_choice.setCurrentIndex(0 if details["channels"] <= 1 else 1)
-        parsed = parse_recording_filename(path)
-        if parsed.other_name or parsed.phone_number:
-            self.other_input.setText(parsed.other_name or parsed.phone_number)
+        self.multi_speaker_toggle.setChecked(details["channels"] > 1)
         self._on_speaker_change()
 
         self._set_state(self.READY)
@@ -385,10 +370,8 @@ class TranscribeWindow(BaseWindow):
         self._set_state(self.BUSY)
         self._show_status("working", "Reading the recording…")
 
-        multiple = self._speaker_mode() == "multi"
         self.worker = TranscribeWorker(
             self.source_path,
-            self.other_input.text().strip() if multiple else "",
             self._summary_enabled(),
             self._speaker_mode(),
         )

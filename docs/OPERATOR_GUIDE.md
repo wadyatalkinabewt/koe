@@ -132,18 +132,20 @@ never turn diagnostic text into a summary deliverable.
 
 ## Transcribing an existing recording
 
-Choose **Transcribe recording…** in the tray menu, pick a file, and say how
-many people speak in it. **One person** labels everything with your name and
-skips diarization entirely, so no provider work is spent on a label that cannot
-change. **Two or more people** uses the stereo channel split when the recording
-has one, and otherwise asks the provider to separate speakers; the other party's
-name is optional.
+Choose **Transcribe recording…** in the tray menu and pick a file. A single
+**Two or more speakers** switch says how many voices to expect, preselected from
+the file's channel count: one channel means one person, two channels means more
+than one.
 
-The choice is preselected from the file: one channel means one person, two
-channels means more than one. Your own name comes from Settings, and whether a
-summary is produced is also a Settings switch, so neither is asked for twice.
-Any container ffmpeg can decode works; the extension is never trusted for format
-detection.
+- **Off (one person)** labels everything with your name and skips diarization
+  entirely, so no provider work is spent on a label that cannot change.
+- **On** uses the stereo channel split when the recording has one, and otherwise
+  asks the provider to separate speakers.
+
+No names are asked for here. Your own comes from Settings, and the other party
+comes from the recording's filename — which is why there is no field to fill in:
+a single name cannot describe a room of three speakers. Any container ffmpeg can
+decode works; the extension is never trusted for format detection.
 
 When the recording keeps each party on its own stereo channel, speakers are
 attributed from channel energy rather than guessed by diarization. That is

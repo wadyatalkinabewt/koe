@@ -425,11 +425,11 @@ def transcribe_recording(
     identified = bool(parsed.other_name or parsed.phone_number)
     other = (other_name or parsed.other_name or parsed.phone_number or "").strip()
     if not other:
-        other = "Second party" if identified else "Recording"
-        identified = False
-    title = (
-        f"{owner} and {other}" if identified else f"Recording: {source.stem}"
-    )
+        # Nothing in the filename names the other side. A neutral label beats
+        # mislabelling a second voice with the file's name.
+        other = "Speaker 2"
+    identified = identified and bool(other_name or parsed.other_name or parsed.phone_number)
+    title = f"{owner} and {other}" if identified else f"Recording: {source.stem}"
     participants = [owner, other] if identified else [owner]
     started_at = _started_at(parsed, source)
     direction = {"out": "Outgoing call", "in": "Incoming call"}.get(
@@ -508,6 +508,9 @@ def transcribe_recording(
 
     if not segments:
         raise DecodeError("No speech was detected in this recording.")
+
+    if not identified and attribution == "channel" and other not in participants:
+        participants = [owner, other]
 
     duration = max(
         (segment.get("end") or 0.0 for segment in segments),
