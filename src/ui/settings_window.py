@@ -250,6 +250,18 @@ class SettingsWindow(BaseWindow):
         self.content_layout.addWidget(scribe)
         self.content_layout.addWidget(self._divider())
 
+        transcripts = self._section(
+            "Transcripts",
+            "Applies to recordings transcribed from a file, not to Scribe "
+            "meetings or snippets.",
+        )
+        self.default_summary_checkbox = ToggleRow(
+            "Generate a summary by default"
+        )
+        transcripts.layout().addWidget(self.default_summary_checkbox)
+        self.content_layout.addWidget(transcripts)
+        self.content_layout.addWidget(self._divider())
+
         snippet = self._section("Snippet")
         snippet.layout().addWidget(_label("Activation hotkey", "subsectionTitle"))
         self.hotkey_input = QLineEdit()
@@ -327,6 +339,9 @@ class SettingsWindow(BaseWindow):
         self.transcripts_input.setText(
             ConfigManager.get_config_value("transcript_options", "root_folder") or ""
         )
+        self.default_summary_checkbox.setChecked(
+            bool(ConfigManager.get_config_value("transcript_options", "default_summary"))
+        )
         self.save_meeting_audio_checkbox.setChecked(
             bool(ConfigManager.get_config_value("meeting_options", "save_audio"))
         )
@@ -350,6 +365,7 @@ class SettingsWindow(BaseWindow):
             field.textChanged.connect(self._schedule_save)
         for toggle in (
             self.save_meeting_audio_checkbox,
+            self.default_summary_checkbox,
             self.beep_checkbox,
         ):
             toggle.toggled.connect(self._schedule_save)
@@ -403,6 +419,11 @@ class SettingsWindow(BaseWindow):
             self.hotkey_input.text().strip() or "ctrl+shift+space",
             "recording_options",
             "activation_key",
+        )
+        ConfigManager.set_config_value(
+            self.default_summary_checkbox.isChecked(),
+            "transcript_options",
+            "default_summary",
         )
         ConfigManager.set_config_value(
             self.beep_checkbox.isChecked(), "misc", "noise_on_completion"

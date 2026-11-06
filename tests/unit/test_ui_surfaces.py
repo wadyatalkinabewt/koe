@@ -120,7 +120,8 @@ def test_settings_autosaves_without_footer_or_retired_controls(qapp):
         section.layout().alignment() & Qt.AlignTop
         for section in sections_by_title.values()
     )
-    assert len(window.findChildren(QFrame, "settingsDivider")) == 3
+    # Profile, Storage, Scribe, Transcripts and Snippet are separated by dividers.
+    assert len(window.findChildren(QFrame, "settingsDivider")) == 4
     assert "changes save automatically" in labels
     storage_description = next(
         label
@@ -912,4 +913,21 @@ def test_failure_keeps_transcribe_available_and_shows_a_readable_card(qapp):
     assert window.status_title.text() == "Transcription failed"
     assert len(window.status_detail.text()) <= 220
     assert window.status_detail.text().endswith("…")
+    window.close()
+
+
+def test_settings_exposes_the_transcript_summary_default(qapp, monkeypatch):
+    from ui.settings_window import SettingsWindow
+
+    saved = {}
+    window = SettingsWindow()
+    monkeypatch.setattr(
+        window, "_schedule_save", lambda *args: saved.setdefault("scheduled", True)
+    )
+    window.default_summary_checkbox.setChecked(True)
+    window._save_values()
+
+    from utils import ConfigManager
+
+    assert ConfigManager.get_config_value("transcript_options", "default_summary") is True
     window.close()
