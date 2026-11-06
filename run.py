@@ -102,10 +102,21 @@ def run_scribe_window():
     return main()
 
 
+def run_transcribe_window():
+    load_dotenv(env_path(), override=True)
+    from ui.transcribe_window import main
+
+    return main()
+
+
 if __name__ == "__main__":
     ensure_runtime_dirs()
     if "--scribe-window" in sys.argv:
         run_scribe_window()
+        raise SystemExit(0)
+
+    if "--transcribe-window" in sys.argv:
+        run_transcribe_window()
         raise SystemExit(0)
 
     if "--setup" in sys.argv:

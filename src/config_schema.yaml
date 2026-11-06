@@ -16,6 +16,18 @@ meeting_options:
     type: bool
     description: "Keep microphone.wav and meeting-audio.wav with completed Scribe output."
 
+# Transcribing existing audio files
+
+transcript_options:
+  root_folder:
+    value: null
+    type: str
+    description: "Root folder for transcribed recordings. null = Documents/Koe/Transcripts."
+  default_summary:
+    value: false
+    type: bool
+    description: "Pre-select the summary option when transcribing a recording."
+
 # Transcription
 model_options:
   common:

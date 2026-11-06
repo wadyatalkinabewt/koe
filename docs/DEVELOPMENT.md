@@ -9,8 +9,8 @@ python -m venv .venv
 
 ## Runtime boundary
 
-Koe is a Windows-only tray application. Source runs resolve runtime data from
-the checkout; frozen builds resolve private data from the current Windows user
+Koe is a Windows-only tray application. Source runs resolve private runtime data
+from the checkout; frozen builds resolve it from the current Windows user
 profile. Tests override both locations with `KOE_APPDATA_DIR` and
 `KOE_DOCUMENTS_DIR` so they never touch real settings or recordings.
 
@@ -22,7 +22,14 @@ Source-run private state:
 <checkout>\logs\
 <checkout>\.scribe_temp\
 <checkout>\Snippets\
-<checkout>\Meetings\
+```
+
+Durable documents resolve to the user's Documents folder in source and packaged
+runs alike, so they survive a checkout being moved or rebuilt:
+
+```text
+%USERPROFILE%\Documents\Koe\Scribe\
+%USERPROFILE%\Documents\Koe\Transcripts\
 ```
 
 Do not commit or rewrite those paths. Before restarting a running source
@@ -45,6 +52,9 @@ instance, confirm that no snippet or Scribe recording is active.
 - `src/meeting/transcript_pdf.py`: PDF transcript rendering.
 - `src/meeting/summarizer.py`: optional OpenRouter summary client.
 - `src/meeting/summary_pdf.py`: PDF summary rendering.
+- `src/recording_transcript.py`: headless transcription of existing audio files
+  (ffmpeg decode, filename convention, channel attribution, documents).
+- `src/ui/transcribe_window.py`: desktop window over that headless module.
 - `src/config_schema.yaml`: preference schema.
 
 ## Invariants
@@ -69,6 +79,15 @@ instance, confirm that no snippet or Scribe recording is active.
 - Deepgram and Mistral return no equivalent deletable transcript ID; their
   provider retention policies apply and are documented in the README matrix.
 - Settings autosave must not restart Koe or interrupt active audio.
+- Existing recordings are decoded with ffmpeg to one 16 kHz mono upload. When
+  the stereo channels carry genuinely different signals, speakers are attributed
+  from channel energy and the provider is not asked to diarize; correlated
+  channels fall back to diarization. A segment whose left/right margin is too
+  small keeps the previous speaker instead of flipping on cross-talk.
+- Recording transcription is idempotent: an existing `transcript.md` is reused
+  unless the caller forces a new run.
+- `ffmpeg` and `ffprobe` must be on `PATH` for recording transcription; the
+  module raises a clear error rather than decoding silently.
 - `transcription_options.corrections` is re-read from the private config on
   each transcription, keyed by the file's modification stamp and size. Editing
   the dictionary therefore takes effect on the next Snippet or Scribe run

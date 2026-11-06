@@ -134,9 +134,13 @@ class KoeApp(QObject):
         self.tray_menu = QMenu()
         self.tray_menu.setStyleSheet(theme.tray_menu_stylesheet())
 
-        self.meeting_action = QAction("Start Scribe", self.app)
+        self.meeting_action = QAction("Scribe meeting\u2026", self.app)
         self.meeting_action.triggered.connect(self.start_meeting_mode)
         self.tray_menu.addAction(self.meeting_action)
+
+        self.transcribe_action = QAction("Transcribe recording\u2026", self.app)
+        self.transcribe_action.triggered.connect(self.start_transcribe_window)
+        self.tray_menu.addAction(self.transcribe_action)
 
         self.settings_action = QAction("Settings", self.app)
         self.settings_action.triggered.connect(self.settings_window.show)
@@ -163,15 +167,23 @@ class KoeApp(QObject):
 
     def start_meeting_mode(self):
         """Launch Scribe as a separate process."""
+        self._launch_child("--scribe-window", "Scribe")
+
+    def start_transcribe_window(self):
+        """Launch the recording-transcription window as a separate process."""
+        self._launch_child("--transcribe-window", "Transcribe")
+
+    def _launch_child(self, flag: str, label: str) -> None:
+        """Start one of Koe's detached child windows."""
         if getattr(sys, "frozen", False):
             executable = sys.executable
-            arguments = ["--scribe-window"]
+            arguments = [flag]
             working_directory = install_root()
         else:
             python_path = Path(sys.executable).resolve()
             pythonw_path = python_path.with_name("pythonw.exe")
             executable = str(pythonw_path if pythonw_path.exists() else python_path)
-            arguments = ["-B", str(source_root() / "run.py"), "--scribe-window"]
+            arguments = ["-B", str(source_root() / "run.py"), flag]
             working_directory = source_root()
         started = QProcess.startDetached(
             str(executable),
@@ -180,7 +192,7 @@ class KoeApp(QObject):
         )
         started_ok = started[0] if isinstance(started, tuple) else bool(started)
         if not started_ok:
-            _debug("Scribe process did not start")
+            _debug(f"{label} process did not start")
 
     def handle_command(self, command: str) -> None:
         """Dispatch a desktop shortcut command on Qt's main thread."""

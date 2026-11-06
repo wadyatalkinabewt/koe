@@ -70,6 +70,20 @@ def documents_dir() -> Path:
     return _known_documents_dir() / APP_NAME
 
 
+def documents_base_dir() -> Path:
+    r"""The user's ``Documents\Koe`` folder, for durable user-facing output.
+
+    Unlike ``documents_dir()`` this is the real Documents location in every
+    runtime, so Scribe meetings and transcribed recordings stay together and
+    survive a source checkout being moved or rebuilt. Snippets keep their
+    existing source-run location.
+    """
+    override = os.environ.get("KOE_DOCUMENTS_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    return _known_documents_dir() / APP_NAME
+
+
 def env_path() -> Path:
     return app_data_dir() / ".env"
 
@@ -97,8 +111,19 @@ def scribe_temp_dir() -> Path:
     return app_data_dir() / "scribe-temp"
 
 
+def default_scribe_dir() -> Path:
+    """Default output root for Scribe meetings."""
+    return documents_base_dir() / "Scribe"
+
+
+def default_transcripts_dir() -> Path:
+    """Default output root for transcribed recordings."""
+    return documents_base_dir() / "Transcripts"
+
+
 def default_meetings_dir() -> Path:
-    return documents_dir() / "Meetings"
+    """Scribe meetings live under the shared Koe documents folder."""
+    return default_scribe_dir()
 
 
 def default_snippets_dir() -> Path:
@@ -110,7 +135,8 @@ def ensure_runtime_dirs() -> None:
         app_data_dir(),
         logs_dir(),
         scribe_temp_dir(),
-        default_meetings_dir(),
+        default_scribe_dir(),
+        default_transcripts_dir(),
         default_snippets_dir(),
     ):
         path.mkdir(parents=True, exist_ok=True)

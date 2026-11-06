@@ -22,14 +22,14 @@ extra alignment delay. Scribe retains word timestamps for speaker attribution.
 Koe stays out of the way and treats retention as part of the product: snippet
 audio is ephemeral, while meeting audio is saved only when requested.
 
-## Two ways to use it
+## Three ways to use it
 
-| | Snippet | Scribe |
-|---|---|---|
-| **Best for** | Fleeting thoughts, prompts, and dictated text | Calls, interviews, and in-room meetings |
-| **Capture** | Press the hotkey, speak, press again | Record microphone and Windows loopback together |
-| **Result** | Formatted text on the clipboard | Diarized transcript PDF and Markdown; optional summary in both formats |
-| **Audio retention** | Never written to disk | Kept only when requested; recovery audio survives failures |
+| | Snippet | Scribe | Transcribe recording |
+|---|---|---|---|
+| **Best for** | Fleeting thoughts, prompts, and dictated text | Calls, interviews, and in-room meetings | Audio you already have on disk |
+| **Capture** | Press the hotkey, speak, press again | Record microphone and Windows loopback together | Choose any file ffmpeg can decode |
+| **Result** | Formatted text on the clipboard | Diarized transcript PDF and Markdown; optional summary in both formats | The same documents, with speakers read from a stereo channel split when the recorder keeps each party on its own channel |
+| **Audio retention** | Never written to disk | Kept only when requested; recovery audio survives failures | The source file is never modified |
 
 <p align="center">
   <img src="assets/readme/workflows.png" alt="Koe Snippet and Scribe workflows" width="100%">
@@ -98,6 +98,9 @@ only for model-assisted meeting summaries and contextual speaker resolution.
 Without it, Scribe completes with the transcript alone. If OpenRouter fails,
 Koe keeps the completed transcript, creates no diagnostic summary document,
 and reports that the summary is unavailable.
+
+Transcribing an existing recording also needs `ffmpeg` and `ffprobe` on `PATH`;
+Snippets and Scribe do not.
 
 ```powershell
 python -m venv .venv

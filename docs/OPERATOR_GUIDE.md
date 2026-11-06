@@ -126,14 +126,48 @@ Retention endpoint and must produce Summary, Key Decisions, Topics Discussed,
 Action Items, and Open Questions. Missing configuration and provider failures
 never turn diagnostic text into a summary deliverable.
 
+## Transcribing an existing recording
+
+Choose **Transcribe recording…** in the tray menu. Pick a file, confirm the two
+names, and optionally ask for a summary. Any container ffmpeg can decode works;
+the extension is never trusted for format detection.
+
+When the recording keeps each party on its own stereo channel, speakers are
+attributed from channel energy rather than guessed by diarization. That is
+deterministic, costs no diarization work, and holds for the whole file instead
+of being decided per segment. If the channels turn out to carry the same
+signal, Koe says so and falls back to diarization.
+
+Two parties sharing one channel cannot be separated this way; use Scribe's
+diarized modes for those recordings.
+
+Output is written to `Documents\Koe\Transcripts\<folder>`, where the folder
+combines the recording date, direction, and contact name when the filename
+follows the recorder's convention. Transcribing the same file again reuses the
+existing document instead of calling the provider again.
+
+The same work is available headlessly, without Qt:
+
+```python
+from recording_transcript import transcribe_recording
+result = transcribe_recording("C:/path/recording.ogg", generate_summary=False)
+print(result.output_dir)
+```
+
+`ffmpeg` and `ffprobe` must be on `PATH`.
+
 ## Storage and privacy
 
-Source runs store settings and output in the checkout. If Koe is built as a
-frozen Windows app, it uses:
+Settings, logs, custom corrections, and temporary audio follow the runtime: a
+source run keeps them in the checkout, and a frozen build keeps them in
+`%LOCALAPPDATA%\Koe`.
 
-- `%LOCALAPPDATA%\Koe` for secrets, settings, logs, custom corrections, and
-  temporary Scribe audio;
-- `%USERPROFILE%\Documents\Koe` for snippets and meetings.
+Durable documents always land in your Documents folder:
+
+- `%USERPROFILE%\Documents\Koe\Scribe` for Scribe meetings;
+- `%USERPROFILE%\Documents\Koe\Transcripts` for transcribed recordings;
+- snippets stay beside a source checkout, or in
+  `%USERPROFILE%\Documents\Koe\Snippets` for a frozen build.
 
 Every successful ElevenLabs response is deleted from ElevenLabs by its returned
 transcription ID. Deletion failures are retried and recorded locally without

@@ -1,20 +1,37 @@
 import paths
 
 
-def test_source_runs_keep_all_runtime_state_in_the_checkout(monkeypatch):
+def test_source_runs_keep_private_state_in_the_checkout(monkeypatch, tmp_path):
     monkeypatch.delenv("KOE_APPDATA_DIR", raising=False)
     monkeypatch.delenv("KOE_DOCUMENTS_DIR", raising=False)
     monkeypatch.setattr(paths, "is_frozen", lambda: False)
+    monkeypatch.setattr(paths, "_known_documents_dir", lambda: tmp_path / "Documents")
 
     root = paths.source_root()
+    documents = tmp_path / "Documents" / "Koe"
     assert paths.app_data_dir() == root
-    assert paths.documents_dir() == root
     assert paths.env_path() == root / ".env"
     assert paths.config_path() == root / "config.yaml"
     assert paths.logs_dir() == root / "logs"
     assert paths.scribe_temp_dir() == root / ".scribe_temp"
+
+    # Snippets stay beside the checkout, but durable documents live in Documents.
     assert paths.default_snippets_dir() == root / "Snippets"
-    assert paths.default_meetings_dir() == root / "Meetings"
+    assert paths.documents_base_dir() == documents
+    assert paths.default_scribe_dir() == documents / "Scribe"
+    assert paths.default_transcripts_dir() == documents / "Transcripts"
+    assert paths.default_meetings_dir() == documents / "Scribe"
+
+
+def test_packaged_runs_share_the_same_document_roots(tmp_path, monkeypatch):
+    monkeypatch.delenv("KOE_DOCUMENTS_DIR", raising=False)
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    monkeypatch.setattr(paths, "_known_documents_dir", lambda: tmp_path / "Documents")
+
+    documents = tmp_path / "Documents" / "Koe"
+    assert paths.default_scribe_dir() == documents / "Scribe"
+    assert paths.default_transcripts_dir() == documents / "Transcripts"
+    assert paths.default_snippets_dir() == documents / "Snippets"
 
 
 def test_packaged_runs_keep_per_user_windows_locations(tmp_path, monkeypatch):
