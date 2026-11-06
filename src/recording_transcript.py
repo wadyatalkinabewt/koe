@@ -46,6 +46,16 @@ _SPLIT_CORRELATION_THRESHOLD = 0.9
 _TARGET_RATE = 16000
 
 PHONE_FIELD = re.compile(r"^\+?\d[\d\s\-()]{2,}$")
+# The recorder writes E.164. A local NZ number is easier to recognise at a
+# glance and matches how the same person would be entered in contacts.
+_NZ_COUNTRY_CODE = "+64"
+
+
+def _localise_number(number: str) -> str:
+    digits = number.strip()
+    if digits.startswith(_NZ_COUNTRY_CODE):
+        return "0" + digits[len(_NZ_COUNTRY_CODE) :]
+    return digits
 
 
 class DecodeError(RuntimeError):
@@ -240,7 +250,7 @@ def parse_recording_filename(path: Path | str) -> RecordingName:
         recorded_at=_parse_stamp(match.group("stamp"), match.group("offset")),
         direction=match.group("direction"),
         other_name=other_name,
-        phone_number=phone_number,
+        phone_number=_localise_number(phone_number),
     )
 
 

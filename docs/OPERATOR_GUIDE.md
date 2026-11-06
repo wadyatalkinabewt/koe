@@ -143,7 +143,8 @@ diarized modes for those recordings.
 
 Output is written to `Documents\Koe\Transcripts\<folder>`, named the same way
 Scribe names meetings: the recording date and the other party, for example
-`26_11_06_Amy`, or `26_11_06_+64210385860` when the caller was unresolved. A
+`26_11_06_Amy`, or `26_11_06_0210385860` when the caller was unresolved (NZ
+`+64` numbers are shown with a leading `0`). A
 second call with the same person on the same day gets `_2` appended.
 
 Each folder records which audio file produced it, so transcribing the same file

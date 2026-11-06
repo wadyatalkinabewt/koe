@@ -20,7 +20,7 @@ def test_parses_the_recorder_filename_convention():
     )
     assert parsed.direction == "out"
     assert parsed.other_name == "Amy"
-    assert parsed.phone_number == "+64210385860"
+    assert parsed.phone_number == "0210385860"
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,22 @@ def test_parses_every_filename_shape(stem, direction, name):
 
     assert parsed.direction == direction
     assert parsed.other_name == name
-    assert parsed.phone_number == "+64210385860"
+    assert parsed.phone_number == "0210385860"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("+64210385860", "0210385860"),      # NZ mobile
+        ("+6434771234", "034771234"),        # NZ landline
+        ("+61412345678", "+61412345678"),    # other country untouched
+        ("+1 555 0100", "+1 555 0100"),      # keep the raw spacing
+    ],
+)
+def test_phone_numbers_are_localised_only_for_nz(raw, expected):
+    import recording_transcript as rt
+
+    assert rt._localise_number(raw) == expected
 
 
 def test_unknown_filenames_are_not_forced_into_the_convention():
@@ -166,7 +181,7 @@ def test_output_folder_uses_the_number_when_the_name_is_missing(tmp_path):
         _make_source(tmp_path, stem),
     )
 
-    assert folder.name == "26_11_06_+64210385860"
+    assert folder.name == "26_11_06_0210385860"
 
 
 def test_output_folder_falls_back_to_the_source_stem(tmp_path):
