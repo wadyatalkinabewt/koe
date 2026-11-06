@@ -187,6 +187,98 @@ def test_configured_corrections_always_use_the_configured_target_case():
     )
 
 
+def test_corrections_reload_when_the_private_config_changes(tmp_path, monkeypatch):
+    import transcription
+
+    config_file = tmp_path / "config.yaml"
+    monkeypatch.setattr(transcription, "config_path", lambda: config_file)
+    monkeypatch.setattr(transcription, "_CORRECTIONS_CACHE", None)
+
+    config_file.write_text(
+        "transcription_options:\n  corrections:\n    covey: Koe\n",
+        encoding="utf-8",
+    )
+    assert transcription.load_transcript_corrections() == {"covey": "Koe"}
+    assert transcription.apply_transcript_corrections("open covey") == "open Koe"
+
+    # A later edit must win without any restart or re-initialisation.
+    config_file.write_text(
+        "transcription_options:\n  corrections:\n    coey: Koe\n",
+        encoding="utf-8",
+    )
+    assert transcription.load_transcript_corrections() == {"coey": "Koe"}
+    assert transcription.apply_transcript_corrections("open coey") == "open Koe"
+
+
+def test_corrections_cache_is_reused_until_the_private_config_changes(
+    tmp_path, monkeypatch
+):
+    import transcription
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "transcription_options:\n  corrections:\n    covey: Koe\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(transcription, "config_path", lambda: config_file)
+    monkeypatch.setattr(transcription, "_CORRECTIONS_CACHE", None)
+
+    reads = []
+    real_reader = transcription._corrections_from_private_config
+    monkeypatch.setattr(
+        transcription,
+        "_corrections_from_private_config",
+        lambda: reads.append(True) or real_reader(),
+    )
+
+    assert transcription.load_transcript_corrections() == {"covey": "Koe"}
+    for _ in range(5):
+        assert transcription.load_transcript_corrections() == {"covey": "Koe"}
+    assert len(reads) == 1
+
+
+def test_corrections_fall_back_to_the_running_config_when_the_file_is_absent(
+    tmp_path, monkeypatch
+):
+    import transcription
+
+    monkeypatch.setattr(transcription, "config_path", lambda: tmp_path / "missing.yaml")
+    monkeypatch.setattr(transcription, "_CORRECTIONS_CACHE", None)
+    monkeypatch.setattr(
+        transcription.ConfigManager,
+        "get_config_section",
+        lambda *keys: (
+            {"ack me": "Acme"}
+            if keys == ("transcription_options", "corrections")
+            else {}
+        ),
+    )
+
+    assert transcription.load_transcript_corrections() == {"ack me": "Acme"}
+
+
+def test_unreadable_private_config_falls_back_instead_of_breaking(
+    tmp_path, monkeypatch
+):
+    import transcription
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("transcription_options: [unclosed\n", encoding="utf-8")
+    monkeypatch.setattr(transcription, "config_path", lambda: config_file)
+    monkeypatch.setattr(transcription, "_CORRECTIONS_CACHE", None)
+    monkeypatch.setattr(
+        transcription.ConfigManager,
+        "get_config_section",
+        lambda *keys: (
+            {"ack me": "Acme"}
+            if keys == ("transcription_options", "corrections")
+            else {}
+        ),
+    )
+
+    assert transcription.load_transcript_corrections() == {"ack me": "Acme"}
+
+
 def test_custom_corrections_apply_to_scribe_segments(monkeypatch):
     import transcription
 

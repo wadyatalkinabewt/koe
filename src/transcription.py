@@ -24,9 +24,10 @@ from urllib.parse import quote
 
 import numpy as np
 import requests
+import yaml
 from dotenv import load_dotenv
 
-from paths import default_snippets_dir, env_path, logs_dir
+from paths import config_path, default_snippets_dir, env_path, logs_dir
 from providers import deepgram, mistral, snippet_http
 from utils import ConfigManager
 
@@ -591,11 +592,55 @@ def _elevenlabs_result_text(result: dict) -> str:
     return str(result.get("text") or "").strip() if isinstance(result, dict) else ""
 
 
+# Corrections are read from the private config on each use, keyed by the file's
+# modification stamp, so editing the dictionary takes effect on the next
+# transcription instead of requiring a Koe restart. The parsed mapping is cached
+# until the file changes, which keeps Scribe's per-segment lookups cheap.
+_CORRECTIONS_CACHE: tuple[tuple[int, int], dict[str, str]] | None = None
+
+
+def _corrections_file_signature() -> tuple[int, int] | None:
+    """Return the private config's identity, or None when it is unavailable."""
+    try:
+        status = config_path().stat()
+    except OSError:
+        return None
+    return (status.st_mtime_ns, status.st_size)
+
+
+def _corrections_from_private_config() -> object:
+    """Read the corrections section from the private config file."""
+    try:
+        with open(config_path(), encoding="utf-8") as file:
+            payload = yaml.safe_load(file) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        _debug(f"Could not re-read corrections from the private config: {exc}")
+        return None
+    if not isinstance(payload, dict):
+        return None
+    options = payload.get("transcription_options")
+    if not isinstance(options, dict):
+        return {}
+    return options.get("corrections")
+
+
 def load_transcript_corrections() -> dict[str, str]:
-    """Load private exact-token corrections from Koe's existing config."""
-    raw_corrections = ConfigManager.get_config_section(
-        "transcription_options", "corrections"
-    )
+    """Load private exact-token corrections, preferring the live config file."""
+    global _CORRECTIONS_CACHE
+
+    signature = _corrections_file_signature()
+    if signature is not None and _CORRECTIONS_CACHE is not None:
+        cached_signature, cached_corrections = _CORRECTIONS_CACHE
+        if cached_signature == signature:
+            return dict(cached_corrections)
+
+    raw_corrections = None
+    if signature is not None:
+        raw_corrections = _corrections_from_private_config()
+    if raw_corrections is None:
+        raw_corrections = ConfigManager.get_config_section(
+            "transcription_options", "corrections"
+        )
     if not isinstance(raw_corrections, dict):
         _debug("Ignoring transcript corrections because they are not a mapping")
         return {}
@@ -613,7 +658,10 @@ def load_transcript_corrections() -> dict[str, str]:
         if any(character in source or character in target for character in "\r\n\t"):
             continue
         corrections[source.casefold()] = target
-    return corrections
+
+    if signature is not None:
+        _CORRECTIONS_CACHE = (signature, corrections)
+    return dict(corrections)
 
 
 def apply_transcript_corrections(

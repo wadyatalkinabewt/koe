@@ -69,6 +69,11 @@ instance, confirm that no snippet or Scribe recording is active.
 - Deepgram and Mistral return no equivalent deletable transcript ID; their
   provider retention policies apply and are documented in the README matrix.
 - Settings autosave must not restart Koe or interrupt active audio.
+- `transcription_options.corrections` is re-read from the private config on
+  each transcription, keyed by the file's modification stamp and size. Editing
+  the dictionary therefore takes effect on the next Snippet or Scribe run
+  without a restart; an absent, unreadable, or malformed file falls back to the
+  in-memory config instead of failing transcription.
 
 ## Verification
 
