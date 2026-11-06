@@ -912,7 +912,7 @@ def test_footer_shows_open_actions_only_after_success(qapp):
     window.close()
 
 
-def test_failure_keeps_transcribe_available_and_shows_a_readable_card(qapp):
+def test_failure_keeps_transcribe_available_and_shows_readable_text(qapp):
     from ui.transcribe_window import TranscribeWindow
 
     window = TranscribeWindow()
@@ -920,7 +920,9 @@ def test_failure_keeps_transcribe_available_and_shows_a_readable_card(qapp):
         "Could not read x.mp4: Invalid data found when processing input. " * 20
     )
 
-    assert window.status_card.isHidden() is False
+    assert window.status_area.isHidden() is False
+    # Status is text with colour, not another bordered box.
+    assert window.findChildren(QFrame, "statusCard") == []
     assert window.status_title.text() == "Transcription failed"
     assert len(window.status_detail.text()) <= 220
     assert window.status_detail.text().endswith("…")
@@ -970,4 +972,29 @@ def test_transcribe_window_follows_the_settings_summary_default(qapp, monkeypatc
         False,
     )
     assert window._summary_enabled() is False
+    window.close()
+
+
+def test_choosing_a_file_does_not_probe_on_the_ui_thread(qapp, monkeypatch, tmp_path):
+    """ffprobe must not run inline: that is what froze the window."""
+    import ui.transcribe_window as tw
+
+    source = tmp_path / "clip.ogg"
+    source.write_bytes(b"x")
+    calls = []
+
+    class FakeProbe(tw.ProbeWorker):
+        def run(self):  # noqa: D401 - never touches the real binary
+            calls.append("probed")
+
+    monkeypatch.setattr(tw, "ProbeWorker", FakeProbe)
+
+    window = tw.TranscribeWindow()
+    window.select_file(source)
+
+    # The window returns immediately; the probe is owned by a worker.
+    assert window.probe_worker is not None
+    assert window.transcribe_button.isEnabled() is False
+    window.probe_worker.wait(2000)
+    assert calls == ["probed"]
     window.close()

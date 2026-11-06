@@ -73,6 +73,25 @@ def acquire_transcribe_lock() -> socket.socket | None:
         return None
 
 
+class ProbeWorker(QThread):
+    """Inspect a chosen file without blocking the window."""
+
+    done_signal = pyqtSignal(object)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, source: Path):
+        super().__init__()
+        self.source = source
+
+    def run(self) -> None:
+        from recording_transcript import probe_audio
+
+        try:
+            self.done_signal.emit(probe_audio(self.source))
+        except Exception as exc:  # noqa: BLE001 - shown to the operator
+            self.error_signal.emit(str(exc))
+
+
 class TranscribeWorker(QThread):
     """Run one headless transcription off the UI thread."""
 
@@ -118,6 +137,8 @@ class TranscribeWindow(BaseWindow):
 
         self.source_path: Path | None = None
         self.worker: TranscribeWorker | None = None
+        self.probe_worker: ProbeWorker | None = None
+        self._probe_token = 0
         self.result = None
         self._instance_lock = None
 
@@ -162,24 +183,18 @@ class TranscribeWindow(BaseWindow):
         layout.addWidget(speakers)
         layout.addWidget(self._divider())
 
-        self.status_card = QFrame()
-        self.status_card.setObjectName("statusCard")
-        self.status_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        card_layout = QVBoxLayout(self.status_card)
-        card_layout.setContentsMargins(14, 11, 14, 12)
-        card_layout.setSpacing(3)
+        self.status_area = QWidget()
+        status_layout = QVBoxLayout(self.status_area)
+        status_layout.setContentsMargins(0, 16, 0, 0)
+        status_layout.setSpacing(2)
         self.status_title = _label("", "statusTitle")
         self.status_title.setWordWrap(True)
-        card_layout.addWidget(self.status_title)
+        status_layout.addWidget(self.status_title)
         self.status_detail = _label("", "statusDetail")
         self.status_detail.setWordWrap(True)
-        card_layout.addWidget(self.status_detail)
-        self.status_card.hide()
-        wrapper = QWidget()
-        wrapper_layout = QVBoxLayout(wrapper)
-        wrapper_layout.setContentsMargins(0, 16, 0, 0)
-        wrapper_layout.addWidget(self.status_card)
-        layout.addWidget(wrapper)
+        status_layout.addWidget(self.status_detail)
+        self.status_area.hide()
+        layout.addWidget(self.status_area)
 
         self.scroll.setWidget(self.content)
         self.main_layout.addWidget(self.scroll, 1)
@@ -291,36 +306,28 @@ class TranscribeWindow(BaseWindow):
             self.transcript_button.show()
 
     def _show_status(self, kind: str, title: str, detail: str = "") -> None:
-        palette = {
-            "working": (theme.SURFACE_ELEVATED, theme.BORDER_COLOR,
-                        theme.TEXT_COLOR, theme.SECONDARY_TEXT),
-            "clear": (theme.SURFACE_ELEVATED, theme.BORDER_COLOR,
-                      theme.TEXT_COLOR, theme.SECONDARY_TEXT),
-            "error": (theme.ERROR_SOFT, theme.ERROR_COLOR,
-                      theme.ERROR_COLOR, theme.SECONDARY_TEXT),
-            "done": (theme.SUCCESS_SOFT, theme.SUCCESS_COLOR,
-                     theme.SUCCESS_COLOR, theme.SECONDARY_TEXT),
-        }
-        background, border, title_colour, detail_colour = palette[kind]
-        self.status_card.setStyleSheet(
-            f"QFrame#statusCard {{"
-            f" background-color: {background};"
-            f" border: 1px solid {border};"
-            f" border-radius: 8px; }}"
+        """Status is text, not a box: colour and weight carry the meaning."""
+        title_colour = {
+            "working": theme.TEXT_COLOR,
+            "error": theme.ERROR_COLOR,
+            "done": theme.SUCCESS_COLOR,
+        }.get(kind, theme.TEXT_COLOR)
+        weight = 700 if kind in {"error", "done"} else 600
+        self.status_title.setStyleSheet(
+            f"color: {title_colour}; font-weight: {weight};"
         )
-        self.status_title.setStyleSheet(f"color: {title_colour};")
-        self.status_detail.setStyleSheet(f"color: {detail_colour};")
+        self.status_detail.setStyleSheet(f"color: {theme.SECONDARY_TEXT};")
         self.status_title.setText(title)
         self.status_detail.setText(detail)
         self.status_detail.setVisible(bool(detail))
-        was_visible = self.status_card.isVisible()
-        self.status_card.show()
+        was_visible = self.status_area.isVisible()
+        self.status_area.show()
         if not was_visible:
             self._fit_window_to_content()
 
     def _clear_status(self) -> None:
-        was_visible = self.status_card.isVisible()
-        self.status_card.hide()
+        was_visible = self.status_area.isVisible()
+        self.status_area.hide()
         if was_visible:
             self._fit_window_to_content()
 
@@ -335,34 +342,49 @@ class TranscribeWindow(BaseWindow):
             self.select_file(Path(chosen))
 
     def select_file(self, path: Path) -> None:
-        from recording_transcript import probe_audio
-
         self.source_path = path
         self.file_input.setText(path.name)
         self.file_input.setToolTip(str(path))
         self.result = None
-        self._clear_status()
         self.duration_label.hide()
+        self._set_state(self.IDLE)
 
-        try:
-            details = probe_audio(path)
-        except Exception as exc:  # noqa: BLE001 - shown to the operator
-            self._set_state(self.IDLE)
-            self._show_status(
-                "error", "This file can't be read", _short_detail(exc)
-            )
+        # ffprobe takes a moment on large files, so it runs off the UI thread
+        # and a newer selection simply wins.
+        self._probe_token += 1
+        token = self._probe_token
+        self._show_status("working", "Reading the recording…")
+
+        probe = ProbeWorker(path)
+        probe.done_signal.connect(lambda details, token=token: self._probed(token, details))
+        probe.error_signal.connect(lambda message, token=token: self._probe_failed(token, message))
+        probe.finished.connect(self._clear_probe)
+        self.probe_worker = probe
+        probe.start()
+
+    def _clear_probe(self) -> None:
+        self.probe_worker = None
+
+    def _probed(self, token: int, details: dict) -> None:
+        if token != self._probe_token:
             return
-
         self.duration_label.setText(format_timestamp(details["duration"]))
         self.duration_label.show()
         # One channel is almost certainly one voice, and skipping diarization
         # there avoids paying for a label nobody needs. Two channels is left as
         # "two or more" so a stereo call keeps its channel attribution.
         self.multi_speaker_toggle.setChecked(details["channels"] > 1)
-        self._on_speaker_change()
-
+        self._clear_status()
         self._set_state(self.READY)
         self._fit_window_to_content()
+
+    def _probe_failed(self, token: int, message: str) -> None:
+        if token != self._probe_token:
+            return
+        self._set_state(self.IDLE)
+        self._show_status(
+            "error", "This file can't be read", _short_detail(message)
+        )
 
     def start(self) -> None:
         if self.source_path is None or self.worker is not None:

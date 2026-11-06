@@ -17,6 +17,7 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import wave
 from collections.abc import Callable
@@ -44,6 +45,13 @@ _DEFAULT_MIN_MARGIN_DB = 3.0
 # is not real, so acoustic diarization is the honest choice.
 _SPLIT_CORRELATION_THRESHOLD = 0.9
 _TARGET_RATE = 16000
+# Koe runs under pythonw, so a bare subprocess launches a visible console that
+# flashes on screen. Every ffmpeg and ffprobe call must stay hidden.
+_SUBPROCESS_KWARGS: dict[str, object] = {}
+if sys.platform == "win32":
+    _SUBPROCESS_KWARGS["creationflags"] = getattr(
+        subprocess, "CREATE_NO_WINDOW", 0x08000000
+    )
 
 PHONE_FIELD = re.compile(r"^\+?\d[\d\s\-()]{2,}$")
 # The recorder writes E.164. A local NZ number is easier to recognise at a
@@ -124,6 +132,7 @@ def probe_audio(path: Path | str) -> dict:
         ],
         capture_output=True,
         check=False,
+        **_SUBPROCESS_KWARGS,
     )
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", "replace").strip()
@@ -176,6 +185,7 @@ def _decode_stereo(source: Path, destination: Path) -> None:
         ],
         capture_output=True,
         check=False,
+        **_SUBPROCESS_KWARGS,
     )
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", "replace").strip()
