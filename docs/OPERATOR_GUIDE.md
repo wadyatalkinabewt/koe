@@ -128,9 +128,10 @@ never turn diagnostic text into a summary deliverable.
 
 ## Transcribing an existing recording
 
-Choose **Transcribe recording…** in the tray menu. Pick a file, confirm the two
-names, and optionally ask for a summary. Any container ffmpeg can decode works;
-the extension is never trusted for format detection.
+Choose **Transcribe recording…** in the tray menu. Pick a file, name the other
+party, and optionally ask for a summary. Your own name comes from Settings, so
+it is never asked for twice. Any container ffmpeg can decode works; the
+extension is never trusted for format detection.
 
 When the recording keeps each party on its own stereo channel, speakers are
 attributed from channel energy rather than guessed by diarization. That is
@@ -157,6 +158,10 @@ from recording_transcript import transcribe_recording
 result = transcribe_recording("C:/path/recording.ogg", generate_summary=False)
 print(result.output_dir)
 ```
+
+The transcript header records the call direction (`Outgoing call` or
+`Incoming call`) when the filename carries it. Direction is deliberately not
+part of the folder name.
 
 `ffmpeg` and `ffprobe` must be on `PATH`.
 

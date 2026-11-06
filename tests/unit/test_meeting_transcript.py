@@ -55,3 +55,29 @@ def test_render_transcript_appends_notes_as_a_final_section():
 
     assert rendered.index("## Transcript") < rendered.index("## Notes")
     assert rendered.endswith("Follow up with Jordan.\nConfirm the deadline.\n")
+
+
+def test_render_transcript_records_call_direction_when_supplied():
+    rendered = render_transcript(
+        segments=[{"start": 0, "end": 1, "text": "Hello.", "label": "Alex"}],
+        meeting_name="Alex and Bryce",
+        participants=["Bryce", "Alex"],
+        started_at=datetime(2026, 11, 6, 14, 10),
+        duration_seconds=120,
+        direction="Outgoing call",
+    )
+
+    assert "**Direction**: Outgoing call" in rendered
+    assert rendered.index("**Participants**") < rendered.index("**Direction**")
+
+
+def test_render_transcript_omits_direction_when_not_supplied():
+    rendered = render_transcript(
+        segments=[{"start": 0, "end": 1, "text": "Hello.", "label": "Alex"}],
+        meeting_name="Planning",
+        participants=["Alex"],
+        started_at=datetime(2026, 7, 13, 10, 30),
+        duration_seconds=60,
+    )
+
+    assert "**Direction**" not in rendered
