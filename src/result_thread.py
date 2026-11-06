@@ -25,7 +25,6 @@ _HOST_API_PRIORITY = {
     "MME": 2,
     "Windows WDM-KS": 3,
 }
-_WDM_COMPATIBILITY_MIC_NAMES = ("hd pro webcam c920",)
 
 
 def _rotate_log_if_needed():
@@ -253,50 +252,25 @@ def _device_host_api(device) -> str:
         return "unknown"
 
 
-def _matching_input_device(reference_device, host_api_name: str):
-    """Find the same named input through another Windows host API."""
-    try:
-        reference = sd.query_devices(reference_device)
-        reference_name = " ".join(str(reference.get("name") or "").lower().split())
-        if not reference_name:
-            return None
-        hostapis = list(sd.query_hostapis())
-        for index, info in enumerate(sd.query_devices()):
-            if int(info.get("max_input_channels") or 0) <= 0:
-                continue
-            try:
-                candidate_host = hostapis[int(info.get("hostapi", -1))].get("name", "")
-            except (IndexError, TypeError, ValueError):
-                continue
-            candidate_name = " ".join(str(info.get("name") or "").lower().split())
-            if candidate_host == host_api_name and candidate_name == reference_name:
-                return index
-    except Exception as exc:
-        _debug(f"  Could not resolve {host_api_name} compatibility input: {exc}")
-    return None
-
-
 def _preferred_capture_device(wasapi_default):
     """Resolve the live capture endpoint for the current Windows default."""
-    if wasapi_default is None:
-        return wasapi_default
-    try:
-        info = sd.query_devices(wasapi_default)
-        name = str(info.get("name") or "").lower()
-    except Exception:
-        return wasapi_default
-
-    # The C920's shared-mode PortAudio endpoints can open successfully while
-    # delivering only digital silence on this Windows driver. Its matching
-    # WDM-KS endpoint carries the real microphone signal.
-    if any(marker in name for marker in _WDM_COMPATIBILITY_MIC_NAMES):
-        compatibility_device = _matching_input_device(
-            wasapi_default,
-            "Windows WDM-KS",
-        )
-        if compatibility_device is not None:
-            return compatibility_device
     return wasapi_default
+
+
+def _wasapi_stream_settings(device):
+    """Enable WASAPI format/channel conversion for shared-mode stereo inputs."""
+    if _device_host_api(device) != "Windows WASAPI":
+        return None
+    wasapi_settings = getattr(sd, "WasapiSettings", None)
+    if not callable(wasapi_settings):
+        return None
+    try:
+        return wasapi_settings(auto_convert=True)
+    except Exception as exc:
+        _debug(
+            f"  Could not configure WASAPI auto-convert for {_device_label(device)}: {exc}"
+        )
+        return None
 
 
 def _unmute_input_device(device):
@@ -333,15 +307,19 @@ def _open_input_stream(sound_device, callback, fallback_rate: int = 48000):
     for device in _input_device_candidates(sound_device):
         sample_rate = _device_sample_rate(device, fallback=fallback_rate)
         frame_size = max(1, int(round(sample_rate * 0.03)))
+        stream_kwargs = {
+            "samplerate": sample_rate,
+            "channels": 1,
+            "dtype": "int16",
+            "blocksize": frame_size,
+            "device": device,
+            "callback": callback,
+        }
+        extra_settings = _wasapi_stream_settings(device)
+        if extra_settings is not None:
+            stream_kwargs["extra_settings"] = extra_settings
         try:
-            stream = sd.InputStream(
-                samplerate=sample_rate,
-                channels=1,
-                dtype="int16",
-                blocksize=frame_size,
-                device=device,
-                callback=callback,
-            )
+            stream = sd.InputStream(**stream_kwargs)
             _debug(f"  Audio stream selected: {_device_label(device)}")
             return stream, getattr(stream, "device", device), sample_rate, frame_size
         except Exception as e:

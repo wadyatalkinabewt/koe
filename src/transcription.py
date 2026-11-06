@@ -203,7 +203,10 @@ def _normalize_quiet_audio(
     if rms <= 1e-3 or rms >= target_rms:
         return audio_int16.astype(np.int16, copy=False)
 
-    peak = float(np.max(np.abs(audio_float)))
+    abs_audio = np.abs(audio_float)
+    peak = float(np.percentile(abs_audio, 99.9))
+    if peak <= 0:
+        peak = float(np.max(abs_audio))
     clip_limited_gain = (32767.0 / peak) if peak > 0 else max_gain
     gain = min(target_rms / rms, max_gain, clip_limited_gain)
     if gain <= 1.0:

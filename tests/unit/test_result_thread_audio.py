@@ -328,7 +328,7 @@ def test_fallback_input_uses_its_own_native_sample_rate(monkeypatch):
     assert len(audio) == 4 * 1323
 
 
-def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
+def test_c920_uses_its_wasapi_endpoint_with_auto_convert(monkeypatch):
     import result_thread
     from result_thread import ResultThread
 
@@ -336,6 +336,7 @@ def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
     thread.is_recording = True
     thread.is_running = True
     opened = []
+    wasapi_calls = []
     devices = [
         {
             "name": "Microphone (HD Pro Webcam C920)",
@@ -357,6 +358,10 @@ def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
         {"name": "Windows WDM-KS", "default_input_device": 1},
     ]
 
+    def fake_wasapi_settings(*, auto_convert=False):
+        wasapi_calls.append(auto_convert)
+        return ("wasapi", auto_convert)
+
     class FakeInputStream:
         def __init__(
             self,
@@ -365,9 +370,10 @@ def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
             device=None,
             samplerate=None,
             blocksize=None,
+            extra_settings=None,
             **kwargs,
         ):
-            opened.append((device, samplerate, blocksize))
+            opened.append((device, samplerate, blocksize, extra_settings))
             self.callback = callback
             self.blocksize = blocksize
 
@@ -393,14 +399,16 @@ def test_c920_uses_its_live_wdm_endpoint(monkeypatch):
         lambda index=None: hostapis if index is None else hostapis[index],
     )
     monkeypatch.setattr(result_thread.sd, "query_devices", fake_query_devices)
+    monkeypatch.setattr(result_thread.sd, "WasapiSettings", fake_wasapi_settings)
     monkeypatch.setattr(result_thread.sd, "InputStream", FakeInputStream)
 
     audio = thread._record_audio()
 
-    assert opened == [(1, 32000, 960)]
-    assert thread.sample_rate == 32000
+    assert wasapi_calls == [True]
+    assert opened == [(0, 48000, 1440, ("wasapi", True))]
+    assert thread.sample_rate == 48000
     assert audio is not None
-    assert len(audio) == 4 * 960
+    assert len(audio) == 4 * 1440
 
 
 def test_cancel_saves_one_recoverable_wav_without_transcription(

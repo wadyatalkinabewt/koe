@@ -812,3 +812,15 @@ def test_quiet_audio_normalization_is_bounded():
     assert normalized.dtype == np.int16
     assert np.max(np.abs(normalized)) <= 32767
     assert np.mean(np.abs(normalized)) > np.mean(np.abs(audio))
+
+
+def test_quiet_audio_normalization_ignores_single_sample_click():
+    import transcription
+
+    audio = np.full(16000, 400, dtype=np.int16)
+    audio[0] = 32767
+    normalized = transcription._normalize_quiet_audio(audio)
+
+    assert normalized.dtype == np.int16
+    assert np.max(np.abs(normalized)) <= 32767
+    assert np.mean(np.abs(normalized[1:])) > 2000
