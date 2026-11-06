@@ -998,3 +998,18 @@ def test_choosing_a_file_does_not_probe_on_the_ui_thread(qapp, monkeypatch, tmp_
     window.probe_worker.wait(2000)
     assert calls == ["probed"]
     window.close()
+
+
+def test_tray_entries_read_as_plain_actions(qapp):
+    """Menu wording is user-facing copy: noun + verb, no product jargon."""
+    import inspect
+    import re
+
+    source = inspect.getsource(__import__("main"))
+    labels = re.findall(r'QAction\("([^"]+)"', source)
+
+    joined = " ".join(labels)
+    assert "Record meeting" in joined
+    assert "Transcribe file" in joined
+    assert "Scribe meeting" not in joined
+    assert "Transcribe recording" not in joined

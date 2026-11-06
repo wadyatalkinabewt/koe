@@ -134,11 +134,11 @@ class KoeApp(QObject):
         self.tray_menu = QMenu()
         self.tray_menu.setStyleSheet(theme.tray_menu_stylesheet())
 
-        self.meeting_action = QAction("Scribe meeting\u2026", self.app)
+        self.meeting_action = QAction("Record meeting\u2026", self.app)
         self.meeting_action.triggered.connect(self.start_meeting_mode)
         self.tray_menu.addAction(self.meeting_action)
 
-        self.transcribe_action = QAction("Transcribe recording\u2026", self.app)
+        self.transcribe_action = QAction("Transcribe file\u2026", self.app)
         self.transcribe_action.triggered.connect(self.start_transcribe_window)
         self.tray_menu.addAction(self.transcribe_action)
 

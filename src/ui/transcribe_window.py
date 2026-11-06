@@ -130,7 +130,7 @@ class TranscribeWindow(BaseWindow):
     DONE = "done"
 
     def __init__(self):
-        super().__init__("Transcribe recording", _WINDOW_WIDTH, 470)
+        super().__init__("Transcribe file", _WINDOW_WIDTH, 470)
         set_app_user_model_id(TRANSCRIBE_APP_ID)
         apply_window_icon(self, TRANSCRIBE_ICON, app_id=TRANSCRIBE_APP_ID)
         self.setStyleSheet(theme.application_stylesheet() + self._stylesheet())
@@ -146,7 +146,7 @@ class TranscribeWindow(BaseWindow):
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(32, 26, 32, 12)
         header_layout.setSpacing(0)
-        header_layout.addWidget(_label("Transcribe recording", "windowTitle"))
+        header_layout.addWidget(_label("Transcribe file", "windowTitle"))
         self.main_layout.addWidget(header)
 
         self.scroll = QScrollArea()
@@ -414,16 +414,9 @@ class TranscribeWindow(BaseWindow):
     def finished(self, result) -> None:
         self.result = result
         self._set_state(self.DONE)
-        detail = {
-            "single": "One speaker throughout.",
-            "channel": "Two speakers, taken from the channel split.",
-            "diarization": "Speakers estimated from the audio.",
-            "existing": "",
-        }.get(result.attribution, "")
-        title = "Already transcribed" if result.reused else "Transcript ready"
-        self._show_status(
-            "done", title, " ".join(filter(None, [detail, *result.warnings]))
-        )
+        # The speaker choice is the user's own input, so echoing it back is
+        # noise. Only surface something they did not already know.
+        self._show_status("done", "Transcript ready", " ".join(result.warnings))
 
     def failed(self, message: str) -> None:
         self._set_state(self.READY if self.source_path else self.IDLE)
