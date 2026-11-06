@@ -31,6 +31,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from compat import apply_window_icon, set_app_user_model_id  # noqa: E402
 from paths import resource_path  # noqa: E402
 from ui import theme  # noqa: E402
+from meeting.transcript import format_timestamp  # noqa: E402
 from ui.base_window import BaseWindow  # noqa: E402
 from ui.settings_window import ToggleRow  # noqa: E402
 from utils import ConfigManager  # noqa: E402
@@ -273,17 +274,8 @@ class TranscribeWindow(BaseWindow):
             self.start_button.setEnabled(False)
             return
 
-        minutes, seconds = divmod(int(round(details["duration"])), 60)
-        parts = [
-            f"{minutes}:{seconds:02d}",
-            details["codec"] or "audio",
-            f"{details['sample_rate']} Hz",
-            f"{details['channels']} channel{'s' if details['channels'] != 1 else ''}",
-        ]
+        self.detail_label.setText(format_timestamp(details["duration"]))
         parsed = parse_recording_filename(path)
-        if parsed.direction:
-            parts.append("outgoing" if parsed.direction == "out" else "incoming")
-        self.detail_label.setText("  ·  ".join(parts))
         if parsed.other_name or parsed.phone_number:
             self.other_input.setText(parsed.other_name or parsed.phone_number)
 
