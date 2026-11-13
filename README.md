@@ -29,7 +29,7 @@ audio is ephemeral, while meeting audio is saved only when requested.
 | **Best for** | Fleeting thoughts, prompts, and dictated text | Calls, interviews, and in-room meetings | Audio you already have on disk |
 | **Capture** | Press the hotkey, speak, press again | Record microphone and Windows loopback together | Choose any file ffmpeg can decode |
 | **Result** | Formatted text on the clipboard | Diarized transcript PDF and Markdown; optional summary in both formats | The same documents, with speakers read from a stereo channel split when the recorder keeps each party on its own channel |
-| **Audio retention** | Never written to disk | Kept only when requested; recovery audio survives failures | The source file is never modified |
+| **Audio retention** | Memory-only on normal completion; one recovery WAV after cancellation or failure | Kept only when requested; recovery audio survives failures | The source file is never modified |
 
 <p align="center">
   <img src="assets/readme/workflows.png" alt="Koe Snippet and Scribe workflows" width="100%">
@@ -62,8 +62,12 @@ The source map and the invariants between those modules are documented in
 
 ## Privacy is part of the pipeline
 
-- Snippet audio stays in memory during normal use. Cancelling a recording keeps
-  one recoverable WAV in Koe's logs folder; starting the next Snippet deletes it.
+- Snippet audio stays in memory during normal use. Cancelling a recording or a
+  failed transcription keeps one recoverable WAV in Koe's logs folder; starting
+  the next Snippet deletes it. Failure notifications report whether it was saved.
+- ElevenLabs snippets automatically retry temporary busy responses within a
+  shared three-attempt budget, including slow-request recovery. The compact
+  card simply says **Retrying**; see the operator guide for timing and limits.
 - Scribe uploads one aligned recording rather than separate microphone and
   loopback tracks.
 - Successfully decoded ElevenLabs transcripts are deleted from ElevenLabs by

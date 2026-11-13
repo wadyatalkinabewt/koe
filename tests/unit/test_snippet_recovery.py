@@ -83,9 +83,10 @@ def test_failed_or_empty_recovery_does_not_discard_late_primary(monkeypatch, sec
     def post(_buffer, _data, _key, _timeout, *, attempt):
         if attempt == 1:
             assert release_primary.wait(2)
-            return {"text": "original speech"}, None
+            return tr._SnippetReply(result={"text": "original speech"})
         release_primary.set()
-        return (None, "ElevenLabs timeout") if secondary_outcome == "error" else ({"text": ""}, None)
+        return (tr._SnippetReply(error="ElevenLabs timeout") if secondary_outcome == "error"
+                else tr._SnippetReply(result={"text": ""}))
 
     monkeypatch.setattr(tr, "_elevenlabs_post_once", post)
     result, error = tr._elevenlabs_post(io.BytesIO(b"audio"), [], "test", 180)
@@ -102,7 +103,7 @@ def test_normal_snippet_uses_one_request_and_no_recovery_slot(monkeypatch):
 
     def post(*args, **kwargs):
         calls.append(kwargs["attempt"])
-        return {"text": "fast"}, None
+        return tr._SnippetReply(result={"text": "fast"})
 
     monkeypatch.setattr(tr, "_elevenlabs_post_once", post)
     assert tr._elevenlabs_post(io.BytesIO(b"audio"), [], "test", 180) == ({"text": "fast"}, None)
@@ -127,7 +128,7 @@ def test_pending_recovery_limits_background_requests(monkeypatch):
     def post(*args, **kwargs):
         calls.append(kwargs["attempt"])
         assert release.wait(2)
-        return {"text": "finished"}, None
+        return tr._SnippetReply(result={"text": "finished"})
 
     monkeypatch.setattr(tr, "_elevenlabs_post_once", post)
     worker = threading.Thread(target=lambda: results.append(
@@ -168,7 +169,7 @@ def test_both_stalled_attempts_fail_without_a_third_request(monkeypatch):
             assert release.wait(2)
         else:
             release.set()
-        return None, "ElevenLabs timeout"
+        return tr._SnippetReply(error="ElevenLabs timeout")
 
     monkeypatch.setattr(tr, "_elevenlabs_post_once", post)
     assert tr._elevenlabs_post(io.BytesIO(b"audio"), [], "test", 180) == (None, "ElevenLabs timeout")
@@ -186,9 +187,9 @@ def test_connection_timeout_retries_once_without_discarding_audio(monkeypatch, s
 
     def post(buffer, _data, _key, _timeout, *, attempt):
         calls.append((attempt, buffer.read()))
-        if attempt == 1:
-            return None, "ElevenLabs connection timeout"
-        return (None, second_error) if second_error else ({"text": "recovered"}, None)
+        if attempt == 1 or second_error:
+            return tr._SnippetReply(error="ElevenLabs connection timeout", retry_kind="connect")
+        return tr._SnippetReply(result={"text": "recovered"})
 
     monkeypatch.setattr(tr, "_elevenlabs_post_once", post)
     result, error = tr._elevenlabs_post(io.BytesIO(b"all audio"), [], "test", 180)

@@ -43,7 +43,8 @@ instance, confirm that no snippet or Scribe recording is active.
 - `src/main.py`: tray, hotkey, clipboard, and Scribe launch lifecycle.
 - `src/result_thread.py`: snippet capture and transcription lifecycle.
 - `src/microphone_mute.py`: Windows mute control for the selected snippet input.
-- `src/transcription.py`: provider dispatch, custom corrections, and rotating
+- `src/transcription.py`: provider dispatch, the shared ElevenLabs Snippet
+  retry/slow-request recovery coordinator, custom corrections, and rotating
   snippet storage.
 - `src/providers/`: Deepgram and Mistral request/response adapters.
 - `src/meeting/capture.py`: microphone/loopback capture and mono mixing.
@@ -67,8 +68,21 @@ instance, confirm that no snippet or Scribe recording is active.
   `DEEPGRAM_API_KEY`, and `MISTRAL_API_KEY`. `OPENROUTER_API_KEY` is optional
   post-processing configuration and is never used as a transcription key.
 - Every ElevenLabs request uses `no_verbatim=true`.
-- Normal Snippet audio never persists to disk. Cancelling may retain one
-  verified `logs/recoverable-snippet.wav`, which the next Snippet start deletes.
+- Normal Snippet audio never persists to disk. Cancellation or a failed
+  transcription may retain one verified `logs/recoverable-snippet.wav`, which
+  the next Snippet start deletes. Saving recovery audio makes no provider
+  request; failure notifications report the save outcome and deletion warning.
+- ElevenLabs Snippets share three attempts per ten-minute audio chunk across
+  the initial upload, one optional 15-second pending-request hedge, one allowed
+  pre-upload connection-timeout retry, and transient-429 retries. Busy retries
+  wait 5/10 seconds before attempts 2/3, respecting a longer `Retry-After`.
+  Only `system_busy` and `too_many_concurrent_requests` are eligible 429 codes;
+  no new retry starts while another request for that chunk is pending. Retried
+  requests do not get their own hedge. Earlier completed chunks are not resent.
+- Snippet `transcribe(..., status_callback=...)` passes ElevenLabs recovery
+  state through the ResultThread signal to the card. `retrying` is sticky until
+  completion/failure and dismissible without stopping work. All processing
+  states preserve fixed card/control geometry and the recording duration.
 - Scribe sends one aligned mono upload. ElevenLabs explicitly sets
   `use_multi_channel=false`; other adapters receive that same mono file.
 - OpenRouter is confined to Scribe post-processing and requires Zero Data
@@ -106,6 +120,7 @@ git diff --check
 ```
 
 `pytest.ini` pins collection to `tests`, so a bare `pytest -q` measures only
-Koe's suite regardless of what sits in ignored scratch folders. The expected
-result is `173 passed`. Add `testpaths` coverage rather than relying on
+Koe's suite regardless of what sits in ignored scratch folders. Use pytest's
+reported test count for the current checkout; dated private receipts
+may describe older counts. Add `testpaths` coverage rather than relying on
 root-directory collection.

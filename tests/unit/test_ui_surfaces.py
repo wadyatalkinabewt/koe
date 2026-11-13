@@ -751,6 +751,179 @@ def test_only_tray_exit_is_wired_to_process_shutdown():
     assert "exit_action.triggered.connect(self.exit_app)" in tray_source
 
 
+@pytest.fixture
+def snippet_card(qapp, monkeypatch):
+    from ui import status_window
+
+    monkeypatch.setattr(status_window, "_debug", lambda _message: None)
+    status = status_window.StatusWindow()
+    yield status
+    status.timer.stop()
+    status.pulse_timer.stop()
+    status.close()
+
+
+@pytest.mark.parametrize("retry_after", [2.0, 15.0])
+def test_retrying_preserves_snippet_geometry_duration_and_pulse(
+    qapp, monkeypatch, snippet_card, retry_after
+):
+    from ui import status_window, theme
+
+    clock = [100.0]
+    monkeypatch.setattr(status_window.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(status_window.time, "time", lambda: clock[0])
+    status = snippet_card
+
+    def geometry():
+        return (
+            status.geometry(),
+            tuple(
+                QRect(widget.mapTo(status, QPoint()), widget.size())
+                for widget in (
+                    status.indicator,
+                    status.status_label,
+                    status.timer_label,
+                    status.cancel_button,
+                )
+            ),
+        )
+
+    status.updateStatus("recording")
+    qapp.processEvents()
+    original_geometry = geometry()
+    assert status.size() == status.minimumSize() == status.maximumSize() == QSize(207, 52)
+    clock[0] = 138.0
+    status.update_timer()
+    assert status.timer_label.text() == "00:38"
+    status.updateStatus("transcribing")
+    qapp.processEvents()
+    assert status.status_label.text() == "Transcribing"
+    assert geometry() == original_geometry
+    dismiss_style = status.cancel_button.styleSheet()
+    dismiss_tooltip = status.cancel_button.toolTip()
+
+    clock[0] += retry_after
+    status.update_timer()
+    assert status.status_label.text() == ("Waiting" if retry_after >= 15 else "Transcribing")
+    assert geometry() == original_geometry
+    assert status.timer_label.text() == "00:38"
+    transcription_start = status.transcription_start_time
+    status.statusSignal.emit("retrying")
+    qapp.processEvents()
+    assert status.current_status == "retrying"
+    assert status.status_label.text() == "Retrying"
+    assert status.status_label.toolTip() == ""
+    assert status.timer_label.toolTip() == "Recording duration"
+    assert status.recording_start_time is None
+    assert status.transcription_start_time == transcription_start
+    assert status.cancel_button.isVisible() and status.cancel_button.isEnabled()
+    assert status.cancel_button.accessibleName() == "Dismiss transcription"
+    assert status.cancel_button.styleSheet() == dismiss_style
+    assert status.cancel_button.toolTip() == dismiss_tooltip
+    assert status._indicator_color == theme.ACCENT_COLOR
+    assert status.timer.isActive() and status.timer.interval() == 1000
+    assert status.pulse_timer.isActive() and status.pulse_timer.interval() == 700
+    assert geometry() == original_geometry
+
+    status._pulse_on = True
+    status._pulse_indicator()
+    assert status.indicator._color.name() == theme.DIM_TEXT.lower()
+    status._pulse_indicator()
+    assert status.indicator._color.name() == theme.ACCENT_COLOR.lower()
+    for update in ("retrying", "transcribing"):
+        clock[0] += 60
+        status.statusSignal.emit(update)
+        status.update_timer()
+        qapp.processEvents()
+        assert status.current_status == "retrying"
+        assert status.status_label.text() == "Retrying"
+        assert status.timer_label.text() == "00:38"
+        assert status.transcription_start_time == transcription_start
+        assert geometry() == original_geometry
+
+
+@pytest.mark.parametrize("dismiss_from", ["transcribing", "waiting", "retrying"])
+def test_processing_dismissal_stays_hidden_on_retry_updates(
+    monkeypatch, snippet_card, dismiss_from
+):
+    from ui import status_window
+
+    clock = [100.0]
+    monkeypatch.setattr(status_window.time, "monotonic", lambda: clock[0])
+    status = snippet_card
+    signals = []
+    status.cancelSignal.connect(lambda: signals.append("cancel"))
+    status.dismissSignal.connect(lambda: signals.append("dismiss"))
+    status.closeSignal.connect(lambda: signals.append("close"))
+    status.updateStatus("recording")
+    status.timer_label.setText("00:38")
+    status.updateStatus("transcribing")
+    if dismiss_from == "waiting":
+        clock[0] += 15
+        status.update_timer()
+        assert status.status_label.text() == "Waiting"
+    elif dismiss_from == "retrying":
+        status.statusSignal.emit("retrying")
+
+    QTest.mouseClick(status.cancel_button, Qt.LeftButton)
+    assert signals == ["dismiss"]
+    assert status.current_status == "dismissed"
+    assert not status.isVisible()
+    assert not status.cancel_button.isEnabled()
+    assert not status.timer.isActive()
+    assert not status.pulse_timer.isActive()
+    assert status.transcription_start_time is None
+    for update in ("retrying", "retrying", "transcribing", "complete", "error"):
+        status.statusSignal.emit(update)
+        status.update_timer()
+        status._handle_close()
+        assert status.current_status == "dismissed"
+        assert not status.isVisible()
+        assert not status.timer.isActive()
+        assert not status.pulse_timer.isActive()
+        assert status.transcription_start_time is None
+        assert status.timer_label.text() == "00:38"
+        assert signals == ["dismiss"]
+
+
+@pytest.mark.parametrize("outcome", ["complete", "error", "showError"])
+def test_retrying_terminal_states_stop_timers(monkeypatch, snippet_card, outcome):
+    from ui import status_window, theme
+
+    scheduled = []
+    monkeypatch.setattr(
+        status_window.QTimer, "singleShot", lambda delay, callback: scheduled.append((delay, callback))
+    )
+    status = snippet_card
+    status.updateStatus("recording")
+    status.timer_label.setText("00:38")
+    status.updateStatus("transcribing")
+    status.statusSignal.emit("retrying")
+    if outcome == "showError":
+        status.showError("Request failed")
+    else:
+        status.updateStatus(outcome)
+    assert not status.timer.isActive()
+    assert not status.pulse_timer.isActive()
+    assert status.recording_start_time is None
+    assert status.transcription_start_time is None
+    assert not status.cancel_button.isVisible()
+    assert status.timer_label.text() == ("—" if outcome == "showError" else "00:38")
+    if outcome == "complete":
+        assert status.current_status == "complete"
+        assert not status.isVisible()
+        assert scheduled == []
+    else:
+        assert status.current_status == "error"
+        assert status.status_label.text() == "Failed"
+        assert status._indicator_color == theme.ERROR_COLOR
+        assert status.isVisible()
+        assert len(scheduled) == 1
+        assert scheduled[0][0] == 3500
+        scheduled[0][1]()
+        assert not status.isVisible()
+
+
 @pytest.mark.parametrize("outcome", ["complete", "error", "dismiss"])
 def test_slow_transcription_keeps_recording_duration_and_stops_timers(qapp, monkeypatch, outcome):
     from ui import status_window

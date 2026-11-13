@@ -4,11 +4,15 @@
 
 The snippet hotkey is press-to-toggle. A second press stops capture, sends the
 audio to the transcription provider selected during setup, copies the formatted
-result to the clipboard, and rotates five local Markdown snippets. Normal
-Snippet audio is transient. Cancelling from the Listening card atomically saves
-one `recoverable-snippet.wav` in Koe's logs folder without transcribing it. The
-next Snippet start deletes that recovery file before recording, so recover or
-copy it before starting another Snippet.
+result to the clipboard, and rotates five local Markdown snippets. Snippet
+audio is transient on normal completion. Cancellation from the Listening card
+or a failed transcription atomically saves one `recoverable-snippet.wav` in
+Koe's logs folder. Cancelled audio is not transcribed, and saving failed
+audio does not send another provider request. Failure notifications report
+whether the audio was saved. The next Snippet start deletes that recovery file
+before recording, so recover or copy it before starting another Snippet.
+Source runs use `<checkout>\logs\recoverable-snippet.wav`; packaged installs
+use `%LOCALAPPDATA%\Koe\logs\recoverable-snippet.wav`.
 
 Starting a Snippet clears Windows mute on the microphone Koe actually opens,
 before audio capture starts. It leaves that microphone unmuted afterwards,
@@ -22,22 +26,42 @@ counting transcription time. After 15 seconds its label changes to **Waiting**.
 This indicates a slow request, not confirmed provider progress. Dismissing this
 card hides it and suppresses clipboard copying and the completion sound; a
 successful response still saves the text to the rotating Snippets files. The
-request continues in the background.
+request and any allowed retries continue in the background; the card does not
+reopen. Dismissal has the same behaviour while **Retrying**.
 
-ElevenLabs snippets recover from a request that remains pending for 15 seconds
-by starting at most one additional request to ElevenLabs. The first nonempty
-successful result is used once; the late response is also deleted from the
-provider. If the recovery fails, Koe can still use the original response. This
-can incur a second transcription charge for a slow snippet, and both requests
-can still be slow. Another recovery cannot start until the previous pair has
-finished. Scribe meetings keep their single-upload behaviour.
+ElevenLabs snippets use one shared budget of **three upload attempts per audio
+chunk** (long snippets are split into ten-minute chunks):
 
-Connection establishment has a 10-second timeout and one retry when it times
-out before upload. An eventual request failure is reported as a failure rather
-than a successful empty snippet. Timing diagnostics separate connection,
-upload, and waiting for response headers; the last stage still combines network
-delay with provider processing. Normal process exit lets pending requests and
-remote cleanup finish.
+- The initial request may get one parallel recovery request if it stays pending
+  for 15 seconds. The first nonempty successful result is used once; any late
+  successful response is also deleted from ElevenLabs. This can incur a second
+  transcription charge. Another parallel recovery cannot start until the
+  previous pair has finished.
+- Explicit transient `429` responses (`system_busy` or
+  `too_many_concurrent_requests`) retry after **5 seconds before attempt 2** and
+  **10 seconds before attempt 3**, or longer if `Retry-After` requests it. A
+  parallel recovery already counts as attempt 2, leaving at most one more
+  attempt. No 429 retry starts while another request for that chunk is pending.
+- Connection establishment has a 10-second timeout and retains one immediate
+  retry when it times out before upload. That retry uses the same three-attempt
+  budget. Subsequent attempts do not each get another parallel recovery.
+- Authentication, payment, quota, unknown errors, and ambiguous post-upload
+  timeouts do not trigger this retry sequence. A valid empty success is not
+  retried. Only the rejected chunk is resubmitted, not earlier completed chunks.
+
+When a recovery request or retry begins, the card says **Retrying** until the
+sequence completes. It keeps the same geometry, animation and recorded duration;
+there is no attempt counter or HTTP error text in the card. Intermediate failures
+do not generate error notifications. The normal busy-response sequence adds
+15 seconds of deliberate waiting, plus request time; a server `Retry-After`
+instruction can make it longer. If the sequence fails, the card says **Failed**
+and the notification reports whether the full original audio was saved to the
+single recovery WAV described above. Scribe and existing-recording transcription
+keep their separate single-upload behaviour; this retry budget is Snippet-only.
+
+Timing diagnostics separate connection, upload, and waiting for response
+headers; the last stage still combines network delay with provider processing.
+Normal process exit lets pending requests and remote cleanup finish.
 
 ## Transcription provider setup
 

@@ -11,13 +11,16 @@ stay coherent.
 """
 
 import io
+import math
 import os
 import re
 import threading
 import time
 import wave
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from queue import Empty, Queue
 from urllib.parse import quote
@@ -56,6 +59,8 @@ ELEVENLABS_DELETE_RETRY_DELAYS = (1.0, 3.0)
 ELEVENLABS_DELETE_TIMEOUT = 15.0
 ELEVENLABS_SNIPPET_CONNECT_TIMEOUT = 10.0
 ELEVENLABS_SNIPPET_HEDGE_DELAY = 15.0
+ELEVENLABS_SNIPPET_MAX_ATTEMPTS = 3
+ELEVENLABS_SNIPPET_RETRY_DELAYS = (5.0, 10.0)
 # A pending loser must finish before another snippet can launch a second request.
 _SNIPPET_HEDGE_SLOT = threading.BoundedSemaphore(1)
 MAX_CORRECTION_LENGTH = 100
@@ -266,18 +271,44 @@ def _elevenlabs_request_data(
     return data
 
 
+@dataclass
+class _SnippetReply:
+    result: dict | None = None
+    error: str | None = None
+    retry_kind: str | None = None
+    retry_after: float = 0.0
+
+
+def _retry_after_seconds(value: str | None) -> float:
+    """Read Retry-After seconds or an HTTP date; malformed values are ignored."""
+    if not value:
+        return 0.0
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            delay = parsedate_to_datetime(value).timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+    return max(0.0, delay) if math.isfinite(delay) else 0.0
+
+
 def _elevenlabs_post(
     buffer: io.BytesIO,
     data: list[tuple[str, str]],
     api_key: str,
     timeout: float,
+    *,
+    status_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict | None, str | None]:
-    """Recover from a stalled snippet with at most one additional request.
+    """One snippet recovery budget: at most three uploads of this audio chunk.
 
-    Both requests use identical in-memory audio and the configured provider.
-    Only the chosen response reaches formatting/storage/clipboard. The losing
-    request still completes deletion, without blocking delivery of the winner.
-    Meetings never use this path. Slow requests can incur a second STT charge.
+    The initial request may get one parallel hedge after 15 seconds. Explicit
+    transient 429s retry sequentially, after 5/10 seconds for attempts 2/3 (or
+    longer Retry-After). A pre-upload connection timeout gets one immediate
+    retry. All consume the same budget. Never add a retry while a request is
+    pending; any late successful response still gets provider-side deletion.
+    Meetings never use this path. A hedge may incur duplicate STT charges.
     """
     audio = buffer.getvalue()
     replies = Queue()
@@ -286,79 +317,113 @@ def _elevenlabs_post(
 
     def attempt(number):
         try:
-            result, error = _elevenlabs_post_once(
+            reply = _elevenlabs_post_once(
                 io.BytesIO(audio), data, api_key, timeout, attempt=number
             )
-            replies.put((result, error))
         except Exception as exc:
             _debug(f"ElevenLabs snippet attempt {number} failed: {type(exc).__name__}")
-            replies.put((None, "ElevenLabs snippet request failed"))
+            reply = _SnippetReply(error="ElevenLabs snippet request failed")
         finally:
             with lock:
                 state["pending"] -= 1
                 if state["pending"] == 0 and state["reserved"]:
                     state["reserved"] = False
                     _SNIPPET_HEDGE_SLOT.release()
+        replies.put(reply)
+
+    def notify_retry():
+        if status_callback is not None:
+            status_callback("retrying")
 
     primary = threading.Thread(
         target=attempt, args=(1,), name="koe-snippet-request", daemon=False
     )
     primary.start()
+    sent = 1
     try:
         reply = replies.get(timeout=ELEVENLABS_SNIPPET_HEDGE_DELAY)
-        if reply[1] == "ElevenLabs connection timeout":
-            # requests documents ConnectTimeout as safe to retry: the upload
-            # has not been submitted. Reuse the single recovery allowance.
-            _debug("ElevenLabs connection timed out before upload; retrying once")
-            return _elevenlabs_post_once(
-                io.BytesIO(audio), data, api_key, timeout, attempt=2
-            )
-        return reply
     except Empty:
-        pass
+        # Avoid a duplicate if the primary completed at the delay boundary.
+        try:
+            reply = replies.get_nowait()
+        except Empty:
+            if _SNIPPET_HEDGE_SLOT.acquire(blocking=False):
+                with lock:
+                    state["reserved"] = True
+                    state["pending"] += 1
+                _debug(
+                    f"ElevenLabs snippet pending after {ELEVENLABS_SNIPPET_HEDGE_DELAY:.0f}s; "
+                    "starting one recovery request (may incur a second transcription charge)"
+                )
+                secondary = threading.Thread(
+                    target=attempt, args=(2,), name="koe-snippet-recovery", daemon=False
+                )
+                try:
+                    secondary.start()
+                except RuntimeError:
+                    with lock:
+                        state["pending"] -= 1
+                        if state["pending"] == 0:
+                            state["reserved"] = False
+                            _SNIPPET_HEDGE_SLOT.release()
+                    _debug("ElevenLabs snippet recovery worker could not start")
+                else:
+                    sent += 1
+                    notify_retry()
+            else:
+                _debug("ElevenLabs snippet still pending; earlier recovery request is finishing")
+            reply = replies.get()
 
-    # The primary may have completed just as the delay expired.
-    try:
-        return replies.get_nowait()
-    except Empty:
-        pass
-
-    if not _SNIPPET_HEDGE_SLOT.acquire(blocking=False):
-        _debug("ElevenLabs snippet still pending; earlier recovery request is finishing")
-        return replies.get()
-
-    with lock:
-        state["reserved"] = True
-        state["pending"] += 1
-    _debug(
-        f"ElevenLabs snippet pending after {ELEVENLABS_SNIPPET_HEDGE_DELAY:.0f}s; "
-        "starting one recovery request (may incur a second transcription charge)"
-    )
-    secondary = threading.Thread(
-        target=attempt, args=(2,), name="koe-snippet-recovery", daemon=False
-    )
-    try:
-        secondary.start()
-    except RuntimeError:
-        with lock:
-            state["pending"] -= 1
-            if state["pending"] == 0:
-                state["reserved"] = False
-                _SNIPPET_HEDGE_SLOT.release()
-        _debug("ElevenLabs snippet recovery worker could not start")
-        return replies.get()
-
+    received = 0
     responses = []
-    for _ in range(2):
-        result, error = replies.get()
-        if result is not None and not error and _elevenlabs_result_text(result):
-            return result, None
-        responses.append((result, error))
-    # A genuine empty response is preferable to turning silence into an error.
-    return next(
-        ((result, error) for result, error in responses if result is not None and not error),
-        responses[0],
-    )
+    connection_retried = False
+    while True:
+        received += 1
+        if reply.result is not None and not reply.error and _elevenlabs_result_text(reply.result):
+            return reply.result, None
+        responses.append(reply)
+        if received < sent:
+            # A 429 from one request must not create a third overlapping upload.
+            reply = replies.get()
+            continue
+        # Prefer a genuine empty success over retrying silence or reporting error.
+        empty_success = next(
+            (item for item in responses if item.result is not None and not item.error), None
+        )
+        if empty_success is not None:
+            return empty_success.result, None
+        terminal = next((item for item in responses if item.retry_kind is None), None)
+        if terminal is not None:
+            return None, terminal.error
+        if sent >= ELEVENLABS_SNIPPET_MAX_ATTEMPTS:
+            return None, reply.error
+        busy = [item for item in responses if item.retry_kind == "busy"]
+        if busy:
+            delay = max(
+                ELEVENLABS_SNIPPET_RETRY_DELAYS[sent - 1],
+                *(item.retry_after for item in busy),
+            )
+            _debug(f"ElevenLabs snippet busy; attempt {sent + 1} in {delay:.1f}s")
+        elif not connection_retried:
+            # ConnectTimeout means no upload was submitted. Keep its existing
+            # one-retry behaviour, but count it against the shared budget.
+            connection_retried = True
+            delay = 0.0
+            _debug("ElevenLabs connection timed out before upload; retrying once")
+        else:
+            return None, reply.error
+        notify_retry()
+        if delay:
+            time.sleep(delay)
+        responses.clear()
+        sent += 1
+        with lock:
+            state["pending"] += 1
+        retry = threading.Thread(
+            target=attempt, args=(sent,), name="koe-snippet-retry", daemon=False
+        )
+        retry.start()
+        reply = replies.get()
 
 
 def _elevenlabs_post_once(
@@ -368,8 +433,8 @@ def _elevenlabs_post_once(
     timeout: float,
     *,
     attempt: int = 1,
-) -> tuple[dict | None, str | None]:
-    """Submit one measured attempt and clean up every decoded response."""
+) -> _SnippetReply:
+    """Submit one measured attempt, retaining structured retry metadata."""
     started = time.perf_counter()
     try:
         response = snippet_http.post(
@@ -381,25 +446,40 @@ def _elevenlabs_post_once(
             timeout=(ELEVENLABS_SNIPPET_CONNECT_TIMEOUT, float(timeout)),
         )
     except requests.ConnectTimeout:
-        return None, "ElevenLabs connection timeout"
+        return _SnippetReply(error="ElevenLabs connection timeout", retry_kind="connect")
     except requests.Timeout:
-        return None, "ElevenLabs timeout"
+        return _SnippetReply(error="ElevenLabs timeout")
     except requests.RequestException as exc:
-        return None, f"ElevenLabs request error: {exc}"
+        return _SnippetReply(error=f"ElevenLabs request error: {exc}")
 
     if response.status_code != 200:
-        return None, f"ElevenLabs HTTP {response.status_code}: {response.text[:300]}"
+        error = f"ElevenLabs HTTP {response.status_code}: {response.text[:300]}"
+        if response.status_code == 429:
+            try:
+                payload = response.json()
+                detail = payload.get("detail", {}) if isinstance(payload, dict) else {}
+            except ValueError:
+                detail = {}
+            if isinstance(detail, dict) and any(
+                detail.get(key) in ("system_busy", "too_many_concurrent_requests")
+                for key in ("code", "status", "type")
+            ):
+                return _SnippetReply(
+                    error=error, retry_kind="busy",
+                    retry_after=_retry_after_seconds(response.headers.get("Retry-After")),
+                )
+        return _SnippetReply(error=error)
     try:
         result = response.json()
     except ValueError:
-        return None, "ElevenLabs returned an invalid JSON response"
+        return _SnippetReply(error="ElevenLabs returned an invalid JSON response")
     _debug(
         f"ElevenLabs snippet request completed in {time.perf_counter() - started:.2f}s "
         "(upload + recognition + response decoding; excludes deletion; "
         f"timestamps={dict(data).get('timestamps_granularity', 'word')})"
     )
     _delete_elevenlabs_transcript_in_background(result, api_key)
-    return result, None
+    return _SnippetReply(result=result)
 
 
 def _delete_elevenlabs_transcript_in_background(result: object, api_key: str) -> None:
@@ -578,10 +658,14 @@ def _transcribe_elevenlabs_audio(
     api_key: str,
     sample_rate: int,
     timeout: float,
+    *,
+    status_callback: Callable[[str], None] | None = None,
 ) -> dict:
     normalized = _normalize_quiet_audio(audio_int16)
     buffer = _audio_to_wav_bytes(normalized, sample_rate=sample_rate)
-    result, error = _elevenlabs_post(buffer, data, api_key, timeout=timeout)
+    result, error = _elevenlabs_post(
+        buffer, data, api_key, timeout=timeout, status_callback=status_callback
+    )
     if error:
         _debug(error)
         raise RuntimeError(error)
@@ -867,7 +951,12 @@ def transcribe_file_segments(
     )
 
 
-def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> str:
+def transcribe_elevenlabs(
+    audio_data: np.ndarray,
+    sample_rate: int = 16000,
+    *,
+    status_callback: Callable[[str], None] | None = None,
+) -> str:
     """Return flat Scribe v2 text for snippet-style audio."""
     api_key = _api_key_from_env(*ELEVENLABS_API_KEY_NAMES)
     if not api_key:
@@ -889,6 +978,7 @@ def transcribe_elevenlabs(audio_data: np.ndarray, sample_rate: int = 16000) -> s
             api_key,
             sample_rate,
             timeout=180,
+            status_callback=status_callback,
         )
         text = _elevenlabs_result_text(result)
         if text:
@@ -974,6 +1064,8 @@ def post_process_transcription(transcription: str) -> str:
 def transcribe(
     audio_data: np.ndarray,
     sample_rate: int = 16000,
+    *,
+    status_callback: Callable[[str], None] | None = None,
 ) -> str:
     """Transcribe, format, save, and return one Koe hotkey snippet."""
     if audio_data is None:
@@ -986,7 +1078,12 @@ def transcribe(
         "deepgram": transcribe_deepgram,
         "mistral": transcribe_mistral,
     }
-    raw = transcribers[provider](audio_data, sample_rate=sample_rate)
+    if provider == "elevenlabs" and status_callback is not None:
+        raw = transcribe_elevenlabs(
+            audio_data, sample_rate=sample_rate, status_callback=status_callback
+        )
+    else:
+        raw = transcribers[provider](audio_data, sample_rate=sample_rate)
     final = post_process_transcription(raw)
     save_rolling_transcription(final)
     save_transcription_debug(raw, final, duration_sec)

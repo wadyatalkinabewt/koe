@@ -59,8 +59,8 @@ def _discard_previous_snippet_recovery() -> None:
         _debug(f"  Could not remove previous Snippet recovery: {exc}")
 
 
-def _save_cancelled_snippet(audio_data, sample_rate: int | None) -> Path | None:
-    """Atomically retain one valid mono WAV after a user cancellation."""
+def _save_snippet_recovery(audio_data, sample_rate: int | None) -> Path | None:
+    """Atomically retain one valid mono WAV after cancellation or failure."""
     if audio_data is None or not sample_rate:
         return None
     audio = np.asarray(audio_data, dtype="<i2").reshape(-1)
@@ -69,8 +69,8 @@ def _save_cancelled_snippet(audio_data, sample_rate: int | None) -> Path | None:
 
     destination = snippet_recovery_path()
     temporary = destination.with_suffix(".tmp.wav")
-    destination.parent.mkdir(parents=True, exist_ok=True)
     try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(temporary), "wb") as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
@@ -82,12 +82,13 @@ def _save_cancelled_snippet(audio_data, sample_rate: int | None) -> Path | None:
                 or wav_file.getsampwidth() != 2
                 or wav_file.getframerate() != int(sample_rate)
                 or wav_file.getnframes() != audio.size
+                or wav_file.readframes(audio.size) != audio.tobytes()
             ):
-                raise OSError("cancelled Snippet WAV verification failed")
+                raise OSError("Snippet recovery WAV verification failed")
         os.replace(temporary, destination)
         return destination
-    except OSError as exc:
-        _debug(f"  Could not save cancelled Snippet recovery: {exc}")
+    except (OSError, wave.Error) as exc:
+        _debug(f"  Could not save Snippet recovery: {exc}")
         return None
     finally:
         try:
@@ -398,6 +399,7 @@ class ResultThread(QThread):
         audio_data = (
             None  # Initialize before try so except handler can always reference it
         )
+        transcription_in_progress = False
         try:
             if not self.is_running:
                 _debug("  Early exit: is_running=False")
@@ -420,7 +422,7 @@ class ResultThread(QThread):
             )
 
             if self.cancel_requested:
-                recovery = _save_cancelled_snippet(audio_data, self.sample_rate)
+                recovery = _save_snippet_recovery(audio_data, self.sample_rate)
                 if recovery:
                     _debug(f"  Snippet cancelled: recovery saved to {recovery}")
                 else:
@@ -447,10 +449,13 @@ class ResultThread(QThread):
             # Time the transcription process
             _debug("  Starting transcription...")
             start_time = time.time()
+            transcription_in_progress = True
             result = transcribe(
                 audio_data,
                 sample_rate=self.sample_rate or 16000,
+                status_callback=self.statusSignal.emit,
             )
+            transcription_in_progress = False
             end_time = time.time()
 
             transcription_time = end_time - start_time
@@ -473,6 +478,19 @@ class ResultThread(QThread):
             traceback.print_exc()
 
             error_msg = str(e) if str(e) else "Transcription failed"
+            if transcription_in_progress:
+                recovery = _save_snippet_recovery(
+                    audio_data, self.sample_rate or 16000
+                )
+                if recovery:
+                    _debug(f"  Snippet transcription failed: recovery saved to {recovery}")
+                    error_msg = (
+                        f"Audio saved to {recovery}. "
+                        "Copy or recover it before starting another Snippet; "
+                        f"the next Snippet deletes it.\n{error_msg}"
+                    )
+                else:
+                    error_msg = f"Could not save recovery audio.\n{error_msg}"
             self.errorSignal.emit(error_msg)
             self.statusSignal.emit("error")
             self.resultSignal.emit("")

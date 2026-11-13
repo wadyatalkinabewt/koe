@@ -835,7 +835,7 @@ def test_snippet_call_path_sends_no_verbatim(monkeypatch):
     monkeypatch.setattr(transcription, "save_rolling_transcription", lambda _text: None)
     monkeypatch.setattr(transcription, "save_transcription_debug", lambda *_args: None)
 
-    def fake_post(_buffer, data, _api_key, timeout):
+    def fake_post(_buffer, data, _api_key, timeout, *, status_callback):
         captured["data"] = data
         captured["timeout"] = timeout
         return {"text": "Clear result"}, None

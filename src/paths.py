@@ -101,7 +101,7 @@ def logs_dir() -> Path:
 
 
 def snippet_recovery_path() -> Path:
-    """Single replaceable WAV retained only after a cancelled Snippet."""
+    """Single replaceable WAV retained after Snippet cancellation or failure."""
     return logs_dir() / "recoverable-snippet.wav"
 
 

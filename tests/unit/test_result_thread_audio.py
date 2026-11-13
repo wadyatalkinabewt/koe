@@ -488,8 +488,9 @@ def test_result_thread_transcribes_without_audio_retention_argument(monkeypatch)
         thread.sample_rate = 48000
         return np.ones(4800, dtype=np.int16)
 
-    def transcribe(audio, sample_rate):
+    def transcribe(audio, sample_rate, *, status_callback):
         captured.append((len(audio), sample_rate))
+        status_callback("retrying")
         return "captured"
 
     monkeypatch.setattr(thread, "_record_audio", record_audio)
@@ -501,8 +502,8 @@ def test_result_thread_transcribes_without_audio_retention_argument(monkeypatch)
     assert results == ["captured"]
 
 
-@pytest.mark.parametrize("transcription_outcome", ["empty", "error"])
-def test_result_thread_never_persists_snippet_audio(
+@pytest.mark.parametrize("transcription_outcome", ["empty", "success"])
+def test_successful_snippet_never_persists_audio(
     tmp_path,
     monkeypatch,
     transcription_outcome,
@@ -516,11 +517,9 @@ def test_result_thread_never_persists_snippet_audio(
         thread.sample_rate = 48000
         return np.ones(4800, dtype=np.int16)
 
-    def transcribe(_audio, sample_rate):
+    def transcribe(_audio, sample_rate, *, status_callback):
         assert sample_rate == 48000
-        if transcription_outcome == "error":
-            raise RuntimeError("expected test failure")
-        return ""
+        return "done" if transcription_outcome == "success" else ""
 
     monkeypatch.setattr(result_thread, "_DEBUG_LOG", tmp_path / "debug.log")
     monkeypatch.setattr(thread, "_record_audio", record_audio)
@@ -529,6 +528,136 @@ def test_result_thread_never_persists_snippet_audio(
     thread.run()
 
     assert list(tmp_path.rglob("*.wav")) == []
+
+
+@pytest.mark.parametrize("sample_rate", [48000, None])
+def test_failed_transcription_saves_exact_audio_and_reports_recovery(
+    tmp_path, monkeypatch, sample_rate
+):
+    import result_thread
+
+    thread = result_thread.ResultThread()
+    audio = np.arange(-2400, 2400, dtype=np.int16)
+    recovery_path = tmp_path / "recoverable-snippet.wav"
+    errors, results, statuses, attempts = [], [], [], []
+    thread.errorSignal.connect(errors.append)
+    thread.resultSignal.connect(results.append)
+    thread.statusSignal.connect(statuses.append)
+
+    def record_audio():
+        thread.sample_rate = sample_rate
+        return audio
+
+    def transcribe(data, sample_rate, *, status_callback):
+        attempts.append((data, sample_rate))
+        raise RuntimeError("ElevenLabs HTTP 429: system_busy")
+
+    monkeypatch.setattr(thread, "_record_audio", record_audio)
+    monkeypatch.setattr(result_thread, "transcribe", transcribe)
+    monkeypatch.setattr(result_thread, "snippet_recovery_path", lambda: recovery_path)
+
+    thread.run()
+
+    assert len(attempts) == 1  # Saving recovery must not make another paid request.
+    assert attempts[0][0] is audio
+    assert attempts[0][1] == (sample_rate or 16000)
+    assert results == [""]
+    assert statuses[-1] == "error"
+    assert not thread.is_recording
+    assert len(errors) == 1
+    assert "ElevenLabs HTTP 429: system_busy" in errors[0]
+    assert errors[0].startswith(f"Audio saved to {recovery_path}")
+    assert "the next Snippet deletes it" in errors[0]
+    assert list(tmp_path.glob("*.wav")) == [recovery_path]
+    with wave.open(str(recovery_path), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == (sample_rate or 16000)
+        assert wav_file.getnframes() == audio.size
+        assert wav_file.readframes(audio.size) == audio.astype("<i2").tobytes()
+
+
+@pytest.mark.parametrize("save_stage, save_error", [
+    ("write", OSError("disk full")),
+    ("write", wave.Error("invalid WAV")),
+    ("mkdir", PermissionError("logs inaccessible")),
+])
+def test_recovery_save_failure_preserves_original_error_and_cleans_temp(
+    tmp_path, monkeypatch, save_stage, save_error
+):
+    import result_thread
+
+    thread = result_thread.ResultThread()
+    recovery_path = tmp_path / "recoverable-snippet.wav"
+    errors, results, statuses = [], [], []
+    thread.errorSignal.connect(errors.append)
+    thread.resultSignal.connect(results.append)
+    thread.statusSignal.connect(statuses.append)
+    thread.sample_rate = 48000
+    monkeypatch.setattr(thread, "_record_audio", lambda: np.ones(4800, dtype=np.int16))
+    monkeypatch.setattr(result_thread, "snippet_recovery_path", lambda: recovery_path)
+
+    def transcribe(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    def fail_write(*_args, **_kwargs):
+        recovery_path.with_suffix(".tmp.wav").write_bytes(b"incomplete")
+        raise save_error
+
+    monkeypatch.setattr(result_thread, "transcribe", transcribe)
+    if save_stage == "mkdir":
+        def fail_mkdir(*_args, **_kwargs):
+            raise save_error
+
+        monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+    else:
+        monkeypatch.setattr(result_thread.wave, "open", fail_write)
+
+    thread.run()
+
+    assert errors == ["Could not save recovery audio.\nprovider unavailable"]
+    assert results == [""]
+    assert statuses[-1] == "error"
+    assert not thread.is_recording
+    assert list(tmp_path.glob("*.wav")) == []
+
+
+def test_capture_failure_does_not_claim_audio_was_saved(tmp_path, monkeypatch):
+    import result_thread
+
+    thread = result_thread.ResultThread()
+    errors = []
+    thread.errorSignal.connect(errors.append)
+
+    def fail_capture():
+        raise RuntimeError("microphone unavailable")
+
+    monkeypatch.setattr(thread, "_record_audio", fail_capture)
+    monkeypatch.setattr(
+        result_thread, "transcribe",
+        lambda *_args, **_kwargs: pytest.fail("capture failed; do not transcribe"),
+    )
+    thread.run()
+
+    assert errors == ["microphone unavailable"]
+    assert list(tmp_path.rglob("*.wav")) == []
+
+
+def test_recovery_failed_atomic_replace_preserves_previous_file(tmp_path, monkeypatch):
+    import result_thread
+
+    recovery_path = tmp_path / "recoverable-snippet.wav"
+    recovery_path.write_bytes(b"previous recovery")
+    monkeypatch.setattr(result_thread, "snippet_recovery_path", lambda: recovery_path)
+
+    def fail_replace(*_args):
+        raise PermissionError("file locked")
+
+    monkeypatch.setattr(result_thread.os, "replace", fail_replace)
+
+    assert result_thread._save_snippet_recovery(np.ones(1600, dtype=np.int16), 16000) is None
+    assert recovery_path.read_bytes() == b"previous recovery"
+    assert list(tmp_path.glob("*.wav")) == [recovery_path]
 
 
 def test_stop_recording_logs_the_explicit_caller_reason(monkeypatch):

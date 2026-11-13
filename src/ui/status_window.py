@@ -137,7 +137,7 @@ class StatusWindow(QMainWindow):
             self.cancel_button.setEnabled(False)
             self.cancelSignal.emit()
             return
-        if self.current_status != "transcribing":
+        if self.current_status not in ("transcribing", "retrying"):
             return
         self.cancel_button.setEnabled(False)
         self.dismissSignal.emit()
@@ -218,6 +218,8 @@ class StatusWindow(QMainWindow):
         _debug(f"updateStatus: {status}")
         if not self.isVisible() and status != "recording":
             return
+        if self.current_status == "retrying" and status == "transcribing":
+            return
 
         self.current_status = status
 
@@ -233,11 +235,14 @@ class StatusWindow(QMainWindow):
             self.timer.start(1000)
             self.pulse_timer.start(700)
             self.show()
-        elif status == "transcribing":
+        elif status in ("transcribing", "retrying"):
             self.recording_start_time = None
-            self.transcription_start_time = time.monotonic()
+            if status == "transcribing" or self.transcription_start_time is None:
+                self.transcription_start_time = time.monotonic()
+            self.status_label.setToolTip("")
             self.timer_label.setToolTip("Recording duration")
-            self._set_state("Transcribing", theme.ACCENT_COLOR, cancellable=True)
+            title = "Retrying" if status == "retrying" else "Transcribing"
+            self._set_state(title, theme.ACCENT_COLOR, cancellable=True)
             self.cancel_button.setAccessibleName("Dismiss transcription")
             self.cancel_button.setToolTip(
                 "Hide without copying to the clipboard; a successful result is still saved to Snippets"
